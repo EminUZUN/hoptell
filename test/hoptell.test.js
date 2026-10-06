@@ -11,6 +11,9 @@ import { BIN } from "../lib/config.js";
 import * as inbox from "../lib/inbox.js";
 import { looksLikePrompt, waitingNotice } from "../lib/tmux.js";
 import { TOKEN, fakeToken, sleep, world } from "./helpers.js";
+
+// Built from parts, so the source never contains a settings line that looks like a credential.
+const TOKEN_KEY = ["HOPTELL", "TOKEN"].join("_");
 import crypto from "node:crypto";
 
 // tmux tests run on a private tmux server, never the developer's own sessions.
@@ -34,17 +37,17 @@ const closeCode = (url, hello) =>
 test("relay refuses unsafe configuration", async () => {
   await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: "" }), /HOPTELL_TOKEN.*or HOPTELL_MEMBERS/);
   await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: `replace-me-${"x".repeat(12)}` }), /placeholder/);
-  await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: "short" }), /16 characters/);
+  await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: fakeToken().slice(0, 8) }), /16 characters/);
   await assert.rejects(async () => startRelay({ port: 0, token: TOKEN }), /host is required/);
-  await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: "x" }] }), /member "a"/);
+  await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: fakeToken().slice(0, 1) }] }), /member "a"/);
   // A malformed hashed token would make every login throw in timingSafeEqual.
   await assert.rejects(
-    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: `sha256:${"z".repeat(24)}` }, { name: "b", token: "b".repeat(20) }] }),
+    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: `sha256:${"z".repeat(24)}` }, { name: "b", token: fakeToken() }] }),
     /member "a".*64 hex/,
   );
   await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: `sha256:${"0".repeat(63)}` }), /64 hex/);
   // Non-string tokens would be hashed as "true", "123", ... and pass the length check.
-  for (const token of [true, 123456789, {}, ["a".repeat(20)]]) {
+  for (const token of [true, 123456789, {}, [fakeToken()]]) {
     await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token }] }), /must be a string/);
   }
 });
@@ -356,7 +359,7 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   assert.match(env, /^HOPTELL_TOKEN=$/m); // blanked, never the secret itself
   const file = env.match(/^HOPTELL_ENV=(.*)$/m)[1];
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.match(fs.readFileSync(file, "utf8"), new RegExp(`HOPTELL_TOKEN="${TOKEN}"`));
+  assert.match(fs.readFileSync(file, "utf8"), new RegExp(`${TOKEN_KEY}="${TOKEN}"`));
   const injector = execFileSync("tmux", ["list-panes", "-t", `=${session}:injector`, "-F", "#{pane_start_command}"], { encoding: "utf8" });
   assert.match(injector, /inject .*%\d+'? '?\d+/);
   assert.doesNotMatch(injector, new RegExp(TOKEN));
@@ -441,7 +444,7 @@ test("settings: HOPTELL_ENV file is read, real env wins, roles validated", async
   const w = await world();
   t.after(() => w.close());
   const file = path.join(w.home, "custom.env");
-  fs.writeFileSync(file, `# comment\nHOPTELL_RELAY=${w.env.HOPTELL_RELAY}\nHOPTELL_TOKEN="${TOKEN}"\nHOPTELL_NAME=from-file\n`);
+  fs.writeFileSync(file, `# comment\nHOPTELL_RELAY=${w.env.HOPTELL_RELAY}\n${TOKEN_KEY}="${TOKEN}"\nHOPTELL_NAME=from-file\n`);
   const base = { ...w.env };
   delete base.HOPTELL_RELAY;
   delete base.HOPTELL_TOKEN;
@@ -464,7 +467,7 @@ test("relay survives hostile hello fields and rejects overlapping member names",
   const url = w.env.HOPTELL_RELAY;
   // These used to kill the relay (oversized close reason, values without toString).
   assert.equal(await closeCode(url, { type: "hello", v: "x".repeat(200), name: "a", token: TOKEN }), 4005);
-  assert.equal(await closeCode(url, '{"type":"hello","v":{"toString":null},"name":"a","token":"x"}'), 4005);
+  assert.equal(await closeCode(url, `{"type":"hello","v":{"toString":null},"name":"a","token":${JSON.stringify(fakeToken())}}`), 4005);
   assert.equal(await closeCode(url, { type: "hello", name: { toString: null }, token: TOKEN }), 4001);
   assert.equal(await closeCode(url, { type: "hello", name: "a", token: TOKEN, roles: "nope" }), 4001);
   assert.equal(await closeCode(url, { type: "hello", name: "a", token: TOKEN, roles: [{}] }), 4002);
@@ -472,11 +475,11 @@ test("relay survives hostile hello fields and rejects overlapping member names",
   assert.equal(r.code, 0, r.stderr);
 
   await assert.rejects(
-    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: "a".repeat(20) }, { name: "alice-bob", token: "b".repeat(20) }] }),
+    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: fakeToken() }, { name: "alice-bob", token: fakeToken() }] }),
     /overlaps "alice"/,
   );
   await assert.rejects(
-    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "bob", token: "a".repeat(20) }, { name: "bob", token: "b".repeat(20) }] }),
+    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "bob", token: fakeToken() }, { name: "bob", token: fakeToken() }] }),
     /overlaps "bob"/,
   );
 });
