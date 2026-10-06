@@ -53,7 +53,7 @@ test("relay authenticates and survives malformed traffic", async (t) => {
   const w = await world();
   t.after(() => w.close());
   const url = w.env.HOPTELL_RELAY;
-  assert.equal(await closeCode(url, { type: "hello", name: "x", token: "wrong-token-0000000000" }), 4003);
+  assert.equal(await closeCode(url, { type: "hello", name: "x", token: "DUMMY-WRONG-TOKEN-NOT-A-SECRET" }), 4003);
   assert.equal(await closeCode(url, { type: "hello", name: "../evil", token: TOKEN }), 4002);
   assert.equal(await closeCode(url, "not json"), 4001);
 
@@ -342,7 +342,7 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
     await w.close();
   });
   // An already running tmux server that holds a stale token and relay.
-  spawnSync("tmux", ["start-server", ";", "set-environment", "-g", "HOPTELL_TOKEN", "stale-token-0123456789abc", ";", "set-environment", "-g", "HOPTELL_RELAY", "ws://127.0.0.1:1"]);
+  spawnSync("tmux", ["start-server", ";", "set-environment", "-g", "HOPTELL_TOKEN", "DUMMY-STALE-TOKEN-NOT-A-SECRET", ";", "set-environment", "-g", "HOPTELL_RELAY", "ws://127.0.0.1:1"]);
   // The "agent" lists peers with whatever settings it inherited.
   const agent = `'${process.execPath}' '${BIN}' list > '${out}' 2>&1; sleep 30`;
   const r = await w.cli(["tmux", name, "--roles", "backend", "--", "sh", "-c", agent]);
@@ -385,20 +385,20 @@ test("injector stops when the agent pane is respawned with another process", { s
 });
 
 test("member tokens bind names; health endpoint; protocol version", async (t) => {
-  const aliceToken = "alice-secret-0123456789";
-  const bobHash = "sha256:" + crypto.createHash("sha256").update("bob-secret-0123456789").digest("hex");
+  const aliceToken = "DUMMY-ALICE-TOKEN-NOT-A-SECRET";
+  const bobHash = "sha256:" + crypto.createHash("sha256").update("DUMMY-BOB-TOKEN-NOT-A-SECRET").digest("hex");
   const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: aliceToken }, { name: "bob", token: bobHash }], log: () => {} });
   t.after(() => relay.close());
   const url = `ws://127.0.0.1:${relay.port}`;
   const hello = (name, token, extra = {}) => ({ type: "hello", v: 1, name, token, ...extra });
 
   assert.equal(await closeCode(url, hello("bob-claude", aliceToken)), 4002); // alice cannot pose as bob
-  assert.equal(await closeCode(url, hello("alice-claude", "bob-secret-0123456789", { v: 2 })), 4005);
+  assert.equal(await closeCode(url, hello("alice-claude", "DUMMY-BOB-TOKEN-NOT-A-SECRET", { v: 2 })), 4005);
   assert.equal(await closeCode(url, hello("alice", TOKEN)), 4003); // shared token not configured
 
   const ok = new WebSocket(url);
   await new Promise((r) => ok.on("open", r));
-  ok.send(JSON.stringify(hello("bob-reviewer", "bob-secret-0123456789")));
+  ok.send(JSON.stringify(hello("bob-reviewer", "DUMMY-BOB-TOKEN-NOT-A-SECRET")));
   const welcome = await new Promise((r) => ok.once("message", (d) => r(JSON.parse(d))));
   assert.equal(welcome.type, "welcome");
   ok.close();
@@ -449,7 +449,7 @@ test("settings: HOPTELL_ENV file is read, real env wins, roles validated", async
       execFile(process.execPath, [BIN, "list"], { env: { ...base, HOPTELL_ENV: file, ...extra } }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr })),
     );
   assert.equal((await run({})).code, 0);
-  const wrong = await run({ HOPTELL_TOKEN: "wrong-token-but-long-enough" });
+  const wrong = await run({ HOPTELL_TOKEN: "DUMMY-WRONG-TOKEN-NOT-A-SECRET" });
   assert.notEqual(wrong.code, 0);
   assert.match(wrong.stderr, /bad token/);
 
@@ -648,7 +648,7 @@ test("guarded tmux commands never run in a pane whose process was replaced", { s
 });
 
 test("session settings round-trip tokens with quotes, backslashes and newlines", { skip: !hasTmux && "tmux not installed" }, async (t) => {
-  const odd = 'odd"token\\with-quote-and-backslash-0123';
+  const odd = 'DUMMY"TOKEN\\WITH-QUOTE-NOT-A-SECRET';
   const relay = await startRelay({ host: "127.0.0.1", port: 0, token: odd, log: () => {} });
   const w = await world();
   const name = `tq${process.pid}`;

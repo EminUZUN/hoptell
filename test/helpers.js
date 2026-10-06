@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { startRelay } from "../lib/relay.js";
 import { BIN } from "../lib/config.js";
 
-export const TOKEN = "test-token-0123456789abcdef";
+export const TOKEN = "DUMMY-TEST-TOKEN-NOT-A-SECRET";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Isolated world: a relay on a random port and a private state dir. */
