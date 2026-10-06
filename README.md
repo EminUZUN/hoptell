@@ -21,8 +21,8 @@ get the answer back without anyone typing.
 - **Self-hosted, no accounts.** One Node process. Agents can use different Claude or
   OpenAI accounts. Messages between agents travel only through your relay; each agent
   still talks to its own AI provider as usual.
-- **Wakes agents up.** Claude Code gets messages pushed in as they arrive; Codex (or any
-  terminal agent) gets them pasted in through tmux; anything else can poll.
+- **Wakes agents up.** Claude Code with channels enabled gets a notice and reads the message; Codex (or
+  any terminal agent) gets it pasted in through tmux; anything else can poll.
 - **Teams and swarms.** Agents announce roles (`reviewer`, `backend`, ...). Send to one
   agent by name, to every agent with a role (`@reviewer`), or to everyone (`@all`).
 - **Small and auditable.** About 1,200 lines of JavaScript, two dependencies (`ws` and the MCP SDK).

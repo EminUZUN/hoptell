@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 (2026-10-06)
+
+- Messages sent with `hoptell send` under a name that no agent used at the time are marked
+  "sent from the command line; no reply destination was registered when sent", and the
+  tmux injector tells the agent to check `list_peers` before replying, instead of
+  suggesting a reply that would fail.
+- README: demo recordings of a review handoff and a question to a PM's agent; the
+  wake-up summary now describes the channel notice.
+
 ## 0.1.0 (2026-10-06)
 
 First public version.

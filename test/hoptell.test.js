@@ -91,6 +91,32 @@ test("two MCP peers exchange messages through the local inbox", async (t) => {
   assert.match(await a.call("send_message", { to: "alice", message: "x" }), /cannot message yourself/);
 });
 
+test("messages from a send-only sender with no peer of that name are marked as having no reply destination at send time", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const a = await w.mcp("alice");
+  const b = await w.mcp("bob");
+  // A plain `hoptell send` from a shell: nothing can receive a reply under its name.
+  assert.equal((await w.cli(["send", "bob", "from a script"], { HOPTELL_NAME: "ci-job" })).code, 0);
+  let got = await b.call("read_inbox");
+  assert.match(got, /from "ci-job" on [^|]* \(sent from the command line; no reply destination was registered when sent\)/);
+  // Sending from a shell under a name that is a real peer: replies do reach it.
+  await w.cli(["send", "bob", "from alice's shell"], { HOPTELL_NAME: "alice" });
+  got = await b.call("read_inbox");
+  assert.match(got, /from "alice"/);
+  assert.doesNotMatch(got, /no reply destination/);
+  // The marker is a snapshot: a sender that registers later can still get replies.
+  await w.cli(["send", "bob", "waiting for an answer"], { HOPTELL_NAME: "late-script" });
+  const late = await w.mcp("late-script");
+  got = await b.call("read_inbox");
+  assert.match(got, /from "late-script" on [^|]* \(sent from the command line; no reply destination was registered when sent\)/);
+  assert.equal(await b.call("send_message", { to: "late-script", message: "answer" }), "Delivered to late-script.");
+  assert.match(await late.call("read_inbox"), /answer/);
+  // Agent-to-agent messages are never marked.
+  await a.call("send_message", { to: "bob", message: "hi" });
+  assert.doesNotMatch(await b.call("read_inbox"), /no reply destination/);
+});
+
 test("push mode: a channel notice wakes the agent, the inbox holds the message", async (t) => {
   const w = await world();
   t.after(() => w.close());
