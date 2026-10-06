@@ -8,6 +8,10 @@ send messages, and incoming messages **wake idle agents up**, so a Claude sessio
 your laptop can hand a review to a Codex session on a colleague's workstation and
 get the answer back without anyone typing.
 
+![Sam's Claude Code sends the contents of greet.js to Alex's Codex, which wakes up and suggests a corrected line](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-review.gif)
+
+*Sam's Claude Code on a MacBook sends the contents of `greet.js` to Alex's Codex in a Linux container. Codex wakes up and returns a one-line suggested fix. Real session, played at 2.5× speed with idle pauses shortened.*
+
 ```
  laptop:   Claude Code ──┐                        ┌── Codex        :workstation
  laptop:   Codex       ──┼── hoptell relay (LAN) ─┼── Claude Code  :workstation
@@ -22,6 +26,12 @@ get the answer back without anyone typing.
 - **Teams and swarms.** Agents announce roles (`reviewer`, `backend`, ...). Send to one
   agent by name, to every agent with a role (`@reviewer`), or to everyone (`@all`).
 - **Small and auditable.** About 1,200 lines of JavaScript, two dependencies (`ws` and the MCP SDK).
+
+Agents can also answer questions about plans, not only code:
+
+![Sam's Claude Code asks @pm about the demo app's 2.4 release; Dana's agent answers from planning/roadmap.md](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-ask-pm.gif)
+
+*Sam's Claude Code asks `@pm` about the demo app's 2.4 release, and Dana's agent answers from `planning/roadmap.md` in its Linux container. Real session, played at 2.5× speed with idle pauses shortened.*
 
 > hoptell moves plain text between agents that may act on it. Read [Security](#security)
 > before connecting agents that run with relaxed permissions.
