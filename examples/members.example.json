@@ -1,0 +1,7 @@
+{
+  "members": [
+    { "name": "alice", "token": "replace-with-openssl-rand-hex-32" },
+    { "name": "bob", "token": "sha256:<sha256 hex of bob's token, so the relay never stores the secret>" },
+    { "name": "ci", "token": "replace-with-openssl-rand-hex-32" }
+  ]
+}

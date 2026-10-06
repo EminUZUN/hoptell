@@ -1,0 +1,11 @@
+test:
+  image: node:${NODE}
+  parallel:
+    matrix:
+      - NODE: ["20", "22"]
+  before_script:
+    - apk add --no-cache tmux || (apt-get update && apt-get install -y tmux) || true
+    - npm ci
+  script:
+    - npm run lint
+    - npm test

@@ -1,0 +1,19 @@
+# Relay with per-member tokens. Put members.json next to this file, then:
+# Replace 10.8.0.1 with the host's private or VPN address.
+#   chmod 600 members.json && HOPTELL_UID=$(id -u) HOPTELL_BIND=10.8.0.1 docker compose up -d
+# The relay runs as the file's owner, so it can read the private file.
+services:
+  hoptell:
+    image: ghcr.io/eminuzun/hoptell:latest # pin a version in production, e.g. :0.1.0
+    restart: unless-stopped
+    user: "${HOPTELL_UID:-1000}"
+    ports:
+      # Publish on one private or VPN address; "7777:7777" publishes on all host addresses by default.
+      - "${HOPTELL_BIND:-127.0.0.1}:7777:7777" # e.g. HOPTELL_BIND=10.8.0.1
+    environment:
+      HOPTELL_MEMBERS: /run/secrets/members.json
+    secrets:
+      - members.json
+secrets:
+  members.json:
+    file: ./members.json

@@ -1,0 +1,118 @@
+# Release on a version tag: git tag -s v0.1.0 -m v0.1.0 && git push origin v0.1.0
+# No secrets are stored anywhere: npm uses trusted publishing (OIDC; configure it once on
+# npmjs.com after the first manual `npm publish`), the relay image goes to ghcr.io with the
+# built-in GITHUB_TOKEN, and the MCP Registry entry is published with GitHub OIDC.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+# One release at a time, so a slower run cannot act on a stale view of "latest".
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # GitHub Release with the CHANGELOG notes
+  packages: write # ghcr.io image
+  id-token: write # npm trusted publishing and MCP Registry login
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: sudo apt-get install -y tmux
+      - run: npm ci
+      - run: npm test
+
+      - name: Check that the tag matches every pinned version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for f in 'require("./package.json").version' 'require("./server.json").version' \
+                   'require("./server.json").packages[0].version' 'require("./.claude-plugin/plugin.json").version'; do
+            got="$(node -p "$f")"
+            [ "$got" = "$v" ] || { echo "::error::$f is $got, tag is $v"; exit 1; }
+          done
+
+      # Re-running a failed release skips what is already published (npm version, image
+      # version, MCP Registry entry, GitHub Release). If a run fails while the npm version
+      # is still staged, approve it on npmjs.com first.
+      - name: Stage the npm release (trusted publishing; a maintainer approves it on npmjs.com)
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          if npm view "hoptell@$v" version >/dev/null 2>&1; then
+            echo "hoptell@$v is already on npm"
+          else
+            npm install -g npm@latest # staged publishing needs npm 11.15+
+            npm stage publish
+          fi
+
+      - name: Wait for the maintainer to approve the npm version (up to 30 minutes)
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 60); do
+            npm view "hoptell@$v" version >/dev/null 2>&1 && exit 0
+            echo "waiting for npm approval of $v"
+            sleep 30
+          done
+          echo "::error::hoptell@$v was not approved within 30 minutes; approve it on npmjs.com, then re-run this job"
+          exit 1
+
+      # Published only after approval, so a rejected release never moves the image's latest tag.
+      - uses: docker/setup-qemu-action@v3 # arm64 builds on the amd64 runner
+      - uses: docker/setup-buildx-action@v3
+      - name: Publish the relay image to ghcr.io (amd64 and arm64)
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/hoptell"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # A published version image is never rebuilt.
+          if out="$(docker buildx imagetools inspect "$image:$v" 2>&1)"; then
+            echo "$image:$v already exists"
+          elif grep -qi "not found" <<<"$out"; then
+            docker buildx build --platform linux/amd64,linux/arm64 --push -t "$image:$v" .
+          else
+            echo "::error::could not check $image:$v: $out"
+            exit 1
+          fi
+          # latest follows npm's latest (checked after the build), so an older or re-run
+          # release cannot move it back, and a re-run repairs a missed promotion.
+          npm_latest="$(npm view hoptell dist-tags.latest)" || { echo "::error::could not read npm's latest version"; exit 1; }
+          if [ "$npm_latest" = "$v" ]; then
+            docker buildx imagetools create -t "$image:latest" "$image:$v"
+          else
+            echo "npm's latest is $npm_latest; $image:latest stays where it is"
+          fi
+
+      - name: Publish to the MCP Registry
+        env:
+          PUBLISHER: https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          name="$(node -p 'encodeURIComponent(require("./server.json").name)')"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0.1/servers/$name/versions/$v")"
+          case "$code" in
+            200) echo "$v is already in the MCP Registry"; exit 0 ;;
+            404) ;;
+            *) echo "::error::MCP Registry lookup returned HTTP $code"; exit 1 ;;
+          esac
+          curl -fsSL -o publisher.tar.gz "$PUBLISHER"
+          echo "$PUBLISHER_SHA256  publisher.tar.gz" | sha256sum -c -
+          tar xzf publisher.tar.gz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      - name: GitHub Release with the CHANGELOG notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v h="## $v " 'index($0, h) == 1 {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          test -s notes.md
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag

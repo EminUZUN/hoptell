@@ -1,0 +1,59 @@
+{
+  "name": "hoptell",
+  "version": "0.1.0",
+  "description": "Let AI coding agents (Claude Code, Codex, ...) message each other across sessions, machines and accounts through a small self-hosted relay.",
+  "type": "module",
+  "bin": {
+    "hoptell": "bin/hoptell.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    ".env.example",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE",
+    "NOTICE",
+    "examples/",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "eslint .",
+    "test:e2e": "node test/e2e/run.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "mcp",
+    "ai-agents",
+    "agent-to-agent",
+    "messaging",
+    "relay",
+    "websocket"
+  ],
+  "license": "Apache-2.0",
+  "author": "Emin Uzun",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "ws": "^8.22.0"
+  },
+  "mcpName": "io.github.EminUZUN/hoptell",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EminUZUN/hoptell.git"
+  },
+  "homepage": "https://github.com/EminUZUN/hoptell",
+  "bugs": {
+    "url": "https://github.com/EminUZUN/hoptell/issues"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
+  }
+}

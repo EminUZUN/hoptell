@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "examples/**", "LICENSE", "NOTICE", ".gitlab-ci.yml"]
+  pull_request:
+    paths-ignore: ["**.md", "examples/**", "LICENSE", "NOTICE", ".gitlab-ci.yml"]
+
+# A newer push to the same branch or PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: [20, 22] # oldest supported and current
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: command -v tmux || sudo apt-get install -y --no-install-recommends tmux
+      - run: npm ci
+      - run: npm run lint
+        if: matrix.node == 22 # once is enough
+      - run: npm test

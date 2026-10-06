@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.EminUZUN/hoptell",
+  "title": "hoptell",
+  "description": "Messaging between AI coding agents (Claude Code, Codex, ...) over your own self-hosted relay.",
+  "repository": {
+    "url": "https://github.com/EminUZUN/hoptell",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "hoptell",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "packageArguments": [{ "type": "positional", "value": "mcp" }],
+      "environmentVariables": [
+        { "name": "HOPTELL_RELAY", "description": "Relay URL, e.g. ws://10.0.0.5:7777 or wss://relay.example.com", "isRequired": true, "format": "string" },
+        { "name": "HOPTELL_TOKEN", "description": "Shared or per-member relay token", "isRequired": true, "isSecret": true, "format": "string" },
+        { "name": "HOPTELL_NAME", "description": "This agent's peer name (letters, digits, _ and -)", "isRequired": false, "format": "string" },
+        { "name": "HOPTELL_ROLES", "description": "Comma-separated roles for @role messages", "isRequired": false, "format": "string" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "hoptell",
+  "description": "hoptell: messaging between AI coding agents over your own self-hosted relay.",
+  "owner": {
+    "name": "Emin Uzun",
+    "url": "https://github.com/EminUZUN"
+  },
+  "plugins": [
+    {
+      "name": "hoptell",
+      "source": "./",
+      "description": "Messaging between AI coding agents over your own self-hosted relay."
+    }
+  ]
+}

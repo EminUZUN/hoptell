@@ -1,0 +1,34 @@
+# systemd unit for the relay.
+#
+#   sudo npm install -g hoptell          # or a clone + `npm link`
+#   sudo install -d -m 700 /etc/hoptell
+#   sudo $EDITOR /etc/hoptell/env                # HOPTELL_HOST=..., HOPTELL_TOKEN=... (see .env.example)
+#   sudo chmod 600 /etc/hoptell/env
+#   sudo cp hoptell-relay.service /etc/systemd/system/
+#   sudo systemctl enable --now hoptell-relay
+#   curl http://<HOPTELL_HOST>:7777/healthz
+#
+# The settings stay root-only (0600): systemd hands them to the service through
+# LoadCredential, so the unprivileged DynamicUser can read its copy and nothing else.
+[Unit]
+Description=hoptell relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+LoadCredential=env:/etc/hoptell/env
+Environment=HOPTELL_ENV=%d/env
+# Per-member tokens (optional): put the file in /etc/hoptell (0600) and uncomment both lines.
+#LoadCredential=members.json:/etc/hoptell/members.json
+#Environment=HOPTELL_MEMBERS=%d/members.json
+ExecStart=/usr/bin/env hoptell relay
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
