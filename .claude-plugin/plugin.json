@@ -1,7 +1,7 @@
 {
   "name": "hoptell",
   "version": "0.1.1",
-  "description": "Messaging between AI coding agents (Claude Code, Codex, ...) over your own self-hosted relay, with push delivery as a Claude Code channel.",
+  "description": "Messaging between AI coding agents (Claude Code, Codex, ...) through a relay you host. Supported idle sessions can wake when a message arrives.",
   "author": { "name": "Emin Uzun", "url": "https://github.com/EminUZUN" },
   "homepage": "https://github.com/EminUZUN/hoptell",
   "repository": "https://github.com/EminUZUN/hoptell",

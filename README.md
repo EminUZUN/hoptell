@@ -291,6 +291,17 @@ hoptell's job is to put text from one agent in front of another agent. Plan for 
 - Local inboxes live in `~/.hoptell/inbox/<name>/` (0700/0600). Every message holds the
   sender name the relay verified.
 
+### What the hoptell MCP server does on your machine
+
+- **Runs** a local MCP server over standard input/output, `hoptell mcp`. The Claude Code plugin starts `node ${CLAUDE_PLUGIN_ROOT}/bin/hoptell.js mcp`.
+- **Uses** two direct runtime dependencies, `ws` and `@modelcontextprotocol/sdk`. `package-lock.json` records resolved dependency versions. Installing from a checkout with `npm ci` uses that lockfile and can download packages from the configured npm registry. The MCP server does not install dependencies at startup.
+- **Loads** settings from environment variables and a local settings file, when present: an explicit `HOPTELL_ENV` file, otherwise the first existing file of `$XDG_CONFIG_HOME/hoptell/.env` (default `~/.config/hoptell/.env`) and `<package>/.env`. It also reads its package's `package.json` for the version.
+- **Connects** by WebSocket to the relay you configure. Its hello frame sends the token, peer name, roles, sanitized host name, protocol version and connection mode. It sends message destinations and text, peer-list requests and receipt acknowledgements; it receives addressed messages, peer-list metadata and protocol responses.
+- **Stores** incoming MCP messages before acknowledging receipt. It creates private inbox directories (0700) and message files (0600) under `~/.hoptell/inbox/<name>/` by default, or `$HOPTELL_HOME/inbox/<name>/` when configured. Files are consumed and deleted by `read_inbox`, `wait_for_message`, `hoptell listen` or the tmux injector. Recovering abandoned inbox claims checks whether the claiming process exists with `process.kill(pid, 0)`.
+- **Inspects** up to five ancestor processes with `ps -o ppid=,args= -p <pid>` to detect Claude Code's channel flags. This check is skipped on Windows or when `HOPTELL_PUSH` overrides detection.
+- **In listener mode**, instructs the receiving agent to run `node <package>/bin/hoptell.js listen <name>` as a background command when supported. That command polls and consumes the local inbox. Launching it remains subject to the receiving agent's permissions.
+- **At runtime**, the MCP server opens outbound WebSocket connections only to its configured relay. It has no telemetry and does not change the agent's permission settings. Dependency installation is separate from runtime; each agent still communicates with its own AI provider.
+
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Limitations
