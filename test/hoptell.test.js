@@ -39,7 +39,7 @@ test("relay refuses unsafe configuration", async () => {
   await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: "x" }] }), /member "a"/);
   // A malformed hashed token would make every login throw in timingSafeEqual.
   await assert.rejects(
-    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: "sha256:invalid-hash-long-enough" }, { name: "b", token: "b".repeat(20) }] }),
+    async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token: "sha256:EXAMPLE_not_hex_xxxxxxxx" }, { name: "b", token: "b".repeat(20) }] }),
     /member "a".*64 hex/,
   );
   await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, token: `sha256:${"0".repeat(63)}` }), /64 hex/);
@@ -53,7 +53,7 @@ test("relay authenticates and survives malformed traffic", async (t) => {
   const w = await world();
   t.after(() => w.close());
   const url = w.env.HOPTELL_RELAY;
-  assert.equal(await closeCode(url, { type: "hello", name: "x", token: "DUMMY-WRONG-TOKEN-NOT-A-SECRET" }), 4003);
+  assert.equal(await closeCode(url, { type: "hello", name: "x", token: "EXAMPLE_WRONG_TOKEN_xxxxxxxx" }), 4003);
   assert.equal(await closeCode(url, { type: "hello", name: "../evil", token: TOKEN }), 4002);
   assert.equal(await closeCode(url, "not json"), 4001);
 
@@ -342,7 +342,7 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
     await w.close();
   });
   // An already running tmux server that holds a stale token and relay.
-  spawnSync("tmux", ["start-server", ";", "set-environment", "-g", "HOPTELL_TOKEN", "DUMMY-STALE-TOKEN-NOT-A-SECRET", ";", "set-environment", "-g", "HOPTELL_RELAY", "ws://127.0.0.1:1"]);
+  spawnSync("tmux", ["start-server", ";", "set-environment", "-g", "HOPTELL_TOKEN", "EXAMPLE_STALE_TOKEN_xxxxxxxx", ";", "set-environment", "-g", "HOPTELL_RELAY", "ws://127.0.0.1:1"]);
   // The "agent" lists peers with whatever settings it inherited.
   const agent = `'${process.execPath}' '${BIN}' list > '${out}' 2>&1; sleep 30`;
   const r = await w.cli(["tmux", name, "--roles", "backend", "--", "sh", "-c", agent]);
@@ -385,20 +385,20 @@ test("injector stops when the agent pane is respawned with another process", { s
 });
 
 test("member tokens bind names; health endpoint; protocol version", async (t) => {
-  const aliceToken = "DUMMY-ALICE-TOKEN-NOT-A-SECRET";
-  const bobHash = "sha256:" + crypto.createHash("sha256").update("DUMMY-BOB-TOKEN-NOT-A-SECRET").digest("hex");
+  const aliceToken = "EXAMPLE_ALICE_TOKEN_xxxxxxxx";
+  const bobHash = "sha256:" + crypto.createHash("sha256").update("EXAMPLE_BOB_TOKEN_xxxxxxxx").digest("hex");
   const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: aliceToken }, { name: "bob", token: bobHash }], log: () => {} });
   t.after(() => relay.close());
   const url = `ws://127.0.0.1:${relay.port}`;
   const hello = (name, token, extra = {}) => ({ type: "hello", v: 1, name, token, ...extra });
 
   assert.equal(await closeCode(url, hello("bob-claude", aliceToken)), 4002); // alice cannot pose as bob
-  assert.equal(await closeCode(url, hello("alice-claude", "DUMMY-BOB-TOKEN-NOT-A-SECRET", { v: 2 })), 4005);
+  assert.equal(await closeCode(url, hello("alice-claude", "EXAMPLE_BOB_TOKEN_xxxxxxxx", { v: 2 })), 4005);
   assert.equal(await closeCode(url, hello("alice", TOKEN)), 4003); // shared token not configured
 
   const ok = new WebSocket(url);
   await new Promise((r) => ok.on("open", r));
-  ok.send(JSON.stringify(hello("bob-reviewer", "DUMMY-BOB-TOKEN-NOT-A-SECRET")));
+  ok.send(JSON.stringify(hello("bob-reviewer", "EXAMPLE_BOB_TOKEN_xxxxxxxx")));
   const welcome = await new Promise((r) => ok.once("message", (d) => r(JSON.parse(d))));
   assert.equal(welcome.type, "welcome");
   ok.close();
@@ -449,7 +449,7 @@ test("settings: HOPTELL_ENV file is read, real env wins, roles validated", async
       execFile(process.execPath, [BIN, "list"], { env: { ...base, HOPTELL_ENV: file, ...extra } }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr })),
     );
   assert.equal((await run({})).code, 0);
-  const wrong = await run({ HOPTELL_TOKEN: "DUMMY-WRONG-TOKEN-NOT-A-SECRET" });
+  const wrong = await run({ HOPTELL_TOKEN: "EXAMPLE_WRONG_TOKEN_xxxxxxxx" });
   assert.notEqual(wrong.code, 0);
   assert.match(wrong.stderr, /bad token/);
 
@@ -648,7 +648,7 @@ test("guarded tmux commands never run in a pane whose process was replaced", { s
 });
 
 test("session settings round-trip tokens with quotes, backslashes and newlines", { skip: !hasTmux && "tmux not installed" }, async (t) => {
-  const odd = 'DUMMY"TOKEN\\WITH-QUOTE-NOT-A-SECRET';
+  const odd = 'EXAMPLE"TOKEN\\WITH_QUOTE_xxxxxxxx';
   const relay = await startRelay({ host: "127.0.0.1", port: 0, token: odd, log: () => {} });
   const w = await world();
   const name = `tq${process.pid}`;

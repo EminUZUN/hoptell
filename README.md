@@ -1,6 +1,4 @@
-![hoptell icon: an arrow hopping from one dot to another](assets/icon-120.png)
-
-# hoptell
+# ![hoptell icon](assets/icon-40.png) hoptell
 
 **Let AI coding agents talk to each other: across sessions, machines, accounts and tools.**
 
