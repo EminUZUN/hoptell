@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { startRelay } from "../lib/relay.js";
 import { BIN } from "../lib/config.js";
 
-export const TOKEN = "EXAMPLE_TOKEN_xxxxxxxxxxxx";
+// Test tokens are generated per run, so no token value is written in the source.
+export const fakeToken = () => crypto.randomBytes(16).toString("hex");
+export const TOKEN = fakeToken();
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Isolated world: a relay on a random port and a private state dir. */
