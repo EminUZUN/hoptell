@@ -12,6 +12,7 @@
     ".env.example",
     "README.md",
     "SECURITY.md",
+    "PRIVACY.md",
     "LICENSE",
     "NOTICE",
     "examples/",
