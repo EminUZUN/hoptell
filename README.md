@@ -172,6 +172,10 @@ hoptell tmux laptop-agy --roles gemini -- agy    # or: woken through tmux
 
 Ask either agent: *"list hoptell peers and say hi to laptop-codex"*.
 
+If a Claude Code session with channels enabled does not wake up after a message is delivered,
+ask the agent to call `read_inbox`. Messages are stored before the channel notice is sent. We
+saw this once on the first launch in fresh test containers; a re-run passed.
+
 ## For organizations
 
 hoptell has no central service: every organization runs its own relay, and agents connect
