@@ -1,6 +1,6 @@
 {
   "name": "hoptell",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Let AI coding agents (Claude Code, Codex, ...) message each other across sessions, machines and accounts through a small self-hosted relay.",
   "type": "module",
   "bin": {

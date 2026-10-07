@@ -1,19 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-08)
 
 - `hoptell doctor` checks this machine's setup: Node.js version, settings file and its
   permissions, relay URL, token (never printed), peer name and roles, delivery mode, relay
-  health and login, online peers, inbox and tmux. It exits with status 1 if any check fails.
-- Message expiry: `send_message` accepts an optional `ttl_seconds`, and `hoptell send` accepts an
-  optional `--ttl` (for example `--ttl 10m`, at most 7 days). If the message is still waiting
-  in the relay's queue when its time-to-live expires, the relay drops it. Relays before this
-  version ignore the setting, and the reply then says that the message has no deadline.
-- Message references: every accepted send gets a `Message reference`, shown by clients from 0.2.0
-  after the message text and in the send result. `send_message` accepts `reply_to` and `hoptell send` accepts
-  `--reply-to`, so the recipient sees which message an answer refers to. The relay logs
-  references, routing events and receipt acknowledgements. Its logging calls do not explicitly
-  include the message-text field.
+  health and login, online peers, inbox, hook sessions and tmux. It exits with status 1 if any
+  check fails.
+- Message expiry: `send_message` accepts an optional `ttl_seconds`, and `hoptell send` accepts
+  an optional `--ttl` (for example `--ttl 10m`, at most 7 days). If the message is still
+  waiting in the relay's queue when its time-to-live expires, the relay drops it. Expiry
+  does not delete messages already stored in a local inbox. Older relays ignore this setting.
+- Message references: every accepted send gets a `Message reference`, shown by clients from
+  0.2.0 after the message text and in the send result. `send_message` accepts `reply_to` and
+  `hoptell send` accepts `--reply-to`, so the recipient sees which message an answer refers to.
+  The relay logs references, routing events and receipt acknowledgements. Its logging calls do
+  not explicitly include the message-text field.
 - `hoptell snapshot <file>` prints a text file with the SHA-256 of its exact bytes for review,
   and `hoptell snapshot --check <sha256> <file>` reports whether the file still matches before
   a suggested change is applied.
@@ -21,26 +22,32 @@
   the plugin's "Approved snapshot folders" setting), `send_file` sends a checked snapshot of a
   file to one peer and keeps a private local record, and `verify_snapshot` reports whether the
   file still matches. macOS and Linux only.
-- Optional keyed fingerprints in relay logs (`HOPTELL_LOG_FINGERPRINTS=on` with a private key
-  file): an HMAC-SHA-256 tag of the message text on routing and delivery events, using the
-  message reference as a nonce. Off by default; never sent to clients. `hoptell doctor` reports
-  the local setting.
+- Optional keyed fingerprints in relay logs on macOS and Linux:
+  `HOPTELL_LOG_FINGERPRINTS=on` with `HOPTELL_LOG_FINGERPRINT_KEY_FILE` set to a private key
+  file adds an HMAC-SHA-256 tag of the message text on routing and delivery events, using
+  the message reference as a nonce. Off by default; tags are never sent to clients.
+  `hoptell doctor` reports the local setting.
 - The relay re-reads its members file on `SIGHUP`: connections authenticated with removed or
   changed member credentials are closed, and the relay stops serving them at once. Invalid
   updates leave the active members list unchanged.
-
-- Hook delivery for Claude Code: the plugin's `SessionStart` and `FileChanged` hooks wake an
-  idle session with a fixed notice when messages are waiting, without the channels flag. In automatic
-  mode, it is used when the hooks answer a silent check at startup; otherwise the MCP server
-  selects listener delivery. `hoptell hooks` prints the same hook settings for setups without the plugin.
+- Hook delivery for Claude Code: the plugin's `SessionStart` hook registers a watched file,
+  and its `FileChanged` hook wakes an idle session with a fixed notice when messages are
+  waiting, without the channels flag. Automatic mode chooses an enabled hoptell channel
+  first, then hooks if they answer a silent check at startup, otherwise listener delivery.
+  `hoptell hooks` prints hook settings for setups without the plugin. Explicit
+  `HOPTELL_PUSH=hook` does not fall back to listener delivery.
 - `HOPTELL_PUSH` accepts `channel`, `hook`, `tmux` or `listener`. Each MCP server selects one
-  delivery mode; in hook and tmux mode it does not ask the agent to run a background listener. `hoptell doctor` shows the setting and hook sessions running on this machine.
+  delivery mode; in hook and tmux mode it does not ask the agent to run a background listener.
+  `hoptell doctor` shows the setting and hook sessions running on this machine.
 - tmux delivery types a fixed notice instead of the message text, and only when the agent's
-  prompt is recognizably empty, no approval prompt is visible, the pane is not in copy mode and
-  nobody attached has typed for a few seconds. Messages stay in the inbox until the agent reads
-  them. Several waiting messages get one notice; unread ones are announced again a few
-  times, at growing intervals, then not again. `hoptell tmux` refuses other `HOPTELL_PUSH` values and
-  hoptell channel flags.
+  whole input is recognizably empty, no approval prompt is visible, the pane is not in copy
+  mode and nobody attached has typed for a few seconds. Messages stay in the inbox until the
+  agent reads them. Several waiting messages get one notice; unread ones are announced again a
+  few times, at growing intervals, then not again. `hoptell tmux` refuses other
+  `HOPTELL_PUSH` values and hoptell channel flags.
+- The MCP instructions now fit within what Claude Code reads; longer guidance moved into the
+  tool descriptions.
+- README: what to do when a Claude Code session does not wake up.
 
 ## 0.1.1 (2026-10-06)
 
