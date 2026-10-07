@@ -21,6 +21,11 @@ Environment=HOPTELL_ENV=%d/env
 # Per-member tokens (optional): put the file in /etc/hoptell (0600) and uncomment both lines.
 #LoadCredential=members.json:/etc/hoptell/members.json
 #Environment=HOPTELL_MEMBERS=%d/members.json
+# LoadCredential copies the file at start, so after editing it run: systemctl restart hoptell-relay
+# Keyed log fingerprints (optional, see the README): key file root-owned 0600 in /etc/hoptell.
+#LoadCredential=fingerprint-key.json:/etc/hoptell/fingerprint-key.json
+#Environment=HOPTELL_LOG_FINGERPRINTS=on
+#Environment=HOPTELL_LOG_FINGERPRINT_KEY_FILE=%d/fingerprint-key.json
 ExecStart=/usr/bin/env hoptell relay
 Restart=on-failure
 RestartSec=5

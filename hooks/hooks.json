@@ -1,0 +1,11 @@
+{
+  "description": "hoptell hook delivery: wake an idle session with a fixed notice when peer messages are waiting",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hoptell.js", "hook-session-start"], "timeout": 10 }] }
+    ],
+    "FileChanged": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hoptell.js", "hook-file-changed"], "asyncRewake": true, "timeout": 10 }] }
+    ]
+  }
+}

@@ -12,8 +12,14 @@ services:
       - "${HOPTELL_BIND:-127.0.0.1}:7777:7777" # e.g. HOPTELL_BIND=10.8.0.1
     environment:
       HOPTELL_MEMBERS: /run/secrets/members.json
+      # Optional keyed log fingerprints (see the README); also uncomment the secret below.
+      # HOPTELL_LOG_FINGERPRINTS: "on"
+      # HOPTELL_LOG_FINGERPRINT_KEY_FILE: /run/secrets/fingerprint-key.json
     secrets:
       - members.json
+      # - fingerprint-key.json
 secrets:
   members.json:
     file: ./members.json
+  # fingerprint-key.json:            # mode 0600, owned by HOPTELL_UID; after replacing it,
+  #   file: ./fingerprint-key.json   # run: docker compose up -d --force-recreate hoptell

@@ -16,6 +16,11 @@
       "title": "Relay URL",
       "description": "Your hoptell relay, e.g. ws://10.0.0.5:7777 or wss://relay.example.com. Leave empty to use ~/.config/hoptell/.env."
     },
+    "snapshot_roots": {
+      "type": "string",
+      "title": "Approved snapshot folders",
+      "description": "Optional JSON array of local folders, each with an id and absolute path. These folders can be read by the file tools. Leave empty to use local settings; use [] to disable the file tools."
+    },
     "relay_token": {
       "type": "string",
       "title": "Relay token",
@@ -29,7 +34,8 @@
       "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hoptell.js", "mcp"],
       "env": {
         "HOPTELL_RELAY": "${user_config.relay_url}",
-        "HOPTELL_TOKEN": "${user_config.relay_token}"
+        "HOPTELL_TOKEN": "${user_config.relay_token}",
+        "HOPTELL_SNAPSHOT_ROOTS": "${user_config.snapshot_roots}"
       }
     }
   }

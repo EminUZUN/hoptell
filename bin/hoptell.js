@@ -4,6 +4,22 @@
 import fs from "node:fs";
 import { HOSTNAME, checkName, envFiles, loadEnv, parseRoles } from "../lib/config.js";
 
+// Claude Code hook commands (lib/wake.js) print only what Claude Code expects, never errors.
+const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged" };
+if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
+  let code = 0;
+  try {
+    const i = process.argv.indexOf("--home", 3);
+    if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
+    loadEnv();
+    const wake = await import("../lib/wake.js");
+    code = wake[HOOKS[process.argv[2]]]();
+  } catch {
+    code = 0;
+  }
+  process.exit(code);
+}
+
 try {
   loadEnv();
 } catch (e) {
@@ -18,16 +34,25 @@ Usage:
                                             run the relay (one machine per team)
   hoptell mcp                               MCP server for an agent session (stdio)
   hoptell tmux <name> [--roles a,b] -- <agent command>
-                                            run an agent in tmux; incoming messages are pasted in
+                                            run an agent in tmux; attempt an inbox notice when its prompt appears idle
   hoptell list                              list peers on the relay
-  hoptell send <to> <message...>            send a message (as $HOPTELL_NAME, without going online)
+  hoptell send [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>
+                                            send a message (as $HOPTELL_NAME, without going online);
+                                            --ttl: request relay queue expiry; older relays ignore it;
+                                            --reply-to: the "Message reference" you are answering
+  hoptell snapshot <file>                   print a UTF-8 file snapshot with its SHA-256, for review
+  hoptell snapshot --check <sha256> <file>  exit 0 if the bytes match; nonzero if different or the check fails
   hoptell wait [seconds]                    go online as $HOPTELL_NAME, print the next message, exit
   hoptell listen <name> [seconds]           wait for the next message in <name>'s local inbox, print it, exit
+  hoptell doctor                            check settings, relay, login, inbox and tmux on this machine
+  hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
 
 Settings: environment variables, else the first file found of
 ${envFiles().map((f) => `  ${f}`).join("\n")}
-Peers:  HOPTELL_RELAY, HOPTELL_TOKEN, HOPTELL_NAME, HOPTELL_ROLES (e.g. reviewer,backend)
-Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file)
+Peers:  HOPTELL_RELAY, HOPTELL_TOKEN, HOPTELL_NAME, HOPTELL_ROLES (e.g. reviewer,backend),
+        HOPTELL_PUSH (channel, hook, tmux or listener; unset for automatic)
+Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file);
+        HOPTELL_LOG_FINGERPRINTS=on with HOPTELL_LOG_FINGERPRINT_KEY_FILE for keyed log fingerprints
 
 Send to a peer name, to @<role> (every online peer with the role) or to @all.`;
 
@@ -60,15 +85,34 @@ try {
       const { startRelay } = await import("../lib/relay.js");
       const port = Number(opt("--port", process.env.HOPTELL_PORT || 7777));
       if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
-      let members = null;
       const membersFile = opt("--members", process.env.HOPTELL_MEMBERS);
-      if (membersFile) {
+      const readMembers = () => {
         const st = fs.statSync(membersFile);
-        if (process.platform !== "win32" && st.mode & 0o077) fail(`${membersFile} holds tokens; restrict it first: chmod 600 ${membersFile}`);
-        members = JSON.parse(fs.readFileSync(membersFile, "utf8")).members;
-        if (!Array.isArray(members)) fail(`${membersFile}: expected {"members": [{"name": "...", "token": "..."}]}`);
+        if (process.platform !== "win32" && st.mode & 0o077) throw new Error(`${membersFile} holds tokens; restrict it first: chmod 600 ${membersFile}`);
+        let members;
+        try {
+          members = JSON.parse(fs.readFileSync(membersFile, "utf8")).members;
+        } catch (e) {
+          // JSON.parse messages can quote the file, and the file holds tokens.
+          throw new Error(e instanceof SyntaxError ? `${membersFile}: invalid JSON` : `${membersFile}: ${e.code || "cannot read"}`);
+        }
+        if (!Array.isArray(members)) throw new Error(`${membersFile}: expected {"members": [{"name": "...", "token": "..."}]}`);
+        return members;
+      };
+      // Opt-in keyed fingerprints in the log: loaded once, before listening; no silent fallback.
+      const fpModule = await import("../lib/fingerprint.js");
+      const fingerprint = fpModule.fingerprintsEnabled(process.env.HOPTELL_LOG_FINGERPRINTS) ? fpModule.loadFingerprintKey(process.env.HOPTELL_LOG_FINGERPRINT_KEY_FILE) : null;
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, fingerprint });
+      // kill -HUP: re-read the members file (revoked tokens are disconnected); on any problem keep the current list.
+      if (membersFile) {
+        process.on("SIGHUP", () => {
+          try {
+            relay.reload(readMembers());
+          } catch (e) {
+            console.log(new Date().toISOString(), `members reload failed; keeping the active members list: ${e.message}`);
+          }
+        });
       }
-      await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members });
       break;
     }
     case "mcp": {
@@ -100,11 +144,22 @@ try {
       break;
     }
     case "send": {
-      const [to, ...words] = args;
-      if (!to || !words.length) fail("usage: hoptell send <to> <message...>", 2);
-      const { describeAck } = await import("../lib/client.js");
+      const { describeAck, parseRef, parseTtl } = await import("../lib/client.js");
+      let ttl;
+      let replyTo;
+      let rest = args;
+      // Options come first; "--" ends them, so a message may itself start with "--".
+      for (;;) {
+        if (rest[0] === "--ttl") ttl = parseTtl(rest[1]);
+        else if (rest[0] === "--reply-to") replyTo = parseRef(rest[1]);
+        else break;
+        rest = rest.slice(2);
+      }
+      if (rest[0] === "--") rest = rest.slice(1);
+      const [to, ...words] = rest;
+      if (!to || !words.length) fail("usage: hoptell send [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>", 2);
       const c = await connect("send");
-      console.log(describeAck(to, await c.send(to, words.join(" "))));
+      console.log(describeAck(to, await c.send(to, words.join(" "), ttl, replyTo), ttl, replyTo));
       c.close();
       break;
     }
@@ -130,6 +185,34 @@ try {
         }, secs * 1000);
       }
       c.on("fatal", (r) => fail(`relay closed the connection: ${r}`));
+      break;
+    }
+    case "snapshot": {
+      const snap = await import("../lib/snapshot.js");
+      if (args[0] === "--check") {
+        if (args.length !== 3) fail("usage: hoptell snapshot --check <sha256:...> <file>", 2);
+        const r = snap.checkSnapshot(args[1], args[2]);
+        console.log(
+          r.matches
+            ? `unchanged: ${args[2]} still matches ${r.expected}`
+            : `changed: ${args[2]} is now ${r.current}, not ${r.expected}. Ask for a new review, or reconcile the change deliberately.`,
+        );
+        process.exitCode = r.matches ? 0 : 1;
+      } else {
+        if (args.length !== 1) fail("usage: hoptell snapshot <file>   or   hoptell snapshot --check <sha256:...> <file>", 2);
+        console.log(snap.snapshotMessage(args[0]));
+      }
+      break;
+    }
+    case "hooks": {
+      // Settings for Claude Code without the plugin: printed only, never written.
+      const { hooksSnippet } = await import("../lib/wake.js");
+      console.log(JSON.stringify(hooksSnippet(process.execPath, process.env.HOPTELL_HOME), null, 2));
+      break;
+    }
+    case "doctor": {
+      const { doctor } = await import("../lib/doctor.js");
+      process.exitCode = (await doctor()) ? 1 : 0;
       break;
     }
     case "listen": {
