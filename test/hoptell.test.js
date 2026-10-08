@@ -203,8 +203,15 @@ test("a replaced peer stays off while the newer connection is online, then recon
   copy.close();
   await new Promise((r) => copy.once("close", r));
   for (let i = 0; i < 100 && !/bob .*online/.test(await a.call("list_peers")); i++) await sleep(100);
-  assert.match(await a.call("send_message", { to: "bob", message: "back again" }), /Delivered to bob/);
-  assert.match(await b.call("read_inbox"), /back again/);
+  // The relay may still be closing the copy: then it queues the message and delivers it to the
+  // reconnected server moments later, so wait for it to arrive rather than for "Delivered".
+  await a.call("send_message", { to: "bob", message: "back again" });
+  let got = "";
+  for (let i = 0; i < 50 && !/back again/.test(got); i++) {
+    got += await b.call("read_inbox");
+    if (!/back again/.test(got)) await sleep(100);
+  }
+  assert.match(got, /back again/);
 });
 
 test("after a replacement, member tokens can check the name; names too long to check stop as before", async (t) => {
@@ -378,6 +385,32 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   const injector = execFileSync("tmux", ["list-panes", "-t", `=${session}:injector`, "-F", "#{pane_start_command}"], { encoding: "utf8" });
   assert.match(injector, /inject .*%\d+'? '?\d+/);
   assert.doesNotMatch(injector, new RegExp(TOKEN));
+});
+
+test("hoptell tmux starting the tmux server leaves no hoptell settings in its global environment; doctor warns about old ones", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  const w = await world();
+  // A tmux server of its own: this launch is the one that starts it.
+  const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-tmux-fresh-"));
+  const tenv = { ...process.env, TMUX_TMPDIR: tmuxDir };
+  delete tenv.TMUX;
+  const name = `tf${process.pid}`;
+  t.after(async () => {
+    spawnSync("tmux", ["kill-server"], { env: tenv });
+    fs.rmSync(tmuxDir, { recursive: true, force: true });
+    await w.close();
+  });
+  const r = await w.cli(["tmux", name, "--", "sh", "-c", "sleep 30"], { TMUX_TMPDIR: tmuxDir, TMUX: "", HOPTELL_PUSH: "" });
+  assert.match(r.stderr, /attach with: tmux attach/);
+  const global = execFileSync("tmux", ["show-environment", "-g"], { encoding: "utf8", env: tenv });
+  assert.doesNotMatch(global, /^HOPTELL_/m, "the tmux server kept hoptell settings for later sessions");
+  const session = execFileSync("tmux", ["show-environment", "-t", `=hoptell-${name}`], { encoding: "utf8", env: tenv });
+  assert.match(session, new RegExp(`^HOPTELL_NAME=${name}$`, "m")); // the session still gets its own settings
+  // A server that holds them from an earlier version: doctor names them, never their values.
+  const secret = fakeToken();
+  execFileSync("tmux", ["set-environment", "-g", "HOPTELL_TOKEN", secret, ";", "set-environment", "-g", "HOPTELL_PUSH", "tmux"], { env: tenv });
+  const doc = await w.cli(["doctor"], { TMUX_TMPDIR: tmuxDir, TMUX: "" });
+  assert.match(doc.stdout, /warn {2}tmux server: .*HOPTELL_PUSH, HOPTELL_TOKEN.*tmux set-environment -g -u HOPTELL_TOKEN/);
+  assert.ok(!doc.stdout.includes(secret) && !doc.stderr.includes(secret), "doctor printed the token");
 });
 
 test("injector stops when the agent pane is respawned with another process", { skip: !hasTmux && "tmux not installed" }, async (t) => {
