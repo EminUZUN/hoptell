@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `hoptell tmux` now starts tmux servers without `HOPTELL_` variables in their
+  global environment. Previously, later sessions could inherit the relay URL,
+  token and `HOPTELL_PUSH=tmux`, causing Claude Code started in ordinary tmux
+  to wait for notices from an injector that was not running.
+  `hoptell doctor` detects these variables in an existing tmux server’s global
+  environment and prints commands to remove them, without showing their values.
+
 ## 0.2.1 (2026-10-08)
 
 - A replaced MCP session now reconnects automatically once its peer name is free again.
