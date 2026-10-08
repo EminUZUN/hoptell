@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-10-08)
 
 - A replaced MCP session now reconnects automatically once its peer name is free again.
   Previously, it stayed offline until restarted. This lets it recover when an agent starts
