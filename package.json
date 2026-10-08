@@ -22,7 +22,8 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "lint": "eslint .",
-    "test:e2e": "node test/e2e/run.mjs"
+    "test:e2e": "node test/e2e/run.mjs",
+    "test:compat": "node test/compat.mjs"
   },
   "engines": {
     "node": ">=20"

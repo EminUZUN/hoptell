@@ -11,6 +11,7 @@ const emit = (ev) => process.stdout.write(`${JSON.stringify(ev)}\n`);
 let sessionId = "s-1";
 let watchers = [];
 let mcp = null;
+const servers = new Set();
 
 function runHook(cmd, input, raw = false, env = {}) {
   return new Promise((resolve) => {
@@ -55,7 +56,12 @@ function startMcp(env) {
       } else if (msg.id) emit({ ev: "mcp-result", id: msg.id, result: msg.result });
     }
   });
-  mcp.on("close", () => emit({ ev: "mcp-closed" }));
+  servers.add(mcp);
+  const self = mcp;
+  mcp.on("close", () => {
+    servers.delete(self);
+    emit({ ev: "mcp-closed" });
+  });
   mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "0" } } })}\n`);
 }
 
@@ -78,5 +84,15 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
   else if (c.op === "mcp-call") mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: c.id, method: "tools/call", params: { name: c.tool, arguments: c.args || {} } })}\n`);
   else if (c.op === "mcp-stop") mcp.stdin.end();
   else if (c.op === "exit") process.exit(0);
+});
+// Like Claude Code, shut the MCP servers down and wait for them before exiting, so a test
+// can remove their files once this process is gone.
+process.on("SIGTERM", () => {
+  setTimeout(() => process.exit(0), 5000).unref();
+  if (!servers.size) process.exit(0);
+  for (const m of servers) {
+    m.once("close", () => !servers.size && process.exit(0));
+    m.stdin.end();
+  }
 });
 emit({ ev: "ready", pid: process.pid });

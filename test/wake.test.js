@@ -26,10 +26,16 @@ async function fakeClaude(w, t, env = {}) {
     events.push(ev);
     for (const wt of [...waiters]) if (wt.match(ev)) waiters.splice(waiters.indexOf(wt), 1) && wt.resolve(ev);
   });
-  t.after(() => {
-    p.kill();
+  // Stop the host (and with it its MCP server) before the world removes the files they use;
+  // a cleanup that fails would skip the later ones and leave the host running.
+  const exited = new Promise((r) => p.once("exit", r));
+  const stop = async () => {
+    if (p.exitCode === null && p.signalCode === null) p.kill();
+    await exited;
     fs.rmSync(dir, { recursive: true, force: true });
-  });
+  };
+  w.onClose(stop);
+  t.after(stop);
   const host = {
     events,
     send: (c) => p.stdin.write(`${JSON.stringify(c)}\n`),
@@ -349,10 +355,10 @@ async function ownershipWorld(t) {
   const saved = process.env.HOPTELL_HOME;
   process.env.HOPTELL_HOME = home;
   const kids = [];
-  t.after(() => {
+  t.after(async () => {
     process.env.HOPTELL_HOME = saved;
-    kids.forEach((k) => k.kill());
-    fs.rmSync(home, { recursive: true, force: true });
+    await Promise.all(kids.map((k) => (k.exitCode !== null || k.signalCode !== null ? null : (k.kill(), new Promise((r) => k.once("exit", r))))));
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const { currentBoot, hostKey, processInfo } = await import("../lib/host.js");
   const wake = await import("../lib/wake.js");
@@ -374,8 +380,12 @@ async function ownershipWorld(t) {
     kids.push(k);
     return {
       pid: k.pid,
-      state: new Promise((resolve) => k.stdout.once("data", (d) => resolve(String(d).trim()))),
-      close: () => (k.stdin.end(), new Promise((r) => k.on("exit", r))),
+      // Settles even if the process exits early, so a failure cannot hang the test.
+      state: new Promise((resolve) => {
+        k.stdout.once("data", (d) => resolve(String(d).trim()));
+        k.once("exit", (code) => resolve(`exited (${code})`));
+      }),
+      close: () => (k.stdin.end(), k.exitCode !== null || k.signalCode !== null ? Promise.resolve() : new Promise((r) => k.once("exit", r))),
     };
   };
   const paused = async (count) => {

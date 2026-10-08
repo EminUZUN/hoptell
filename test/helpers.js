@@ -28,10 +28,15 @@ export async function world() {
   };
   delete env.HOPTELL_NAME;
   const clients = [];
+  const stops = [];
   return {
     home,
     env,
     relay,
+    /** Stop a process started for this world before close() removes its files. */
+    onClose(stop) {
+      stops.push(stop);
+    },
     /** Start `hoptell mcp` under an MCP client. */
     async mcp(name, extra = {}) {
       const notes = [];
@@ -53,9 +58,11 @@ export async function world() {
       );
     },
     async close() {
+      for (const stop of stops) await stop();
       for (const c of clients) await c.close().catch(() => {});
       await relay.close();
-      fs.rmSync(home, { recursive: true, force: true });
+      // Retries cover a process that is still finishing a write into the folder.
+      fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }

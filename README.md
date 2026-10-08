@@ -225,8 +225,11 @@ from their users' machines.
 ## Teams and swarms
 
 **Names.** Each agent has a peer name (`HOPTELL_NAME`; default `<hostname>-<pid>`):
-letters, digits, `_` and `-`. A new connection with a name already in use replaces the
-old one.
+letters, digits, `_` and `-`. A new connection using a name already in use replaces the
+old one. For names up to 58 characters, the replaced MCP session waits until the name is
+free, then reconnects automatically. This lets it recover after a temporary copy of its
+MCP server exits, such as a copy started only to list tools. Longer names still require
+the session to be restarted.
 
 **Roles.** `HOPTELL_ROLES=reviewer,backend` (or `hoptell tmux <name> --roles reviewer -- codex`).
 `list_peers` shows them. Sending to `@reviewer` reaches every *online* peer with that role,
