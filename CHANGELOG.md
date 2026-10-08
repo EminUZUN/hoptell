@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- A replaced MCP session now reconnects automatically once its peer name is free again.
+  Previously, it stayed offline until restarted. This lets it recover when an agent starts
+  a temporary copy of its MCP server to list tools, as Codex does for `/mcp`. While the
+  newer connection is online, the replaced session waits. It checks at increasing intervals,
+  from two seconds up to one minute. Names longer than 58 characters still require a restart.
+- For contributors: `npm run test:compat` tests every combination of old and current
+  relays, senders and receivers. By default, it installs the newest npm release older than
+  this checkout's version.
+- Fixed an intermittent hang in the hook delivery tests. Cleanup now stops the stand-in
+  Claude Code process and its MCP servers before removing their files. Closing a test
+  relay also closes connections that have not finished sending their HTTP upgrade request.
+
 ## 0.2.0 (2026-10-08)
 
 - `hoptell doctor` checks this machine's setup: Node.js version, settings file and its

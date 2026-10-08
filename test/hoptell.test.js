@@ -5,8 +5,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync, execFileSync, execFile } from "node:child_process";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import { startRelay } from "../lib/relay.js";
+import { RelayClient } from "../lib/client.js";
 import { BIN, HOSTNAME } from "../lib/config.js";
 import * as inbox from "../lib/inbox.js";
 import { TOKEN, fakeToken, sleep, world } from "./helpers.js";
@@ -49,6 +50,18 @@ test("relay refuses unsafe configuration", async () => {
   for (const token of [true, 123456789, {}, [fakeToken()]]) {
     await assert.rejects(async () => startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "a", token }] }), /must be a string/);
   }
+});
+
+test("closing the relay does not wait for a connection that is still sending its upgrade request", async () => {
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, log: () => {} });
+  const s = net.connect(relay.port, "127.0.0.1");
+  s.on("error", () => {});
+  await new Promise((r) => s.on("connect", r));
+  s.write("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"); // headers not finished
+  await sleep(200);
+  const closed = await Promise.race([relay.close().then(() => true), sleep(3000).then(() => false)]);
+  s.destroy();
+  assert.ok(closed, "relay.close() waited for a half-open connection");
 });
 
 test("relay authenticates and survives malformed traffic", async (t) => {
@@ -172,6 +185,111 @@ test("CLI send uses the agent's name without evicting the agent", async (t) => {
   assert.match(r.stdout, /Delivered to bob/);
   assert.match(await b.call("read_inbox"), /from "alice"[\s\S]*hello from cli/);
   assert.match(await a.call("list_peers"), /You are "alice"/); // still connected
+});
+
+test("a replaced peer stays off while the newer connection is online, then reconnects once the name is free", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const a = await w.mcp("alice");
+  const b = await w.mcp("bob");
+  // A short-lived second connection (like a copy an agent starts only to list tools) takes the name.
+  const copy = new WebSocket(w.env.HOPTELL_RELAY);
+  let closedWith = null;
+  copy.on("close", (code) => (closedWith = code));
+  copy.on("open", () => copy.send(JSON.stringify({ type: "hello", name: "bob", token: TOKEN })));
+  await new Promise((r) => copy.once("message", r)); // welcome
+  await sleep(5000); // past the first checks: the replaced server must not evict the copy
+  assert.equal(closedWith, null, "the replaced server evicted the newer connection");
+  copy.close();
+  await new Promise((r) => copy.once("close", r));
+  for (let i = 0; i < 100 && !/bob .*online/.test(await a.call("list_peers")); i++) await sleep(100);
+  assert.match(await a.call("send_message", { to: "bob", message: "back again" }), /Delivered to bob/);
+  assert.match(await b.call("read_inbox"), /back again/);
+});
+
+test("after a replacement, member tokens can check the name; names too long to check stop as before", async (t) => {
+  const aliceToken = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: aliceToken }], log: () => {} });
+  t.after(() => relay.close());
+  const url = `ws://127.0.0.1:${relay.port}`;
+  const takeOver = async (name) => {
+    const ws = new WebSocket(url);
+    ws.on("open", () => ws.send(JSON.stringify({ type: "hello", name, token: aliceToken })));
+    await new Promise((r) => ws.once("message", r));
+    return ws;
+  };
+  for (const name of ["alice", `alice-${"x".repeat(52)}`, `alice-${"x".repeat(53)}`]) {
+    const c = new RelayClient({ url, token: aliceToken, name });
+    t.after(() => c.close());
+    const events = [];
+    for (const e of ["ready", "replaced", "fatal"]) c.on(e, () => events.push(e));
+    c.start();
+    await c.ready();
+    const copy = await takeOver(name);
+    for (let i = 0; i < 50 && events.length < 2; i++) await sleep(50);
+    copy.close();
+    for (let i = 0; i < 100 && events.length < 3 && !events.includes("fatal"); i++) await sleep(50);
+    if (name.length <= 58) assert.deepEqual(events, ["ready", "replaced", "ready"], name);
+    else assert.deepEqual(events, ["ready", "fatal"], name);
+    c.close();
+  }
+});
+
+test("after a replacement, a failed name check never takes the name back; a refused one stops", async (t) => {
+  const aliceToken = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", token: aliceToken }], log: () => {} });
+  t.after(() => relay.close());
+  const url = `ws://127.0.0.1:${relay.port}`;
+  // A proxy in front of the relay that can cut every name check right after its hello.
+  let cutChecks = true;
+  const proxy = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((r) => proxy.on("listening", r));
+  t.after(() => proxy.close());
+  proxy.on("connection", (down) => {
+    const up = new WebSocket(url);
+    const early = [];
+    up.on("open", () => early.splice(0).forEach((d) => up.send(d)));
+    down.on("message", (d, binary) => {
+      const data = binary ? d : String(d);
+      if (cutChecks && /"name":"[^"]*-check"/.test(String(d))) return down.terminate();
+      up.readyState === 1 ? up.send(data) : early.push(data);
+    });
+    up.on("message", (d, binary) => down.readyState === 1 && down.send(binary ? d : String(d)));
+    up.on("close", (code, reason) => (code >= 4000 ? down.close(code, reason) : down.terminate())); // pass on 4004
+    down.on("close", () => up.terminate());
+    up.on("error", () => {});
+    down.on("error", () => {});
+  });
+  const c = new RelayClient({ url: `ws://127.0.0.1:${proxy.address().port}`, token: aliceToken, name: "alice", nameCheckMs: [100, 400] });
+  t.after(() => c.close());
+  const events = [];
+  for (const e of ["ready", "replaced", "fatal"]) c.on(e, () => events.push(e));
+  c.start();
+  await c.ready();
+  const copy = new WebSocket(url);
+  let closedWith = null;
+  copy.on("close", (code) => (closedWith = code));
+  copy.on("open", () => copy.send(JSON.stringify({ type: "hello", name: "alice", token: aliceToken })));
+  await new Promise((r) => copy.once("message", r));
+  await sleep(2000); // several failed checks
+  assert.equal(closedWith, null, "a failed check took the name back from the newer connection");
+  assert.deepEqual(events, ["ready", "replaced"]);
+  cutChecks = false;
+  await sleep(1000); // successful checks, the name is still taken
+  assert.equal(closedWith, null);
+  copy.close();
+  for (let i = 0; i < 40 && events.length < 3; i++) await sleep(50);
+  assert.deepEqual(events, ["ready", "replaced", "ready"]);
+
+  // Replaced again; then the member's token is revoked: the check is refused and it stops.
+  const copy2 = new WebSocket(url);
+  copy2.on("open", () => copy2.send(JSON.stringify({ type: "hello", name: "alice", token: aliceToken })));
+  await new Promise((r) => copy2.once("message", r));
+  for (let i = 0; i < 40 && events.length < 4; i++) await sleep(50);
+  relay.reload([{ name: "bob", token: fakeToken() }]);
+  for (let i = 0; i < 60 && events.length < 5; i++) await sleep(50);
+  assert.deepEqual(events, ["ready", "replaced", "ready", "replaced", "fatal"]);
+  copy2.close();
 });
 
 test("CLI listen consumes the inbox once; wait goes online", async (t) => {
