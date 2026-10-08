@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-10-08)
 
 - `hoptell tmux` now starts tmux servers without `HOPTELL_` variables in their
   global environment. Previously, later sessions could inherit the relay URL,
