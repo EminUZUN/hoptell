@@ -119,7 +119,7 @@ test("tool results pass through unchanged, including structured file-tool result
   await Promise.all([sam.start(), rev.start()]);
   assert.ok(await until(() => sam.session.state === "bound" && rev.session.state === "bound"));
   const catalog = await sam.tools();
-  assert.deepEqual(catalog.map((x) => x.name), ["list_peers", "send_message", "wait_for_message", "read_inbox", "ack_messages", "send_file", "verify_snapshot"]);
+  assert.deepEqual(catalog.map((x) => x.name), ["list_peers", "send_message", "wait_for_message", "read_inbox", "ack_messages", "send_file", "verify_snapshot", "send_review_set", "verify_review_set"]);
   assert.equal(catalog.find((x) => x.name === "send_file").annotations.openWorldHint, true);
   assert.match(catalog.find((x) => x.name === "read_inbox").description, /listen --session "/);
   assert.match(sam.instructions(), /as peer "sam"/);
@@ -217,6 +217,7 @@ const ALLOWED = {
   "settings.js": "bootstrap(): captures the environment once for readSettings",
   "realm.js": "relay side: the relay's default state directory",
   "host.js": "PATH for the process-inspection tools it runs (not a hoptell setting)",
+  "gitsafe.js": "PATH, only to find the git executable (not a hoptell setting); Git itself gets an environment built from scratch",
   "tmux.js": "CLI commands tmux/inject: the spawn environment for tmux without HOPTELL_ values, and the caller's directory",
 };
 test("guard: no hidden reads of the environment, home or working directory behind the engine", () => {

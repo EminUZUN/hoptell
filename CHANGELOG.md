@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- Access control at the relay, in two parts. Each part can only refuse a message:
+  - an operator policy (`hoptell relay --policy`), with groups of members or identity-provider
+    groups;
+  - per-member grants (`hoptell grants`), which say who may reach you, with expiry, revisions
+    and hiding from lists. A grants change is published only against the revision you previewed.
+
+  Refused senders get the same answer as for unknown names. They can reply once to a message
+  that reached their session. They can also send a contact request with a fixed reason
+  (`hoptell contacts request`, answered with `hoptell contacts requests`).
+
+  Removing a member, unlinking an identity or revoking a token ends the group claims the relay
+  holds for it. Messages queued by a broker sign-in that has ended are not delivered. Without a
+  policy or grants, delivery does not change.
+- Review sets: `send_review_set` sends several files from approved folders to one peer as one
+  immutable manifest (per-file SHA-256, a `bundle_digest` over the RFC 8785 canonical JSON of
+  the file list, optional Git provenance), and keeps the captured bytes locally.
+  `verify_review_set` checks them later. The reviewer's hoptell checks every file against its
+  hash. A reviewer answers with a proposal (replacements or single-file patches, by file id);
+  it is checked completely before it is stored, and the agent only learns that it is waiting.
+  A proposal is accepted only from the recipient the relay named when the set was sent: the
+  relay's acknowledgement of a direct send (protocol 2) now names the recipient's member, or
+  says that it used the shared token. With an older relay that names no recipient, the check is
+  weaker (any authenticated sender with that name in the realm), and the tool result and the
+  apply preview say so. A set whose confirmation was not saved accepts no proposal. Files inside
+  `.git` cannot be part of a review set.
+- `hoptell apply` lets the owner preview and apply a proposal from the terminal: changes are
+  applied to the captured bytes in a temporary folder (Git 2.39.2 or a fixed release, no
+  configuration, hooks or filters), every file is checked again before writing, and a recovery
+  journal makes an interrupted apply recoverable with `hoptell apply --recover`. An apply is
+  committed once its complete journal state is saved: recovery then only finishes it, and refuses
+  a roll-back.
+  Each file is replaced by a new file with the same permission bits; ACLs and extended
+  attributes are not kept. `hoptell doctor` reports an unfinished journal.
 - `hoptell mcp-http` serves MCP over HTTP on 127.0.0.1 for clients that only speak HTTP: per-client
   tokens (stored hashed), loopback Host check, no web-page requests, one agent session per client
   session, limits on sessions, calls and streams. Reads are held under receipts until they are

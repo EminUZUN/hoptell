@@ -48,7 +48,8 @@ process. None of this is sent to the relay.
   normal queue limits.
 - The relay's state directory holds a random realm id and, while the relay runs, a lock file
   with its process id. An optional realm name comes from the relay's configuration and is
-  sent to clients. It holds no messages, names or tokens.
+  sent to clients. Apart from the broker and access files described below, it holds no messages,
+  names or tokens.
   Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender
@@ -74,6 +75,26 @@ process. None of this is sent to the relay.
   SHA-256 of the current refresh token; ended sign-ins are kept 30 days for diagnostics.
   Sign-ins in progress, one-time codes and access tokens are in memory only. The page shown to a
   user whose identity is not linked names the issuer and subject.
+- The relay keeps access state in `<state dir>/access/` (0700/0600, not encrypted by hoptell):
+  - each member's published grants: member ids, group names, times and a revision;
+  - for each identity that signs in with an identity provider: the issuer and subject, the
+    member id, the provider groups and times of its latest sign-in. The relay records these at
+    every sign-in, also without a policy, so that a policy can use them later. When a member is
+    removed, an identity unlinked, or a token revoked, the groups are dropped. The issuer,
+    subject, member id, times and the reason are kept, so that an older sign-in can never count
+    again. These entries stay until the operator removes them. Removing them resets that
+    protection, so do it only as a deliberate reset, not as routine cleanup. Member and shared
+    tokens record nothing here;
+  - pending contact requests: the sender's and recipient's member ids, the sender's member name,
+    a reason from a fixed list and times. They are removed after seven days or when answered;
+  - a count of requests per sender, for the current and the previous day;
+  - reply allowances: two member ids and the message reference. Once used, they also hold the
+    reply's message and delivery references, its operation id, a SHA-256 of its recipient, text,
+    reply reference and time-to-live, and the time of use. Unused ones are removed seven days
+    after the original message was released, used ones seven days after the reply.
+
+  The relay removes expired entries in its periodic cleanup (every 15 seconds by default). The
+  policy file belongs to the operator.
 - The relay stops retaining a message when the receiving client confirms receipt. This
   confirms local storage or output, not that an agent read or acted on it. Restarting the
   relay discards its message and peer state. On relays supporting expiry, the sender can set a
@@ -213,6 +234,26 @@ cleaned up while the MCP server is running. Each MCP server instance accepts at 
 records of up to 8192 bytes each; multiple instances use additional storage. These records are
 not encrypted, and backups may retain them. Stored labels and digests are themselves metadata,
 and a digest can be compared against guessed file contents.
+
+Review sets (`send_review_set`) keep more: a record per set under HOPTELL_HOME/review-sets
+(or ~/.hoptell/review-sets) with the recipient (its name, realm and, as the relay named it, its
+member id or that it used the shared token), file labels, sizes, hashes, file identities
+(device, inode, mode) and optional Git commit and tree ids, and **the exact captured bytes of
+every file**, so that a proposal can later be applied to them. Proposals that answer a set are
+stored in the same folder with their full content (replacement text or patch), the sender as the
+relay described it, and their status; at most 20 per set and 50 MB in all. Folders are 0700 and
+files 0600. A set is kept for 7 days, or until every proposal for it is applied or expired
+(proposals expire after 7 days), whichever is later, and is removed while an MCP server with
+file tools is running. These files are not encrypted, and backups may retain them.
+
+`hoptell apply` writes a recovery journal under HOPTELL_HOME/apply/<proposal id> (0700/0600)
+before it changes a file: each target's folder id, path, identity and mode, its old and new
+content, and the name and identity of the temporary file it is writing. When the apply or a
+recovery completes, the journal folder is first moved to HOPTELL_HOME/apply/done/ and then
+removed; an interrupted apply keeps it, beyond the review set's lifetime, until `hoptell apply
+--recover` completes. The
+preview uses a private temporary folder under the system temporary directory, removed before
+the command ends.
 
 The receiver's normal inbox can still contain the complete snapshot message, including file
 contents, under the existing inbox retention rules. Agent sessions, terminal output and AI

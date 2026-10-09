@@ -535,6 +535,61 @@ messages already waiting in your sessions are held back on their next read. Ever
 receives messages for this home must run this version or later. `HOPTELL_NOTIFY=off` turns the
 desktop notifications off.
 
+### Who may reach you through the relay (grants and the relay's policy)
+
+Your machine's contacts decide what reaches your sessions. On a relay with member credentials, two
+more checks happen before a message leaves the relay, and each can only refuse:
+
+- **The relay's policy** (`hoptell relay --policy policy.json` or `HOPTELL_POLICY`), set by the
+  relay's operator: groups of members (by member id, or by the identity provider's groups for
+  signed-in members) and allow or deny rules between them. `kill -HUP <relay pid>` reloads it; a
+  file with a mistake keeps the active policy.
+
+```json
+{ "v": 1,
+  "groups": { "reviewers": { "members": ["m_..."], "oidcGroups": [{ "issuer": "https://idp.example", "group": "reviewers" }] } },
+  "rules": [{ "from": "group:reviewers", "to": "*", "action": "allow" }],
+  "defaultAction": "deny" }
+```
+- **Your grants**, published by you for your member:
+
+```
+hoptell grants                                   # your grants and their revision
+hoptell grants allow member:<id> [--until <s>]   # also group:<name> or *; --until for a while
+hoptell grants deny member:<id> | remove <selector>
+hoptell grants deny-forever member:<id>          # deny, and no contact requests from it
+hoptell grants default allow|deny                # for senders no entry names
+hoptell grants visible all|grantees              # grantees: others do not see you in lists
+```
+
+Each `grants` command shows the result and the current revision first, and publishes nothing.
+Run the same command again with `--yes --rev N` (the revision it showed) to publish it. If your
+grants changed in the meantime (another session or machine), it refuses and you look again. An
+`--until` given in seconds counts from the moment you publish.
+A member entry wins over a group entry, a group entry over `*`, and on a tie deny wins. Expiry is
+checked whenever a message is delivered, also for messages already waiting.
+
+A sender your grants or the policy refuse gets the same answer as for a name that does not exist,
+and broadcasts report only how many sessions they reached.
+
+**Replies.** If you send a message to someone your grants refuse by default, they may reply to it
+once within seven days, but only after your message passed the relay's policy and their machine's
+contacts released it to a session. The reply still needs the relay's policy. An entry in your
+grants that denies them (for the member or a group it is in) cancels it, and so does expiry.
+
+**Contact requests.** A member the relay's policy allows, but your grants refuse, can ask to reach
+you with a fixed reason and no text: `hoptell contacts request <name> --reason
+collaborate|review|handoff|other`. The sender gets the same answer whether or not you exist, accept
+requests or have blocked them. You see requests with `hoptell contacts requests`; `accept`,
+`deny` and `deny-forever` act at once, without a preview. Accepting adds that member to your grants;
+your machine's contacts still decide what reaches your sessions.
+
+Hiding yourself (`visible grantees`) needs a relay without a shared token. A relay that requires
+grants (`"requireGrants": true` in the policy) or has hidden members refuses older clients that
+cannot be filtered (protocol 1). Each sender can have at most 1,000 messages or 20 MiB waiting at
+the relay across all recipients. Without a policy and without published grants, delivery does
+not change; the relay still records sign-ins (below), so a policy added later can use them.
+
 ## Replies and file reviews
 
 Clients from 0.2.0 display a `Message reference:` line after the message text. When it contains
@@ -594,6 +649,82 @@ machine never resolves the sender's file label as a path. Records of sent snapsh
 after 24 hours. Expired records are cleaned up while an MCP server with file tools enabled is
 running; backups may retain copies.
 
+### Review sets and owner-run apply
+
+With approved folders, agents also get `send_review_set` and `verify_review_set`, for
+several files at once:
+
+- `send_review_set` takes `to` (one peer), `files` (`[{"root": "app", "path": "src/a.js"}, ...]`),
+  a `request` and optionally `git: true`. Each file is read once through the same guarded reader;
+  a file listed twice, or reachable twice through overlapping folders or a case alias, is refused,
+  and so is any file inside a `.git` folder (in any letter case).
+  At most 50 files and 512 KB in all, and the whole message must fit the relay's message limit
+  (100,000 characters today); a set over a limit is refused with the sizes, never cut. The peer
+  gets one message: `{hoptell_review_set: 1, review_set_id, manifest, contents}`. Files are
+  ordered by folder id, then path, and `bundle_digest` is the SHA-256 of the RFC 8785
+  canonical JSON of `manifest.files`. With `git: true` the manifest also says, per file, whether
+  the capture `matches-head`, `differs-from-head` or is `untracked`; that is provenance only:
+  the captured bytes are the base for everything later.
+- The reviewer's hoptell checks every file against its SHA-256 and prints the `bundle_digest`
+  under the message. A reviewer answers with one message whose whole text is a proposal:
+  `{hoptell_proposal: 1, proposal_id, review_set_id, based_on: <bundle_digest>, changes:
+  [{file_id, base_sha256, kind: "replace", text} | {file_id, base_sha256, kind: "patch",
+  unified_diff}]}`. File ids only: no paths, no commands, no new files.
+- The relay tells the sender who it delivers a direct send to (a member, or a name used with the
+  shared token), and the set records that. A proposal is checked before it is stored: it must
+  come from that recipient (same realm and name; for a member, that member and never a
+  shared-token sender using its name), name a set that has not expired, match its
+  `bundle_digest`, and name each file at most once with its recorded SHA-256. Anything else is
+  dropped with a fixed note. At most 20 proposals per set, 1 MB each and 50 MB in all are kept;
+  the same `proposal_id` again is stored once, and with a different payload it is refused. The
+  agent only sees that a proposal for the set is waiting for you, never its content; this also
+  holds for `hoptell wait` and for a sender your contacts hold back (only the note waits there).
+- An older relay confirms a send without naming the recipient. The set then records that, and the
+  check is weaker: a proposal is accepted from **any** authenticated sender with the recorded
+  name in the same realm, not from one bound member. `send_review_set` says so in its
+  `recipient` field, and `hoptell apply` shows it in the preview. Until the relay's confirmation
+  is saved, no proposal matches the set: a proposal that arrives first, or answers a set whose
+  confirmation was not saved or named the recipient in an unexpected form, is dropped. It is
+  never accepted on the realm and name alone. If saving failed in a way that leaves the outcome
+  unclear, `send_review_set` says so and names both possibilities: only the named recipient can
+  answer, or nobody can.
+- `verify_review_set` reports `match`, `changed` (with the files), `expired` or `unknown`.
+
+Only you apply a proposal, from a terminal; no MCP tool does:
+
+```sh
+hoptell apply                          # proposals waiting for you
+hoptell apply <proposal id> --preview  # what it changes; writes nothing
+hoptell apply <proposal id>            # the same, then asks; --yes skips the question
+hoptell apply --recover [--finish | --roll-back]   # after an interrupted apply
+```
+
+The changes are applied to the captured bytes in a private temporary folder (never your
+repository), so edits you had made before the capture are kept. Patches must change exactly the
+recorded file (no absolute paths, `..`, `.git`, symbolic links, submodules, mode changes or binary
+content) and go through `git apply` with no configuration, hooks, filters or pager; Git 2.39.2 or
+later (or a fixed release of an older series) is required. The preview is hoptell's own diff of
+each current file against the result. Before writing, every file is checked again: still inside
+its folder with no symbolic link on the way, the same file as captured, and still the captured
+bytes; any change refuses the whole apply. Files inside a `.git` folder are never written,
+whatever the change's kind. A recovery journal (`~/.hoptell/apply/<id>/`) is written and synced
+first. Each file is then replaced atomically by a new file renamed over it: the new file gets the
+old one's permission bits, but it is a new inode, so ACLs, extended attributes (xattrs) and
+other hard links to the old file are not carried over. A multi-file apply is not atomic while it
+runs. After an interruption, `hoptell apply --recover` brings every file to its old or its new
+content, and stops for any file that someone changed since (that file is never overwritten; the
+journal keeps both versions). Once the complete journal state is saved, the apply is committed (an
+interruption before that can still be rolled back): from then on
+recovery only marks the proposal applied and removes the journal, and `--roll-back` is refused
+("already committed"). Recovery removes a leftover temporary file only if it is the exact file
+the journal recorded; any other file is left in place and listed for you to check. `hoptell
+doctor` reports an unfinished journal. A program that edits a file in the instant between the
+last check and the rename can lose that edit; that race is outside these checks. Nothing is run
+because a proposal asks.
+
+Review set records (with the captured files) are kept for 7 days, or until every proposal for
+the set is applied or expired, whichever is later.
+
 ## CLI
 
 ```
@@ -619,6 +750,8 @@ hoptell doctor                        # checks settings, relay, login, inbox and
 hoptell hooks                         # prints Claude Code hook settings for hook delivery without the plugin
 hoptell snapshot <file>               # prints a UTF-8 file snapshot with its SHA-256, for review
 hoptell snapshot --check <sha256> <file>  # exit 0 if the bytes match; nonzero if different or the check fails
+hoptell apply [<proposal id> [--preview | --yes]]   # proposals that answered your review sets; apply one
+hoptell apply --recover [--finish | --roll-back]    # finish or roll back an interrupted apply
 ```
 
 Expiry does not remove messages already delivered to a local inbox.
@@ -745,7 +878,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). How hoptell handles d
   tested with the Claude Code terminal app; the VS Code extension and Desktop app are untested.
   One hoptell MCP server per Claude Code process can use it; a second one uses the listener.
 - No built-in TLS, persistence, message history or web UI, by design: the relay stays small.
-- The file tools (`send_file`, `verify_snapshot`) need macOS or Linux. Windows peers can still
+- The file tools (`send_file`, `verify_snapshot`, `send_review_set`, `verify_review_set`) and
+  `hoptell apply` need macOS or Linux. Windows peers can still
   receive and review snapshots.
 
 ## Tested clients

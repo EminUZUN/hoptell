@@ -587,3 +587,12 @@ test("uncertain writes: a repeated sign-out after a post-replacement failure, an
     await s.close();
   }
 });
+
+test("a sign-in with more than 100 groups is refused with a page, never cut short", async (t) => {
+  const s = await setup(t);
+  s.p.signIn = { ...(s.p.signIn ?? {}), sub: "user-1", groups: Array.from({ length: 101 }, (_, i) => `g${i}`) };
+  const r = await browse(authorizeUrl(s, cliRequest()));
+  assert.equal(r.status, 400);
+  assert.match(r.text, /more than 100 groups/);
+  assert.equal(s.broker.status().codes, 0);
+});

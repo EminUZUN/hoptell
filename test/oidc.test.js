@@ -328,3 +328,16 @@ test("a key set that is not JSON (a proxy page) is unavailable; repaired, sign-i
   await sleep(1200); // past the fetch backoff
   assert.ok((await rawHello(url, { issuer: p.issuer, token: await p.issue() })).welcome);
 });
+
+test("a token with more than 100 groups is refused, never cut short (group claims feed deny rules)", async (t) => {
+  const { p, verifier } = await setup(t);
+  const groups = Array.from({ length: 101 }, (_, i) => `g${i}`);
+  await assert.rejects(verifier.verify(p.issuer, await handmade(p, { groups })), (e) => e.code === "bad_token" && /more than 100 groups/.test(e.message));
+  const ok = await verifier.verify(p.issuer, await handmade(p, { groups: groups.slice(0, 100) }));
+  assert.equal(ok.groups.length, 100);
+});
+
+test("a token with a group name longer than 255 characters is refused, never cut short", async (t) => {
+  const { p, verifier } = await setup(t);
+  await assert.rejects(verifier.verify(p.issuer, await handmade(p, { groups: ["a".repeat(256)] })), (e) => e.code === "bad_token" && /longer than 255/.test(e.message));
+});

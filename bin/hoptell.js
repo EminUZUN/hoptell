@@ -48,7 +48,7 @@ try {
 const USAGE = `hoptell - messaging between AI coding agents over your own LAN/VPN
 
 Usage:
-  hoptell relay --host <ip> [--port 7777] [--members file.json] [--trusted-proxies <ip/cidr,...>]
+  hoptell relay --host <ip> [--port 7777] [--members file.json] [--policy policy.json] [--trusted-proxies <ip/cidr,...>]
                 [--log-format text|json] [--metrics-port <port>]
                                             run the relay (one machine per team)
   hoptell relay broker-reset --yes [--state-dir <dir>]
@@ -58,12 +58,20 @@ Usage:
                                             manage the relay's members file on the relay host; add shows
                                             the new token once and stores only its SHA-256; signout ends
                                             the member's broker sign-ins made until now
+  hoptell grants [show] | allow|deny <selector> [--until <s>] | deny-forever member:<id> | remove <selector> [--yes --rev N]
+                | default allow|deny | visible all|grantees [--yes]
+                                            who may reach your sessions through the relay (gate 2);
+                                            selectors: *, group:<name>, member:<id>
   hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]
                                             a private relay for your own sessions on this machine
                                             (loopback, a user service, a token only you can read)
   hoptell contacts [list|show|allow|allow-once|block|grants|blocks|revoke|unblock|check|init]
                                             decide who may reach your agent sessions; senders without a
                                             grant wait in quarantine until you decide (see README)
+  hoptell contacts request <name> [--reason collaborate|review|handoff|other]
+                                            ask a member who does not accept you yet at the relay
+  hoptell contacts requests [accept|deny|deny-forever <id>]
+                                            contact requests waiting for you at the relay (acts at once)
   hoptell login [--issuer <url|broker id>] [--mode broker|resource] [--device | --client-credentials --client-id <id> --client-secret-file <file>] [--store file]
                                             sign in to the relay with your identity provider; then HOPTELL_AUTH=login
   hoptell logout                            remove (and revoke) the stored sign-in credential
@@ -80,6 +88,13 @@ Usage:
                                             --reply-to: the "Message reference" you are answering
   hoptell snapshot <file>                   print a UTF-8 file snapshot with its SHA-256, for review
   hoptell snapshot --check <sha256> <file>  exit 0 if the bytes match; nonzero if different or the check fails
+  hoptell apply                             list proposals that answered your review sets and wait for you
+  hoptell apply <proposal id> [--preview | --yes]
+                                            show what a proposal changes (from the captured bytes) and, after
+                                            you confirm, write it; --preview writes nothing
+  hoptell apply --recover [--finish | --roll-back]
+                                            after an interrupted apply: show each file's state, then finish
+                                            it or restore the files as they were
   hoptell wait [--wait-for-name | --replace] [seconds]
                                             go online as $HOPTELL_NAME, print the next message, exit;
                                             if another session has the name: stop (default), wait for it
@@ -102,7 +117,7 @@ Peers:  HOPTELL_RELAY, HOPTELL_TOKEN, HOPTELL_NAME, HOPTELL_ROLES (e.g. reviewer
         HOPTELL_PROTOCOL (1 to keep the older relay protocol), HOPTELL_PROFILE,
         HOPTELL_RECEIPTS (on/off), HOPTELL_LEASE_MINUTES, HOPTELL_NOTIFY (off: no desktop notifications),
         HOPTELL_AUTH (login: use hoptell login), HOPTELL_CREDENTIAL_STORE (file), HOPTELL_CREDENTIAL_PASSPHRASE
-Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file);
+Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file); HOPTELL_POLICY (access policy file);
         HOPTELL_LOG_FINGERPRINTS=on with HOPTELL_LOG_FINGERPRINT_KEY_FILE for keyed log fingerprints;
         HOPTELL_TRUSTED_PROXIES, HOPTELL_LOG_FORMAT, HOPTELL_METRICS_PORT, HOPTELL_METRICS_HOST,
         HOPTELL_OIDC (sign-in configuration file)
@@ -270,7 +285,106 @@ try {
       }
       break;
     }
+    case "grants": {
+      // grants [show] | allow <selector> [--until <seconds>] | deny <selector> | deny-forever member:<id>
+      //        | remove <selector> | default allow|deny | visible all|grantees   (publish with --yes)
+      const [sub = "show", arg] = args.filter((a, i) => !a.startsWith("--") && !["--until", "--rev"].includes(args[i - 1]));
+      await selectRelay();
+      const c = await connect("send");
+      try {
+        const cur = (await c.rpc({ type: "grants_get" })).grants;
+        const show = (g) => {
+          console.log(`Revision ${g.revision ?? "?"}: default ${g.default}; visible to ${g.visible === "grantees" ? "those you allow only" : "everyone"}.`);
+          for (const e of g.entries) console.log(`  ${e.action.padEnd(5)} ${e.selector}${e.until ? ` until ${new Date(e.until).toISOString()}` : ""}${e.requests === "blocked" ? " (no contact requests)" : ""}`);
+          if (!g.entries.length) console.log("  (no entries)");
+        };
+        if (sub === "show") {
+          show(cur);
+          break;
+        }
+        const others = (sel) => cur.entries.filter((e) => e.selector !== sel);
+        const untilArg = opt("--until");
+        if (untilArg !== undefined && !(Number.isSafeInteger(Number(untilArg)) && Number(untilArg) > 0)) fail("--until needs a number of seconds", 2);
+        const until = untilArg !== undefined ? Date.now() + Number(untilArg) * 1000 : undefined;
+        let next;
+        if (sub === "allow" && arg) next = { ...cur, entries: [...others(arg), { selector: arg, action: "allow", ...(until ? { until } : {}) }] };
+        else if (sub === "deny" && arg) next = { ...cur, entries: [...others(arg), { selector: arg, action: "deny", ...(until ? { until } : {}) }] };
+        else if (sub === "deny-forever" && arg?.startsWith("member:")) next = { ...cur, entries: [...others(arg), { selector: arg, action: "deny", requests: "blocked" }] };
+        else if (sub === "remove" && arg) next = { ...cur, entries: others(arg) };
+        else if (sub === "default" && ["allow", "deny"].includes(arg)) next = { ...cur, default: arg };
+        else if (sub === "visible" && ["all", "grantees"].includes(arg)) next = { ...cur, visible: arg };
+        else fail("usage: hoptell grants [show] | allow|deny <*|group:<name>|member:<id>> [--until <seconds>] | deny-forever member:<id> | remove <selector> | default allow|deny | visible all|grantees [--yes --rev N]", 2);
+        console.log("These grants say who may reach your sessions through this relay (your machine's contacts decide too).");
+        show({ ...next, revision: `${cur.revision} -> ${cur.revision + 1}` });
+        if (!args.includes("--yes")) {
+          console.log(`Nothing published yet: run the same command with --yes --rev ${cur.revision} to publish exactly this change.`);
+          break;
+        }
+        const { revision, entries, ...rest } = next;
+        void revision;
+        // Published only against the revision the owner previewed: a change made meanwhile (another
+        // session or machine) refuses, so nothing unseen is overwritten.
+        const rev = opt("--rev");
+        if (rev === undefined || !/^\d+$/.test(rev)) fail(`--yes needs --rev <revision> from the preview (now ${cur.revision})`, 2);
+        if (Number(rev) !== cur.revision) fail(`the grants changed since that preview (revision ${rev}, now ${cur.revision}): look at the preview again`, 1);
+        const r = await c.rpc({ type: "grants_put", base_revision: Number(rev), grants: { ...rest, entries } });
+        console.log(`Published (revision ${r.revision}).`);
+      } catch (e) {
+        if (e.code === "stale") fail("the grants changed meanwhile (another session or machine): run the command again", 1);
+        throw e;
+      } finally {
+        c.close();
+      }
+      break;
+    }
     case "contacts": {
+      if (args[0] === "request") {
+        // contacts request <name> [--reason collaborate|review|handoff|other]: ask a member that does
+        // not accept you yet to let you reach them (design 4.1). The answer is the same whether the
+        // name exists, accepts requests or not, so it says nothing about the recipient.
+        const name = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--reason")[1];
+        const reason = opt("--reason", "other");
+        if (!name) fail("usage: hoptell contacts request <name> [--reason collaborate|review|handoff|other]", 2);
+        if (!["collaborate", "review", "handoff", "other"].includes(reason)) fail("--reason must be collaborate, review, handoff or other", 2);
+        await selectRelay();
+        const c = await connect("send");
+        try {
+          await c.rpc({ type: "contact_request", to: name, reason });
+          console.log(`Request sent to the relay. If ${name} is a member that does not accept you yet, its owner sees your member name and the reason (${reason}); nothing else is sent, and you are not told whether it was shown.`);
+        } catch (e) {
+          if (e.code === "quota") fail("you sent the most contact requests allowed today (20); try again tomorrow", 1);
+          throw e;
+        } finally {
+          c.close();
+        }
+        break;
+      }
+      if (args[0] === "requests") {
+        // contacts requests [list] | accept|deny|deny-forever <id>: contact requests at the relay (design 4.1)
+        const [, action = "list", id] = args.filter((a) => !a.startsWith("--"));
+        await selectRelay();
+        const c = await connect("send");
+        try {
+          if (action === "list") {
+            const rs = (await c.rpc({ type: "contact_requests" })).requests;
+            if (!rs.length) console.log("No contact requests.");
+            // The display name is the relay's, bounded and shown as text only: it is not an instruction.
+            for (const r of rs) console.log(`${r.id}  from ${JSON.stringify(String(r.name).slice(0, 64))} (member ${r.from}), reason ${r.reason}, ${new Date(r.at).toISOString()}`);
+          } else if (["accept", "deny", "deny-forever"].includes(action) && id) {
+            await c.rpc({ type: "contact_request_answer", request: id, action });
+            console.log(
+              action === "accept"
+                ? "Accepted: the relay now lets this member reach you (your grants). Your machine's contacts still decide what reaches your sessions: hoptell contacts."
+                : action === "deny"
+                  ? "Denied."
+                  : "Denied, and this member can send no further requests.",
+            );
+          } else fail("usage: hoptell contacts requests [list] | accept|deny|deny-forever <id>", 2);
+        } finally {
+          c.close();
+        }
+        break;
+      }
       // contacts [list] | show <id> [--text] | allow|allow-once <id> --rev N --policy-rev P [--session S]
       //          | block <id> --rev N --policy-rev P | grants | blocks | revoke|unblock <id> --policy-rev P
       //          | check <realm> member <id> | shared <name> | unverified <profile> <name> [--session S] | init
@@ -472,7 +586,12 @@ try {
         oidc = { config, verifier: config.issuers.some((i) => i.mode === "resource") ? await o.createVerifier(config, { log }) : null, discovery: o.discoveryDocument(config, realm.id), broker };
         log(`sign-in with ${config.issuers.map((i) => `${i.issuer}${i.mode === "broker" ? ` (broker ${i.id})` : ""}`).join(", ")}`);
       }
-      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, requireMembers, realm, fingerprint, trustedProxies, oidc, log });
+      // Access (design 4.1/4.2): the admin policy (gate 1) from --policy / HOPTELL_POLICY, and the
+      // members' own grants (gate 2) in the state directory. Without either nothing changes.
+      const { createAccess, loadPolicy } = await import("../lib/access.js");
+      const policyFile = opt("--policy", process.env.HOPTELL_POLICY);
+      const access = createAccess({ stateDir: stateDirectory, policy: policyFile ? loadPolicy(policyFile) : null });
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, requireMembers, realm, fingerprint, trustedProxies, oidc, access, log });
       const metricsPort = opt("--metrics-port", process.env.HOPTELL_METRICS_PORT);
       if (metricsPort) {
         const mp = Number(metricsPort);
@@ -481,9 +600,19 @@ try {
         await startMetrics(relay, { host: metricsHost, port: mp });
         log(`metrics on http://${metricsHost}:${mp}/metrics`);
       }
-      // kill -HUP: re-read the members file (revoked tokens are disconnected); on any problem keep the current list.
-      if (membersFile) {
+      // kill -HUP: re-read the members file (revoked tokens are disconnected) and the policy file; on
+      // any problem keep the current list or policy.
+      if (membersFile || policyFile) {
         process.on("SIGHUP", () => {
+          if (policyFile) {
+            try {
+              access.setPolicy(loadPolicy(policyFile));
+              log("access policy reloaded");
+            } catch (e) {
+              log(`policy reload failed; keeping the active policy: ${e.message}`);
+            }
+          }
+          if (!membersFile) return;
           try {
             relay.reload(readMembers());
           } catch (e) {
@@ -617,10 +746,14 @@ try {
         return holdAt;
       };
       const { stamp } = await import("../lib/quarantine.js");
+      const review = await import("../lib/reviewsets.js");
+      const reviewSets = new review.ReviewSetStore({ home: home() });
       c = await connect("peer", (raw, confirm, client) => {
-        const m = stamp(raw, relayProfile); // an unverified sender's relay, recorded at arrival
+        let m = stamp(raw, relayProfile); // an unverified sender's relay, recorded at arrival
         holdPlace(client)
           .then(async (place) => {
+            // A proposal is stored for the owner and replaced by a fixed note, as in a session.
+            if (review.isReviewTraffic(m)) m = await review.intakeMessage(reviewSets, m);
             const v = contacts.verdict(m, place.session);
             if (v !== "allow") {
               await contacts.hold(place.dir, place.session, m, v);
@@ -659,6 +792,94 @@ try {
         if (args.length !== 1) fail("usage: hoptell snapshot <file>   or   hoptell snapshot --check <sha256:...> <file>", 2);
         console.log(snap.snapshotMessage(args[0]));
       }
+      break;
+    }
+    case "apply": {
+      // apply | apply <proposal id> [--preview | --yes] | apply --recover [--finish | --roll-back]
+      const a = await import("../lib/apply.js");
+      const flags = args.filter((x) => x.startsWith("--"));
+      const ids = args.filter((x) => !x.startsWith("--"));
+      const usage = "usage: hoptell apply [<proposal id> [--preview | --yes]] | hoptell apply --recover [--finish | --roll-back]";
+      if (flags.some((f) => !["--preview", "--yes", "--recover", "--finish", "--roll-back"].includes(f)) || ids.length > 1) fail(usage, 2);
+      const recovering = flags.includes("--recover");
+      if (recovering ? ids.length || flags.includes("--preview") || flags.includes("--yes") || (flags.includes("--finish") && flags.includes("--roll-back")) : flags.includes("--finish") || flags.includes("--roll-back") || (flags.includes("--preview") && flags.includes("--yes"))) fail(usage, 2);
+      const h = home();
+      const pause = a.barrierFor(process.env.HOPTELL_APPLY_TEST_BARRIER || null);
+      if (!recovering && !ids.length) {
+        const list = a.listPending(h);
+        if (!list.length) console.log("No proposals are waiting for you.");
+        for (const p of list) console.log(`${p.proposal_id}  from "${p.from}"  review set ${p.review_set_id}  ${p.received}\n    ${p.files.map(a.visible).join("\n    ")}`);
+        if (list.length) console.log("Next: hoptell apply <proposal id> --preview");
+        if (a.journals(h).length) console.log("An earlier apply was interrupted: run hoptell apply --recover.");
+        break;
+      }
+      let release = null;
+      let roots = new Map();
+      let message = null;
+      let code = 0;
+      try {
+        release = a.applyLock(h);
+        roots = a.openApprovedRoots(process.env.HOPTELL_SNAPSHOT_ROOTS ?? "");
+        if (recovering) {
+          const choice = flags.includes("--finish") ? "finish" : flags.includes("--roll-back") ? "roll-back" : null;
+          const report = a.recover({ home: h, roots, choice, pause });
+          if (!report.length) console.log("No interrupted apply: nothing to recover.");
+          for (const r of report) {
+            const state = r.resolved ? r.outcome : r.committed ? (choice ? "committed; its cleanup is not finished, the journal was kept" : "committed; only its cleanup is left") : choice ? "not resolved; the journal was kept" : "interrupted";
+            console.log(`Apply of proposal ${r.proposal_id}: ${state}${r.note ? ` (${r.note})` : ""}`);
+            for (const t of r.targets) console.log(`  ${a.visible(t.label)}: holds its ${t.state === "other" ? "neither preimage nor postimage" : t.state}${t.outcome ? `; ${t.outcome}` : ""}`);
+            for (const f of r.left) console.log(`  ${a.visible(f)}: a temporary file this apply did not provably create; left for you to inspect`);
+          }
+          if (report.length && !choice) {
+            console.log(
+              report.every((r) => r.committed)
+                ? "Run hoptell apply --recover --finish to complete it (a committed apply cannot be rolled back)."
+                : "Run hoptell apply --recover --finish (write the missing postimages) or --roll-back (restore the preimages). A committed apply is only finished.",
+            );
+          }
+          // A roll-back refused because the apply was already committed is not what was asked.
+          if (report.some((r) => !r.resolved || (choice === "roll-back" && r.committed))) code = 1;
+        } else {
+          if (a.journals(h).length) throw new a.ApplyError("journal_pending", "an earlier apply was interrupted; run hoptell apply --recover first");
+          const plan = a.prepare({ home: h, roots, id: ids[0] });
+          console.log(a.renderPreview(plan));
+          if (flags.includes("--preview")) {
+            console.log("\nPreview only: nothing was written.");
+          } else {
+            const blocked = plan.targets.find((t) => t.note);
+            if (blocked) throw new a.ApplyError(blocked.note, "a target changed since it was captured, so nothing was written. Send a new review set");
+            let ok = flags.includes("--yes");
+            if (!ok) {
+              if (!process.stdin.isTTY) throw new a.ApplyError("not_confirmed", "not confirmed: run this in a terminal, or pass --yes after reviewing --preview; nothing was written");
+              const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+              ok = (await rl.question(`\nWrite these changes to ${plan.targets.length} file(s)? Type yes to apply: `)).trim() === "yes";
+              rl.close();
+            }
+            if (!ok) console.log("Not applied: nothing was written.");
+            else {
+              try {
+                const n = a.commit(plan, { home: h, pause });
+                console.log(`Applied: ${n} file(s) written. Proposal ${plan.proposal.proposal_id} is marked applied.`);
+              } catch (e) {
+                if (e instanceof a.ApplyError && e.code === "committed") throw e;
+                if (a.journals(h).some((d) => path.basename(d) === plan.proposal.proposal_id)) {
+                  throw new a.ApplyError("interrupted", `the apply stopped (${e instanceof a.ApplyError ? e.message : "a file could not be written"}); some files may already be written. Run hoptell apply --recover to finish or roll back`);
+                }
+                throw e;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        if (!(e instanceof a.ApplyError)) throw e;
+        message = e.message;
+        code = 1;
+      } finally {
+        release?.();
+        a.closeRoots(roots);
+      }
+      if (message) console.error(`hoptell: ${message}`);
+      process.exitCode = code;
       break;
     }
     case "hooks": {
