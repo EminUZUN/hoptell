@@ -1,4 +1,6 @@
 node_modules/
+# also a node_modules symlink (worktrees share one install)
+/node_modules
 .env
 .env.*
 !.env.example

@@ -5,7 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { FileToolError, checkRelPath, guardedRead, openRoots, parseRoots, supported } from "../lib/files.js";
+import { FileToolError, checkRelPath, createReader, openRoots, parseRoots, supported } from "../lib/files.js";
+
+const reader = createReader();
+const guardedRead = (...a) => reader.read(...a);
 
 const skip = !supported() && "the guarded reader needs macOS or Linux";
 
@@ -117,19 +120,20 @@ test("reads: symlinks, hard links, special files and missing or unreadable files
 async function race(s, step, rel, mutate) {
   const barrier = path.join(s.base, "barrier");
   fs.writeFileSync(`${barrier}.step`, step);
-  process.env.HOPTELL_READER_TEST_BARRIER = barrier;
   try {
-    const read = guardedRead(s.root, rel, 1000).then(
+    // A busy machine can take longer than the normal deadline to start the paused helper.
+    const read = createReader({ barrier, timeoutMs: 15_000 }).read(s.root, rel, 1000).then(
       (b) => ({ ok: b.toString() }),
       (e) => ({ code: e.code }),
     );
-    for (let i = 0; i < 300 && !fs.existsSync(`${barrier}.at`); i++) await new Promise((r) => setTimeout(r, 10));
-    assert.equal(fs.readFileSync(`${barrier}.at`, "utf8"), step, "the helper paused at the expected step");
+    // The helper creates the file, then writes the step: wait for its content, not just the file.
+    const at = () => (fs.existsSync(`${barrier}.at`) ? fs.readFileSync(`${barrier}.at`, "utf8") : "");
+    for (let i = 0; i < 1000 && !at(); i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(at(), step, "the helper paused at the expected step");
     mutate();
     fs.writeFileSync(`${barrier}.go-${step}`, "");
     return await read;
   } finally {
-    delete process.env.HOPTELL_READER_TEST_BARRIER;
     for (const f of fs.readdirSync(s.base)) if (f.startsWith("barrier.")) fs.rmSync(path.join(s.base, f));
   }
 }
@@ -209,9 +213,7 @@ test("helper: one read at a time, a bounded queue, and a deadline", { skip }, as
   // A helper that never gets the go-ahead is killed at the deadline.
   const barrier = path.join(s.base, "stuck");
   fs.writeFileSync(`${barrier}.step`, "start");
-  process.env.HOPTELL_READER_TEST_BARRIER = barrier;
   const started = Date.now();
-  assert.equal(await code(guardedRead(s.root, "a.txt", 10)), "helper_failed");
-  delete process.env.HOPTELL_READER_TEST_BARRIER;
+  assert.equal(await code(createReader({ barrier }).read(s.root, "a.txt", 10)), "helper_failed");
   assert.ok(Date.now() - started < 4000);
 });

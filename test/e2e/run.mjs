@@ -16,6 +16,8 @@
 // Logins are copied at runtime only and deleted with the containers.
 //
 // Options: --agents claude,codex,agy   --keep (leave containers running for inspection)
+//          --mcp-http (Claude Code connects over MCP HTTP, hoptell mcp-http, and is woken by the
+//          hoptell hooks through its registration header instead of channel notices)
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,7 +41,7 @@ const docker = (a, input) => execFileSync("docker", a, { encoding: "utf8", input
 // Extra env names are passed by name only (docker reads the values from our environment),
 // so no secret appears in a host command line or in an error message that echoes one.
 const sh = (host, script, user = "agent", envNames = []) => docker(["exec", ...envNames.flatMap((n) => ["-e", n]), "-u", user, `${RUN}-${host}`, "bash", "-lc", script]);
-const SECRETS = [process.env.CLAUDE_CODE_OAUTH_TOKEN, process.env.OPENAI_API_KEY].filter(Boolean);
+const SECRETS = [process.env.CLAUDE_CODE_OAUTH_TOKEN, process.env.OPENAI_API_KEY].filter(Boolean); // grows with tokens made during the run
 const redact = (s) => SECRETS.reduce((t, v) => t.split(v).join("[redacted]"), String(s));
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
@@ -101,6 +103,9 @@ function collectLogins(wanted) {
     found.agy = "local login";
   }
   put(".config/hoptell/.env", `HOPTELL_RELAY=ws://${RUN}-relay:7777\nHOPTELL_TOKEN=${TOKEN}\n`);
+  // The machines' owner (this test) lets every sender of the private test relay reach the agents;
+  // a new install would otherwise hold their messages for the owner's decision.
+  put(".hoptell/contacts.json", JSON.stringify({ version: 1, revision: 0, default: "allow", unverified: "ask", grants: [], blocks: [] }));
   return found;
 }
 
@@ -205,7 +210,12 @@ try {
         // The container's shell expands the token; it is not part of this command line.
         const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN ? ["CLAUDE_CODE_OAUTH_TOKEN"] : [];
         const tokenEnv = oauth.length ? `-e "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN"` : "";
-        sh(h, `cd hoptell && tmux new-session -d -s ${name} -x 200 -y 50 ${tokenEnv} -e HOPTELL_NAME=${name} -e HOPTELL_ROLES=${ROLE[a]},${h} "claude --allowedTools mcp__hoptell --dangerously-load-development-channels server:hoptell"`, "agent", oauth);
+        let wake = "--dangerously-load-development-channels server:hoptell";
+        if (flag("--mcp-http")) {
+          httpSetup(h, name, `${ROLE[a]},${h}`);
+          wake = ""; // hook notices, through the registration header
+        }
+        sh(h, `cd hoptell && tmux new-session -d -s ${name} -x 200 -y 50 ${tokenEnv} -e HOPTELL_NAME=${name} -e HOPTELL_ROLES=${ROLE[a]},${h} "claude --allowedTools mcp__hoptell ${wake}"`, "agent", oauth);
         peers.push({ host: h, agent: a, name, target: name });
       } else {
         const cmd = a === "codex" ? "codex" : "agy --dangerously-skip-permissions";
@@ -269,11 +279,32 @@ start@e2e-tester`);
   cleanup();
 }
 
+/**
+ * --mcp-http: what the README tells a user to do. A client with the peer's name and roles, the
+ * server, Claude Code's HTTP config (the token header, and hoptell hook-header as its headers
+ * helper) and the hoptell hooks in the project settings. The token reaches the container's
+ * files through stdin, never a command line.
+ */
+function httpSetup(h, name, roles) {
+  const out = sh(h, `cd hoptell && node bin/hoptell.js mcp-http client add ${name} --name ${name} --roles ${roles}`);
+  const token = /shown only now\): (\S+)/.exec(out)?.[1];
+  if (!token) throw new Error("hoptell mcp-http client add printed no token");
+  SECRETS.push(token);
+  sh(h, `cd hoptell && tmux new-session -d -s mcp-http "node bin/hoptell.js mcp-http 2>>/home/agent/mcp-http.log"`);
+  const put = (file, text) => docker(["exec", "-i", "-u", "agent", `${RUN}-${h}`, "bash", "-c", `umask 077; mkdir -p "$(dirname ${q(file)})"; cat > ${q(file)}`], text);
+  put("/home/agent/hoptell/.mcp.json", JSON.stringify({ mcpServers: { hoptell: { type: "http", url: "http://127.0.0.1:7790/mcp", headers: { Authorization: `Bearer ${token}` }, headersHelper: "node /home/agent/hoptell/bin/hoptell.js hook-header" } } }));
+  const hooks = fs.readFileSync(path.join(ROOT, "hooks/hooks.json"), "utf8").replaceAll("${CLAUDE_PLUGIN_ROOT}", "/home/agent/hoptell");
+  put("/home/agent/hoptell/.claude/settings.json", JSON.stringify({ hooks: JSON.parse(hooks).hooks }));
+}
+
 /** On failure: show who sent what to whom (relay log) and each agent's screen. */
 function diagnose() {
   try {
     const hops = docker(["logs", `${RUN}-relay`]).split("\n").filter((l) => l.includes(" -> "));
     log(`relay routing log:\n    ${hops.join("\n    ")}`);
+  } catch {}
+  if (flag("--mcp-http")) for (const h of HOSTS) try {
+    log(`${h} mcp-http log:\n    ${redact(sh(h, "tail -n 20 /home/agent/mcp-http.log")).split("\n").join("\n    ")}`);
   } catch {}
   for (const p of startedPeers) {
     try {

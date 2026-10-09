@@ -13,18 +13,35 @@ export const fakeToken = () => crypto.randomBytes(16).toString("hex");
 export const TOKEN = fakeToken();
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Make `home` look like an existing install (state from before contacts), so contacts start in
+ * legacy-allow mode and every sender is delivered: tests of other features keep their meaning.
+ * Contacts tests use fresh homes instead.
+ */
+export function existingInstall(home) {
+  fs.mkdirSync(path.join(home, "inbox"), { recursive: true, mode: 0o700 });
+  return home;
+}
+
 /** Isolated world: a relay on a random port and a private state dir. */
-export async function world() {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-test-"));
+export async function world({ fresh = false } = {}) {
+  // `fresh`: a new install (contacts managed, everyone "ask"); otherwise an existing one.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-test-"));
+  const home = fresh ? dir : existingInstall(dir);
   fs.writeFileSync(path.join(home, "empty.env"), ""); // never read the developer's real settings
   const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, log: () => {} });
   const env = {
     ...process.env,
     HOPTELL_ENV: path.join(home, "empty.env"),
+    XDG_CONFIG_HOME: path.join(home, "config"), // never the developer's real relays file
     HOPTELL_HOME: home,
     HOPTELL_RELAY: `ws://127.0.0.1:${relay.port}`,
     HOPTELL_TOKEN: TOKEN,
     HOPTELL_PUSH: "listener",
+    HOPTELL_STATE_DIR: path.join(home, "relay-state"), // a relay started by a test never uses the real state directory
+    // Tests of other features read with today's semantics (a read deletes); receipts have their
+    // own tests, which set HOPTELL_RECEIPTS=on.
+    HOPTELL_RECEIPTS: "off",
   };
   delete env.HOPTELL_NAME;
   const clients = [];
@@ -48,6 +65,22 @@ export async function world() {
       // wait until it is online
       for (let i = 0; i < 50 && !/You are/.test(await call("list_peers")); i++) await sleep(100);
       return { client, call, notes };
+    },
+    /**
+     * The inbox folder of a session named `name`: its protocol-2 bound storage when it has one,
+     * else the legacy inbox/<name>.
+     */
+    inboxOf(name) {
+      const v2 = path.join(home, "v2");
+      if (fs.existsSync(v2)) {
+        for (const realm of fs.readdirSync(v2)) {
+          for (const member of fs.readdirSync(path.join(v2, realm))) {
+            const dir = path.join(v2, realm, member, name, "inbox");
+            if (fs.existsSync(dir)) return dir;
+          }
+        }
+      }
+      return path.join(home, "inbox", name);
     },
     /** Run the CLI. */
     cli(args, extra = {}) {

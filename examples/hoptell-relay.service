@@ -18,6 +18,10 @@ Wants=network-online.target
 [Service]
 LoadCredential=env:/etc/hoptell/env
 Environment=HOPTELL_ENV=%d/env
+# The relay's state directory (realm id, lock), kept across restarts and updates.
+StateDirectory=hoptell
+StateDirectoryMode=0700
+Environment=HOPTELL_STATE_DIR=%S/hoptell
 # Per-member tokens (optional): put the file in /etc/hoptell (0600) and uncomment both lines.
 #LoadCredential=members.json:/etc/hoptell/members.json
 #Environment=HOPTELL_MEMBERS=%d/members.json

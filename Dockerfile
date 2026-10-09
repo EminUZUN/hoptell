@@ -1,12 +1,16 @@
 # hoptell relay. Build: docker build -t hoptell .
 # Replace 10.8.0.1 with the host's private or VPN address, and ... with your generated token.
-# Run:   docker run -d -p 10.8.0.1:7777:7777 -e HOPTELL_TOKEN=... hoptell
+# Run:   docker run -d -p 10.8.0.1:7777:7777 -v hoptell-state:/data -e HOPTELL_TOKEN=... hoptell
 FROM node:22-alpine
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY bin ./bin
 COPY lib ./lib
+# The relay's state directory (realm id, lock). Keep it on a volume so the realm survives updates.
+RUN mkdir -p /data && chown node:node /data && chmod 700 /data
+ENV HOPTELL_STATE_DIR=/data
+VOLUME /data
 USER node
 EXPOSE 7777
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:7777/healthz || exit 1

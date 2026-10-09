@@ -46,6 +46,34 @@ process. None of this is sent to the relay.
   50 messages per peer and 2,000 overall, with up to 50 additional deliveries awaiting
   confirmation per peer. Requeueing previously accepted, unconfirmed deliveries can exceed the
   normal queue limits.
+- The relay's state directory holds a random realm id and, while the relay runs, a lock file
+  with its process id. An optional realm name comes from the relay's configuration and is
+  sent to clients. It holds no messages, names or tokens.
+  Name leases and reservations (which session holds a name, for up to 30 seconds after its
+  connection drops) are kept in memory only.
+- For receivers on the current protocol, each delivered message also states how the sender
+  was authenticated: the sender's member id and member name, or that a shared token was used,
+  and the relay's realm id.
+- `hoptell members add` stores a new member's token as its SHA-256 in the members file and
+  shows the token once. The members file is not encrypted by hoptell.
+- With sign-in through an identity provider (configured by the operator with `--oidc`), the
+  members file also holds each linked identity: the provider's issuer URL and the account's
+  subject identifier. The relay fetches the provider's public keys and, with introspection,
+  sends each access token to that provider only, authenticated with the relay's client secret
+  (read from a file the operator names). Access tokens are kept in memory while needed for
+  rechecks and are not written to disk or logs; the relay records the signed-in subject and
+  groups in memory for the connection. Refused sign-ins are logged with the reason and the
+  client address; an identity that is not linked is logged with its issuer and, when
+  fingerprint logging is enabled, a keyed tag of its subject. `/.well-known/hoptell` publishes
+  the realm id, the issuers and the public CLI client settings, no secrets.
+- In broker mode (an issuer with `"mode": "broker"`), the relay signs users in at the provider
+  itself, with its client credential from a file the operator names, and validates the ID token.
+  It does not keep the provider's tokens. In `<state dir>/broker/` (0700/0600, not encrypted by
+  hoptell) it keeps a 32-byte key for its refresh tokens and, per sign-in, the member id, issuer,
+  subject, provider client id, times (created, last used, expiry, re-verification) and the
+  SHA-256 of the current refresh token; ended sign-ins are kept 30 days for diagnostics.
+  Sign-ins in progress, one-time codes and access tokens are in memory only. The page shown to a
+  user whose identity is not linked names the issuer and subject.
 - The relay stops retaining a message when the receiving client confirms receipt. This
   confirms local storage or output, not that an agent read or acted on it. Restarting the
   relay discards its message and peer state. On relays supporting expiry, the sender can set a
@@ -60,7 +88,13 @@ process. None of this is sent to the relay.
   Logging calls do not explicitly include message text, file contents, file labels, snapshot
   digests or authentication-token fields. Content-derived keyed fingerprints are added only
   when the operator enables fingerprint logging, as described below. The operator controls
-  where output is stored and how long it is kept.
+  where output is stored and how long it is kept. When the operator configures trusted proxies,
+  log lines also show the client address forwarded by those proxies.
+- The optional metrics endpoint is disabled by default. When enabled, it exposes
+  aggregate counts, sizes and ages, including connected peers, queued messages,
+  queued bytes and delivery attempts. It binds to 127.0.0.1 unless the operator
+  configures another address. It contains no peer names, message text or tokens,
+  but it reveals activity levels.
 - Fingerprint logging is disabled by default. When enabled, the relay reads a private key file
   on its own machine and computes HMAC-SHA-256 tags from decoded message text, a public key id
   and the relay-assigned message reference. The public id and tags appear in message-routing
@@ -74,16 +108,71 @@ process. None of this is sent to the relay.
 
 ## Each machine
 
-- The MCP server stores incoming messages as local JSON files before confirming receipt. The
-  default inbox is `~/.hoptell/inbox/<peer name>/`, or `$HOPTELL_HOME/inbox/<peer name>/` when
-  configured. hoptell creates directories with Unix mode 0700 and files with mode 0600; access
-  is subject to the operating system, including administrator privileges.
+- The MCP server stores incoming messages as local JSON files before confirming receipt. With a
+  current relay, the inbox is in the session's folder
+  `~/.hoptell/v2/<realm id>/<member id or "shared">/<session>/inbox/`; with earlier relays it is
+  `~/.hoptell/inbox/<peer name>/` (both under `$HOPTELL_HOME` when configured). The session
+  folder also holds `binding.json` (realm id, member id, session name and creation time) and
+  `seen/`, with one empty file per received delivery id, used to avoid storing a redelivered
+  message twice. Delivery ids older than eight days are removed when an agent session opens
+  the folder; message files follow the inbox rules below. Message file names include the
+  delivery id. With receipts, the folder also holds `store.json` (format version, receipt policy,
+  a counter), `claimed/` (batches handed to an agent or `hoptell listen`, with the consumer's
+  process id, start time and boot id and the lease deadline) and `done/` (the receipts of up to
+  256 acknowledged batches from the last 24 hours, with the consumer and time). A message file that is not valid JSON is moved to `damaged/`
+  and kept for inspection. `quarantine/` and `decisions/` are created empty for later use. For sessions with an explicit
+  `HOPTELL_NAME`, `~/.hoptell/v2/<realm id>/names/<name>.json` records which member's folder
+  holds that name, so the tmux injector and `hoptell listen <name>` read the right inbox. hoptell creates directories with Unix
+  mode 0700 and files with mode 0600; access is subject to the operating system, including
+  administrator privileges.
 - Message files are consumed and deleted by `read_inbox`, `wait_for_message`, or
   `hoptell listen`. Consumption does not confirm that an agent processed the message. The tmux
   injector and the hoptell hooks only announce waiting messages with a fixed notice; they do
   not read or delete message files. Pending files have no automatic expiry. The standalone
   `hoptell wait` command prints received messages directly to standard output instead of
   storing them in the inbox.
+- Contacts (who may reach your sessions) are kept in `~/.hoptell/contacts.json` (your policy:
+  grants and blocks naming relay realm ids, member ids or shared-token sender names) and
+  `~/.hoptell/contacts/` (the mode marker with drop counters and notification times; one record
+  per sender waiting for your decision, with the sender's label and identity as the relay stated
+  it, the receiving sessions and message sizes and times; decisions in progress; and the last 100
+  finished requests). Held messages themselves are kept in each session folder's `quarantine/`
+  (or `~/.hoptell/legacy/<name>/` for sessions on earlier relays) until you release or block them,
+  or for seven days. Desktop notifications show the sender label and session name, never message
+  text. All of these are under `$HOPTELL_HOME` when configured, private (0700/0600), and not
+  encrypted by hoptell.
+- `hoptell login` signs in with the identity provider named by the relay; the provider handles
+  your account and password (in your browser) under its own policies. The stored credential is
+  a refresh token (or, for a service account, its client secret) with the relay URL, realm id,
+  issuer and client id it belongs to. It is kept in the operating system's keychain (macOS
+  Keychain, Linux Secret Service), or with `--store file` in `~/.hoptell/credentials/` encrypted
+  with AES-256-GCM under a key derived from `HOPTELL_CREDENTIAL_PASSPHRASE`. `~/.hoptell/credentials/`
+  also holds, per relay profile, an unencrypted index with that relay URL, realm id, issuer,
+  client id and the home folder path (no token), and lock files. Access tokens are kept in
+  memory only. `hoptell logout` deletes the credential and asks the provider to revoke it. In
+  broker mode the stored credential is the relay's own refresh token (not the provider's), with
+  a mark while a renewal is in flight; `hoptell logout` asks the relay to end it.
+- With several relays (a relays file), `~/.hoptell/routes.json` records, for messages read in the
+  last seven days (at most 10,000), which relay profile and realm each message reference came
+  from, so replies go through the same relay; it holds no message text or names.
+  `~/.hoptell/sessions/<name>.stores.json` lists the storage folders a session reads (for the tmux
+  notice), and is removed when the session ends. Sessions on earlier relays keep their files under
+  `~/.hoptell/links/<relay profile>/` and `~/.hoptell/legacy/<relay profile>/`.
+- `hoptell local-relay` keeps its relay in `~/.hoptell/local-relay/`: the member token (0600),
+  the members file with its SHA-256, the realm state and its settings file. The relay's log, with
+  the metadata described under "The relay", goes to `relay.log` there (macOS) or to your user
+  journal (Linux); neither is removed automatically. The service definition is in
+  `~/Library/LaunchAgents/` (macOS) or `~/.config/systemd/user/` (Linux) and contains paths, not
+  the token. `uninstall --purge` removes all of it.
+- `hoptell mcp-http` keeps its clients in `~/.hoptell/mcp-http/clients.json` (0600): each
+  client's label, peer name, roles, creation time and the SHA-256 of its token (the token itself is
+  shown once and not stored). The SessionStart hook's record in `~/.hoptell/wake/` also holds a
+  random registration id that `hoptell hook-header` prints for an HTTP client; it names no message,
+  sender or token.
+- Relay profiles in `~/.hoptell/profiles/` record, per configured relay, its realm id, whether
+  it requires the current protocol, the member id it reported and the time of the last change.
+  They are named after a hash of the relay URL (or `HOPTELL_PROFILE`) and contain no URL or
+  token. They let hoptell notice when a relay URL starts answering with another realm.
 - Hook delivery (Claude Code) uses private files in `~/.hoptell/wake/` (under `$HOPTELL_HOME`
   when configured), created with Unix mode 0700 and 0600. They hold process identifiers and
   start times of the Claude Code process and the MCP server, the Claude Code session id, the

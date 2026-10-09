@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        node: [20, 22] # oldest supported and current
+        node: [22, 24] # oldest supported and current
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

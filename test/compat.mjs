@@ -7,7 +7,9 @@
 //   1. a plain message arrives with its text intact
 //   2. message references and replies, where both sides support them
 //   3. file reviews (send_file, verify_snapshot), where the sender has the file tools
-//   4. a receiver from this checkout whose name was taken over reconnects once it is free
+//   4. a receiver from this checkout keeps or gets back its name after a short-lived copy
+//   5. on a relay from this checkout, an earlier-release copy cannot take a leased name; a client
+//      from this checkout on an earlier relay falls back to the older protocol and records it
 // Checks follow what each side supports, so any earlier release can be compared.
 //
 // Options: --version <x.y.z> (default: the newest npm release older than package.json)
@@ -66,7 +68,7 @@ async function run(relayV, aliceV, bobV) {
   const token = crypto.randomBytes(24).toString("hex");
   const port = await freePort();
   const relay = spawn(process.execPath, [BIN[relayV], "relay", "--host", "127.0.0.1", "--port", String(port)], {
-    env: { ...process.env, HOPTELL_ENV: empty, HOPTELL_TOKEN: token },
+    env: { ...process.env, HOPTELL_ENV: empty, HOPTELL_STATE_DIR: path.join(dir, "relay-state"), HOPTELL_TOKEN: token },
     stdio: "ignore",
   });
   for (let i = 0; i < 50; i++) {
@@ -75,6 +77,8 @@ async function run(relayV, aliceV, bobV) {
   }
   const clients = [];
   const peer = async (name, v, extra = {}) => {
+    // Each peer's home is an existing install (an upgrade): contacts keep today's delivery.
+    fs.mkdirSync(path.join(extra.HOPTELL_HOME ?? path.join(dir, name), "inbox"), { recursive: true, mode: 0o700 });
     const c = new Client({ name: "compat", version: "0" });
     const env = { ...process.env, HOPTELL_ENV: empty, HOPTELL_RELAY: `ws://127.0.0.1:${port}`, HOPTELL_TOKEN: token, HOPTELL_NAME: name, HOPTELL_PUSH: "listener", HOPTELL_HOME: path.join(dir, name), ...extra };
     await c.connect(new StdioClientTransport({ command: process.execPath, args: [BIN[v], "mcp"], env, stderr: "ignore" }));
@@ -84,6 +88,7 @@ async function run(relayV, aliceV, bobV) {
     for (let i = 0; i < 50 && !/You are/.test(await call("list_peers")); i++) await sleep(100);
     return { c, call, tools };
   };
+  // Reads until a message arrives; a receipt (from versions with receipts) is acknowledged.
   const read = async (p) => {
     let got = "";
     for (let i = 0; i < 50 && !/end of hoptell/.test(got); i++) {
@@ -91,6 +96,8 @@ async function run(relayV, aliceV, bobV) {
       if (r !== "Inbox empty.") got += r;
       else await sleep(100);
     }
+    const receipt = got.match(/Receipt: (r_[a-z2-7]{26})/)?.[1];
+    if (receipt) await p.call("ack_messages", { receipt });
     return got;
   };
   try {
@@ -136,17 +143,32 @@ async function run(relayV, aliceV, bobV) {
       }
     }
 
-    // 4. Takeover: a short-lived copy of bob takes the name, then exits.
+    // 4. A short-lived copy of bob: on an earlier relay it takes the name, then exits; on this relay
+    // it waits for the name (protocol 2 leases). Either way bob is online afterwards.
     if (bobV === "this") {
       const copy = await peer("bob", bobV);
       await copy.c.close();
       let online = false;
       for (let i = 0; i < 100 && !(online = /bob .*online/.test(await alice.call("list_peers"))); i++) await sleep(100);
-      check("receiver reconnects after a short-lived copy took its name", online);
+      check("receiver is online after a short-lived copy of it", online);
       if (online) {
         await alice.call("send_message", { to: "bob", message: "back again" });
         check("message reaches the reconnected receiver", (await read(bob)).includes("back again"));
       }
+    }
+    // 5. Mixed protocol versions.
+    if (relayV === "this" && bobV === "this") {
+      const old = await peer("bob", earlier, { HOPTELL_HOME: path.join(dir, "old-bob") });
+      const said = await old.call("list_peers");
+      check("an earlier-release copy cannot take a leased name", !/You are "bob"/.test(said), said.slice(0, 160));
+      await old.c.close();
+      await alice.call("send_message", { to: "bob", message: "still bob" });
+      check("the leased receiver keeps its messages", (await read(bob)).includes("still bob"));
+    }
+    if (relayV !== "this" && bobV === "this") {
+      const profiles = path.join(dir, "bob", "profiles");
+      const recs = fs.existsSync(profiles) ? fs.readdirSync(profiles).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs.readFileSync(path.join(profiles, f), "utf8"))) : [];
+      check("this client records the earlier relay as protocol 1", recs.length === 1 && recs[0].require === false && recs[0].realm === null, JSON.stringify(recs));
     }
   } catch (e) {
     check("ran without errors", false, e.message);

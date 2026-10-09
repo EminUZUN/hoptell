@@ -214,7 +214,7 @@ function relayCli(env) {
   return new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-fpcli-"));
     fs.writeFileSync(path.join(dir, "empty.env"), "");
-    const p = spawn(process.execPath, [BIN, "relay", "--host", "127.0.0.1", "--port", "0"], { env: { ...process.env, HOPTELL_ENV: path.join(dir, "empty.env"), HOPTELL_TOKEN: TOKEN, ...env } });
+    const p = spawn(process.execPath, [BIN, "relay", "--host", "127.0.0.1", "--port", "0"], { env: { ...process.env, HOPTELL_ENV: path.join(dir, "empty.env"), HOPTELL_STATE_DIR: path.join(dir, "state"), HOPTELL_TOKEN: TOKEN, ...env } });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));

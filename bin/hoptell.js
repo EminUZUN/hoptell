@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // hoptell: let AI coding agents (Claude Code, Codex, ...) message each other
 // across sessions, machines and accounts through a small self-hosted relay.
+import crypto from "node:crypto";
 import fs from "node:fs";
-import { HOSTNAME, checkName, envFiles, loadEnv, parseRoles } from "../lib/config.js";
+import os from "node:os";
+import path from "node:path";
+import { HOSTNAME, checkName, defaultHome, envFiles, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
 
 // Claude Code hook commands (lib/wake.js) print only what Claude Code expects, never errors.
 const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged" };
@@ -13,11 +16,26 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
     if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
     loadEnv();
     const wake = await import("../lib/wake.js");
-    code = wake[HOOKS[process.argv[2]]]();
+    code = wake[HOOKS[process.argv[2]]]({ home: defaultHome(process.env, os.homedir()), barrier: process.env.HOPTELL_WAKE_TEST_BARRIER || null });
   } catch {
     code = 0;
   }
   process.exit(code);
+}
+
+// A client's headers helper for hoptell mcp-http: prints {"X-Hoptell-Hook-Registration": id} for
+// the Claude Code process it runs under, or {} (never an error: the client then has no hooks).
+if (process.argv[2] === "hook-header") {
+  let out = {};
+  try {
+    const i = process.argv.indexOf("--home", 3);
+    if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
+    loadEnv();
+    const wake = await import("../lib/wake.js");
+    out = wake.hookHeader({ home: defaultHome(process.env, os.homedir()) });
+  } catch {}
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  process.exit(0);
 }
 
 try {
@@ -30,9 +48,29 @@ try {
 const USAGE = `hoptell - messaging between AI coding agents over your own LAN/VPN
 
 Usage:
-  hoptell relay --host <ip> [--port 7777] [--members file.json]
+  hoptell relay --host <ip> [--port 7777] [--members file.json] [--trusted-proxies <ip/cidr,...>]
+                [--log-format text|json] [--metrics-port <port>]
                                             run the relay (one machine per team)
+  hoptell relay broker-reset --yes [--state-dir <dir>]
+                                            with the relay stopped: a new broker refresh key; every broker
+                                            sign-in ends (after the key was lost or damaged)
+  hoptell members list|add <name>|revoke <name>|migrate [--yes]|link|unlink <name> --issuer <url> --subject <sub>|signout <name> [--members <file>]
+                                            manage the relay's members file on the relay host; add shows
+                                            the new token once and stores only its SHA-256; signout ends
+                                            the member's broker sign-ins made until now
+  hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]
+                                            a private relay for your own sessions on this machine
+                                            (loopback, a user service, a token only you can read)
+  hoptell contacts [list|show|allow|allow-once|block|grants|blocks|revoke|unblock|check|init]
+                                            decide who may reach your agent sessions; senders without a
+                                            grant wait in quarantine until you decide (see README)
+  hoptell login [--issuer <url|broker id>] [--mode broker|resource] [--device | --client-credentials --client-id <id> --client-secret-file <file>] [--store file]
+                                            sign in to the relay with your identity provider; then HOPTELL_AUTH=login
+  hoptell logout                            remove (and revoke) the stored sign-in credential
   hoptell mcp                               MCP server for an agent session (stdio)
+  hoptell mcp-http [--port 7790]            the same over HTTP on 127.0.0.1, for clients that only speak HTTP
+  hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>
+                                            tokens for those clients (shown once, stored hashed)
   hoptell tmux <name> [--roles a,b] -- <agent command>
                                             run an agent in tmux; attempt an inbox notice when its prompt appears idle
   hoptell list                              list peers on the relay
@@ -42,17 +80,32 @@ Usage:
                                             --reply-to: the "Message reference" you are answering
   hoptell snapshot <file>                   print a UTF-8 file snapshot with its SHA-256, for review
   hoptell snapshot --check <sha256> <file>  exit 0 if the bytes match; nonzero if different or the check fails
-  hoptell wait [seconds]                    go online as $HOPTELL_NAME, print the next message, exit
-  hoptell listen <name> [seconds]           wait for the next message in <name>'s local inbox, print it, exit
-  hoptell doctor                            check settings, relay, login, inbox and tmux on this machine
+  hoptell wait [--wait-for-name | --replace] [seconds]
+                                            go online as $HOPTELL_NAME, print the next message, exit;
+                                            if another session has the name: stop (default), wait for it
+                                            (--wait-for-name), or take it over once (--replace)
+  hoptell listen [--no-ack] <name> [seconds]
+                                            wait for the next messages in <name>'s local inbox, print them, exit
+  hoptell listen [--no-ack] --session <folder> [seconds]
+                                            the same for an agent session's storage folder (shown by the session);
+                                            acknowledges after printing, or prints a receipt with --no-ack
+  hoptell ack <receipt> (<name> | --session <folder>)
+                                            acknowledge messages printed with --no-ack
+  hoptell doctor [--relay-check]            check settings, relay, login, inbox and tmux on this machine;
+                                            --relay-check: also send a test message through the relay
   hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
 
 Settings: environment variables, else the first file found of
 ${envFiles().map((f) => `  ${f}`).join("\n")}
 Peers:  HOPTELL_RELAY, HOPTELL_TOKEN, HOPTELL_NAME, HOPTELL_ROLES (e.g. reviewer,backend),
-        HOPTELL_PUSH (channel, hook, tmux or listener; unset for automatic)
+        HOPTELL_PUSH (channel, hook, tmux or listener; unset for automatic),
+        HOPTELL_PROTOCOL (1 to keep the older relay protocol), HOPTELL_PROFILE,
+        HOPTELL_RECEIPTS (on/off), HOPTELL_LEASE_MINUTES, HOPTELL_NOTIFY (off: no desktop notifications),
+        HOPTELL_AUTH (login: use hoptell login), HOPTELL_CREDENTIAL_STORE (file), HOPTELL_CREDENTIAL_PASSPHRASE
 Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file);
-        HOPTELL_LOG_FINGERPRINTS=on with HOPTELL_LOG_FINGERPRINT_KEY_FILE for keyed log fingerprints
+        HOPTELL_LOG_FINGERPRINTS=on with HOPTELL_LOG_FINGERPRINT_KEY_FILE for keyed log fingerprints;
+        HOPTELL_TRUSTED_PROXIES, HOPTELL_LOG_FORMAT, HOPTELL_METRICS_PORT, HOPTELL_METRICS_HOST,
+        HOPTELL_OIDC (sign-in configuration file)
 
 Send to a peer name, to @<role> (every online peer with the role) or to @all.`;
 
@@ -66,22 +119,307 @@ const opt = (flag, fallback) => {
   const i = args.indexOf(flag);
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
-const cliName = () => checkName(process.env.HOPTELL_NAME || `${HOSTNAME}-cli`, "HOPTELL_NAME");
+// Unset HOPTELL_NAME: a protocol-2 relay assigns the name (<member>-<host>-cli for sending); the protocol-1
+// fallback uses <host>-cli as before.
+// The CLI is an entry point: it reads its settings from the environment (after loadEnv) here.
+const home = () => defaultHome(process.env, os.homedir());
+const leaseMinutes = () => {
+  const v = String(process.env.HOPTELL_LEASE_MINUTES ?? "").trim();
+  if (v === "") return 30;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 1440) fail("HOPTELL_LEASE_MINUTES must be a whole number from 1 to 1440");
+  return n;
+};
+const relayChoice = () => ({ relayUrl: process.env.HOPTELL_RELAY, protocol: parseProtocol(process.env.HOPTELL_PROTOCOL), profile: process.env.HOPTELL_PROFILE || null });
+const cliName = () => (process.env.HOPTELL_NAME ? checkName(process.env.HOPTELL_NAME, "HOPTELL_NAME") : null);
 
-/** Connect to the relay. `onMessage` is attached before connecting, so queued messages are not missed. */
-async function connect(mode, onMessage) {
+const CONNECT_BUDGET_MS = 30_000; // send and list: retry an unreachable relay this long
+
+/**
+ * Connect to the relay. `onMessage` is attached before connecting, so queued messages are not
+ * missed. Transient failures (relay restarting, network drop, slow proxy) are retried with
+ * backoff for `budgetMs`, and later drops reconnect; a refused token or name, or another
+ * session taking the name, still stops at once (a CLI command never fights an agent session).
+ */
+// The home's contacts (design 1.5): opened before anything creates state, so a new install is
+// recognized as one.
+let contactsPromise = null;
+const contactsOf = () =>
+  (contactsPromise ??= import("../lib/quarantine.js").then((q) =>
+    q.openContacts(home(), { notify: String(process.env.HOPTELL_NOTIFY ?? "").trim().toLowerCase() !== "off", log: (...a) => console.error("hoptell:", ...a) }),
+  ));
+const relayProfileOf = async () => {
+  if (!process.env.HOPTELL_RELAY) return null;
+  const { profileKey } = await import("../lib/profiles.js");
+  try {
+    return profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null);
+  } catch {
+    return null;
+  }
+};
+/** The receiving session of a bound store folder or a legacy name, as the policy names it. */
+const sessionOfDir = (dir) => {
+  const rel = path.relative(home(), dir).split(path.sep);
+  return rel[0] === "v2" ? { realm: rel[1], name: rel[3] } : { realm: null, name: rel[1] };
+};
+
+/** The access-token source of this relay profile (HOPTELL_AUTH=login, after hoptell login). */
+async function signInSource() {
+  const { tokenSource } = await import("../lib/login.js");
+  return tokenSource({ home: home(), relayUrl: process.env.HOPTELL_RELAY, profile: await profileOfRelay(), passphrase: process.env.HOPTELL_CREDENTIAL_PASSPHRASE || null });
+}
+async function profileOfRelay() {
+  if (!process.env.HOPTELL_RELAY) fail("HOPTELL_RELAY is not set");
+  const { profileKey } = await import("../lib/profiles.js");
+  return profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null);
+}
+
+/**
+ * Several relays (design 2.1): choose the relay for this command from --relay or the address's
+ * @relay (they must agree), else the default, and point this process's settings at it.
+ */
+async function selectRelay(addressAlias = null, given = undefined) {
+  const i = args.indexOf("--relay");
+  const flag = given !== undefined ? given : i >= 0 ? args[i + 1] : null;
+  if (given === undefined && i >= 0) args.splice(i, 2);
+  const file = process.env.HOPTELL_RELAYS || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoptell", "relays.json");
+  if (!process.env.HOPTELL_RELAYS && !fs.existsSync(file)) {
+    if (flag || addressAlias) fail("name@relay and --relay need a relays file (HOPTELL_RELAYS; see README)", 2);
+    return null;
+  }
+  if (flag && addressAlias && flag !== addressAlias) fail(`--relay ${flag} and the address's @${addressAlias} disagree`, 2);
+  const { readRelaysFile } = await import("../lib/relays.js");
+  const r = readRelaysFile(file, { env: process.env, homedir: os.homedir() });
+  const alias = flag ?? addressAlias ?? r.default;
+  if (!alias) fail(`say which relay: --relay <alias> or name@<alias> (relays: ${r.relays.map((x) => x.alias).join(", ")})`, 2);
+  const e = r.relays.find((x) => x.alias === alias);
+  if (!e) fail(`no relay "${alias}" in ${file}`, 2);
+  if (e.tokenProblem) fail(`relay ${alias}: ${e.tokenProblem}`);
+  process.env.HOPTELL_RELAY = e.url;
+  process.env.HOPTELL_AUTH = e.auth;
+  if (e.auth === "token") process.env.HOPTELL_TOKEN = e.token;
+  else delete process.env.HOPTELL_TOKEN;
+  if (e.profile) process.env.HOPTELL_PROFILE = e.profile;
+  else delete process.env.HOPTELL_PROFILE;
+  if (e.name) process.env.HOPTELL_NAME = e.name;
+  else if (e.namePrefix && process.env.HOPTELL_NAME) process.env.HOPTELL_NAME = `${e.namePrefix}${process.env.HOPTELL_NAME}`.slice(0, 64);
+  return { relays: r, entry: e, qualified: Boolean(flag || addressAlias) };
+}
+
+async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false } = {}) {
+  await contactsOf();
   const { RelayClient } = await import("../lib/client.js");
+  const { commitWelcome, noteLegacy, profileKey } = await import("../lib/profiles.js");
   const roles = mode === "peer" ? parseRoles(process.env.HOPTELL_ROLES) : [];
-  const c = new RelayClient({ url: process.env.HOPTELL_RELAY, token: process.env.HOPTELL_TOKEN, name: cliName(), mode, roles, reconnect: false });
-  if (onMessage) c.on("message", onMessage);
+  const protocol = parseProtocol(process.env.HOPTELL_PROTOCOL);
+  const profile = protocol === 2 && process.env.HOPTELL_RELAY ? profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null) : null;
+  const name = cliName() ?? (protocol === 1 ? `${HOSTNAME}-cli` : null);
+  const signIn = String(process.env.HOPTELL_AUTH ?? "").trim().toLowerCase() === "login" ? await signInSource() : null;
+  const c = new RelayClient({
+    url: process.env.HOPTELL_RELAY,
+    token: signIn ? null : process.env.HOPTELL_TOKEN,
+    signIn,
+    name,
+    mode,
+    roles,
+    waitWhenReplaced: waitForName,
+    replace,
+    protocol,
+    onWelcome: (w) => (w.realm ? commitWelcome(home(), profile, { realm: w.realm.id, member: w.member }) : undefined),
+    onLegacy: () => noteLegacy(home(), profile),
+  });
+  if (onMessage) c.on("message", (m, confirm) => onMessage(m, confirm, c));
   c.start();
-  await c.ready();
+  try {
+    await c.ready(budgetMs);
+  } catch (e) {
+    c.close();
+    throw e;
+  }
   return c;
 }
 
 try {
   switch (cmd) {
+    case "login": {
+      // login [--issuer <url|broker id>] [--mode broker|resource] [--device] [--client-credentials --client-id <id> --client-secret-file <file>] [--store file]
+      const { login } = await import("../lib/login.js");
+      await contactsOf(); // classify the home first, as every command that creates state does
+      const service = args.includes("--client-credentials") ? { clientId: opt("--client-id"), clientSecret: opt("--client-secret-file") ? fs.readFileSync(opt("--client-secret-file"), "utf8").trim() : null } : null;
+      const r = await login({
+        relayUrl: process.env.HOPTELL_RELAY ?? fail("HOPTELL_RELAY is not set"),
+        home: home(),
+        profile: await profileOfRelay(),
+        issuer: opt("--issuer") ?? null,
+        signInMode: opt("--mode") ? (["broker", "resource"].includes(opt("--mode")) ? opt("--mode") : fail("--mode must be broker or resource", 2)) : null,
+        mode: service ? "service" : args.includes("--device") ? "device" : "browser",
+        service,
+        store: opt("--store") === "file" || process.env.HOPTELL_CREDENTIAL_STORE === "file" ? "file" : "auto",
+        passphrase: process.env.HOPTELL_CREDENTIAL_PASSPHRASE || null,
+      });
+      console.log(`Signed in with ${r.issuer} (${r.kind === "service" ? "client credentials" : r.kind === "broker" ? `your account, through the relay (broker ${r.broker})` : "your account"}); the credential is kept in the ${r.store}. Set HOPTELL_AUTH=login for this relay.`);
+      break;
+    }
+    case "logout": {
+      const { logout } = await import("../lib/login.js");
+      const r = await logout({ home: home(), profile: await profileOfRelay(), passphrase: process.env.HOPTELL_CREDENTIAL_PASSPHRASE || null });
+      if (!r.removed) console.log("Not signed in for this relay.");
+      else {
+        const rev = r.revoked === true ? (r.kind === "broker" ? "ended at the relay" : "revoked at the identity provider") : r.revoked === "unsupported" ? "the identity provider does not offer revocation" : r.revoked === false ? (r.kind === "broker" ? "ending it at the relay failed" : "revoking it at the identity provider failed") : "a service credential (nothing to revoke)";
+        console.log(`Signed out: the stored credential was removed (${rev}). Running sessions stop at their next renewal; access tokens already issued stay valid at the relay until they expire.`);
+      }
+      break;
+    }
+    case "contacts": {
+      // contacts [list] | show <id> [--text] | allow|allow-once <id> --rev N --policy-rev P [--session S]
+      //          | block <id> --rev N --policy-rev P | grants | blocks | revoke|unblock <id> --policy-rev P
+      //          | check <realm> member <id> | shared <name> | unverified <profile> <name> [--session S] | init
+      const q = await import("../lib/quarantine.js");
+      const c = await contactsOf();
+      const [sub = "list", target] = args.filter((a, i) => !a.startsWith("--") && !["--rev", "--policy-rev", "--session"].includes(args[i - 1]));
+      const num = (flag) => {
+        const v = opt(flag);
+        if (v === undefined || !/^\d+$/.test(v)) fail(`${flag} <number> is required (shown by hoptell contacts show)`, 2);
+        return Number(v);
+      };
+      const where = `contacts of ${home()}`;
+      try {
+        if (sub === "list") {
+          const st = await c.status();
+          const pol = st.policy;
+          console.log(`hoptell ${where}: ${st.mode === "legacy-allow" ? "not managed yet (every sender reaches your sessions as before); run hoptell contacts init" : pol.problem ? `managed, but ${pol.problem}: every sender waits for your decision` : `managed (default: ${pol.doc.default}, unverified senders: ${pol.doc.unverified ?? "ask"}), policy revision ${st.policyRevision}`}`);
+          if (!st.requests.length) console.log("No messages are waiting for your decision.");
+          for (const r of st.requests) console.log(`${r.id}  ${r.sender.label}  ${r.items} message(s) for ${r.sessions.join(", ")}  since ${r.created}${r.dropped ? `  (${r.dropped} dropped over the limits)` : ""}`);
+          if (st.withheld) console.log(`${st.withheld} earlier message(s) are withheld until the quarantine has room.`);
+          if (st.journalsWaiting) console.log(`${st.journalsWaiting} decision(s) are waiting for room in an inbox.`);
+          if (st.requests.length) console.log("Next: hoptell contacts show <id>");
+        } else if (sub === "show") {
+          if (!target) fail("usage: hoptell contacts show <id> [--text]", 2);
+          const r = await c.show(target, { text: args.includes("--text") });
+          console.log(`${r.id}  ${r.sender.label}  (${r.sender.auth === "member" ? `member ${r.sender.member} of realm ${r.sender.realm}, authenticated by the relay` : r.sender.auth === "shared" ? `shared-token sender in realm ${r.sender.realm}: any token holder can use this name` : `unverified: the relay ${r.sender.relay ?? ""} does not authenticate senders`})`);
+          for (const i of r.items) {
+            console.log(`- for ${i.session}, ${i.arrived}, ${i.bytes} bytes`);
+            if (i.text !== undefined) console.log(`  --- untrusted peer text ---\n  ${String(i.text ?? "(unreadable)").replace(/\n/g, "\n  ")}\n  --- end of peer text ---`);
+          }
+          const scopeHint = new Set(r.items.map((i) => i.session)).size > 1 ? " [--session <one of the sessions above>]" : "";
+          console.log(`\nDecide with --rev ${r.rev} --policy-rev ${r.policyRevision}:`);
+          if (r.sender.auth !== "unverified") console.log(`  hoptell contacts allow ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (always: adds a grant)`);
+          console.log(`  hoptell contacts allow-once ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (only these messages)`);
+          console.log(`  hoptell contacts block ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}   (deletes them; blocks the sender)`);
+        } else if (["allow", "allow-once", "block"].includes(sub)) {
+          if (!target) fail(`usage: hoptell contacts ${sub} <id> --rev N --policy-rev P${sub === "block" ? "" : " [--session <scope>]"}`, 2);
+          const o = { rev: num("--rev"), policyRev: num("--policy-rev"), session: opt("--session") ?? null };
+          const r = await (sub === "allow" ? c.allow(target, o) : sub === "allow-once" ? c.allowOnce(target, o) : c.block(target, o));
+          console.log(`${sub === "block" ? "Blocked; its messages were deleted." : `Released ${r.steps} message(s)${sub === "allow" ? " and added a grant" : ""}.`}${r.waiting ? " Some wait for room in a full inbox and are released when there is room." : ""}`);
+        } else if (sub === "grants" || sub === "blocks") {
+          const { doc, problem } = c.currentPolicy();
+          if (!doc) fail(problem ?? "no policy yet: run hoptell contacts init");
+          console.log(`Policy revision ${doc.revision ?? 0}:`);
+          for (const e of doc[sub] ?? []) console.log(`${e.id ?? "(no id)"}  ${e.member ? `member ${e.member}` : e.shared ? `shared ${e.name}` : `unverified ${e.relay}/${e.name}`}${e.realm ? ` in ${e.realm}` : ""}${e.session ? ` for ${e.session.realm}/${e.session.name}` : ""}${e.added ? `  (${e.added})` : ""}`);
+          if (!(doc[sub] ?? []).length) console.log(`No ${sub}.`);
+        } else if (sub === "revoke" || sub === "unblock") {
+          if (!target) fail(`usage: hoptell contacts ${sub} <id> --policy-rev P`, 2);
+          await (sub === "revoke" ? c.revoke(target, { policyRev: num("--policy-rev") }) : c.unblock(target, { policyRev: num("--policy-rev") }));
+          console.log(sub === "revoke" ? "Grant removed." : "Block removed.");
+        } else if (sub === "check") {
+          const { decide } = await import("../lib/contacts.js");
+          const pos = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--session");
+          const [, realmOrProfile, kind, a1] = pos;
+          let key;
+          if (kind === "member" && a1) key = { realm: realmOrProfile, member: a1 };
+          else if (kind === "shared" && a1) key = { realm: realmOrProfile, shared: true, name: a1 };
+          else if (realmOrProfile === "unverified" && kind && a1) key = { unverified: true, relay: kind, name: a1 };
+          else fail("usage: hoptell contacts check <realm> member <id> | <realm> shared <name> | unverified <profile> <name> [--session <realm>/<name>]", 2);
+          const s = opt("--session");
+          const session = s ? (s.startsWith("legacy/") ? { realm: null, name: s.slice(7) } : { realm: s.split("/")[0], name: s.split("/")[1] }) : null;
+          const p = c.currentPolicy();
+          console.log(p.legacy ? "allow (not managed yet)" : decide(p.doc, key, session));
+        } else if (sub === "init") {
+          const r = await c.init();
+          console.log(r.already ? `The ${where} are already managed.` : `The ${where} are now managed: senders without a grant wait for your decision (hoptell contacts). Nobody was granted. Messages already waiting in your sessions' inboxes are held back on their next read.`);
+        } else fail(`unknown contacts command "${sub}" (see hoptell help)`, 2);
+      } catch (e) {
+        if (e instanceof q.DecisionError) fail(e.message);
+        throw e;
+      }
+      break;
+    }
+    case "local-relay": {
+      // local-relay install [--port N] | start | stop | status | uninstall [--purge]
+      const lr = await import("../lib/localrelay.js");
+      const sub = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--port") ?? "status";
+      const relaysFile = process.env.HOPTELL_RELAYS || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoptell", "relays.json");
+      const o = { home: home(), homedir: os.homedir(), relaysFile, env: process.env };
+      if (sub === "install") {
+        const r = await lr.installLocalRelay({ ...o, port: opt("--port") ?? undefined });
+        console.log(`The local relay runs at ${r.url} (service ${r.service}). Its token is in ${r.tokenFile}, readable only by you.`);
+        console.log(r.alias ? `Sessions reach it as relay "${r.alias}" (${r.relaysFile}): address peers there as name@${r.alias}.` : `To use it: HOPTELL_RELAY=${r.url} and HOPTELL_TOKEN=$(cat ${r.tokenFile}).`);
+      } else if (sub === "start" || sub === "stop") {
+        await lr.controlLocalRelay(o, sub);
+        console.log(sub === "start" ? "Started." : "Stopped (the service starts it again at the next login).");
+      } else if (sub === "status") {
+        const st = await lr.localRelayStatus(o);
+        if (!st.installed) console.log("Not installed: hoptell local-relay install");
+        else {
+          console.log(`${st.url}: service ${st.loaded ? "loaded" : "not loaded"}, ${st.signedIn ? "its token signs in" : st.healthy ? "answering" : "not answering"}; token in ${st.tokenFile}`);
+          for (const p of st.problems) console.log(`warning: ${p}`);
+          if (!st.signedIn || st.problems.length) process.exitCode = 1;
+        }
+      } else if (sub === "uninstall") {
+        const r = await lr.uninstallLocalRelay(o, { purge: args.includes("--purge") });
+        console.log(r.removed ? `Removed the service${r.entryRemoved ? " and its relays entry" : ""}${r.purged ? ", the token and the realm state" : "; the token and the realm state are kept (--purge removes them)"}.` : "Not installed.");
+        if (r.note) console.log(`Note: ${r.note}.`);
+      } else fail("usage: hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]", 2);
+      break;
+    }
+    case "members": {
+      const [sub, name] = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--members");
+      const file = opt("--members", process.env.HOPTELL_MEMBERS);
+      if (!file) fail("set HOPTELL_MEMBERS or pass --members <file> (the relay's members file)", 2);
+      const m = await import("../lib/members.js");
+      const reload = "Reload the relay to apply it: kill -HUP <relay pid>, or restart the service.";
+      if (sub === "list") {
+        const rows = m.listMembers(file);
+        if (!rows.length) console.log("No members.");
+        for (const r of rows) console.log(`${r.name}\t${r.id ?? "(no id: run hoptell members migrate)"}\t${r.token} token`);
+      } else if (sub === "add" && name) {
+        const r = await m.addMember(file, name);
+        console.log(`Added member "${r.name}" (${r.id}). Its token, shown only now:\n\n  ${r.token}\n\nGive it to ${r.name} privately; ${file} keeps only its SHA-256. ${r.name}'s sessions may use the names ${r.name} and ${r.name}-<anything>.\n${reload}`);
+      } else if (sub === "revoke" && name) {
+        await m.revokeMember(file, name);
+        console.log(`Removed member "${name}". ${reload} Its connections close then.`);
+      } else if (sub === "signout" && name) {
+        await m.signoutMember(file, name);
+        console.log(`Broker sign-ins of "${name}" made until now end when the relay reloads. ${reload}`);
+      } else if ((sub === "link" || sub === "unlink") && name) {
+        const r = await m.linkMember(file, name, { issuer: opt("--issuer"), subject: opt("--subject"), unlink: sub === "unlink" });
+        console.log(sub === "unlink" ? `Unlinked that identity from "${name}". ${reload}` : r.already ? `"${name}" already has that identity.` : `Linked: "${name}" may now sign in with that identity. ${reload}`);
+      } else if (sub === "migrate") {
+        const r = await m.migrateMembers(file, { apply: args.includes("--yes") });
+        if (!r.pending.length) console.log("Every member already has an id.");
+        else if (!r.applied) {
+          console.log(
+            `Members without an id: ${r.pending.join(", ")}.\nGiving them ids changes their identity on the relay: their sessions reconnect and messages queued for them are dropped. Run again with --yes to do it.`,
+          );
+        } else console.log(`Gave ids to: ${r.pending.join(", ")}. ${reload}`);
+      } else fail("usage: hoptell members list|add <name>|revoke <name>|link|unlink <name> --issuer <URL> --subject <subject>|signout <name>|migrate [--yes] [--members <file>]", 2);
+      break;
+    }
     case "relay": {
+      if (args[0] === "broker-reset") {
+        // Explicit, with the relay stopped (the state lock): a new refresh key, every broker sign-in ended.
+        if (!args.includes("--yes")) fail("hoptell relay broker-reset ends every broker sign-in of this relay (users run hoptell login again); run it with --yes, while the relay is stopped", 2);
+        const { defaultStateDir, lockStateDir } = await import("../lib/realm.js");
+        const dir = opt("--state-dir", process.env.HOPTELL_STATE_DIR) || defaultStateDir();
+        const release = lockStateDir(dir);
+        try {
+          const n = (await import("../lib/broker.js")).brokerReset(dir);
+          console.log(`Broker sign-in reset: a new refresh key, ${n} sign-in${n === 1 ? "" : "s"} ended.`);
+        } finally {
+          release();
+        }
+        break;
+      }
       const { startRelay } = await import("../lib/relay.js");
       const port = Number(opt("--port", process.env.HOPTELL_PORT || 7777));
       if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
@@ -102,7 +440,47 @@ try {
       // Opt-in keyed fingerprints in the log: loaded once, before listening; no silent fallback.
       const fpModule = await import("../lib/fingerprint.js");
       const fingerprint = fpModule.fingerprintsEnabled(process.env.HOPTELL_LOG_FINGERPRINTS) ? fpModule.loadFingerprintKey(process.env.HOPTELL_LOG_FINGERPRINT_KEY_FILE) : null;
-      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, fingerprint });
+      const { parseTrustedProxies } = await import("../lib/relay.js");
+      const trustedProxies = parseTrustedProxies(opt("--trusted-proxies", process.env.HOPTELL_TRUSTED_PROXIES));
+      const { makeLogger, startMetrics } = await import("../lib/metrics.js");
+      const log = makeLogger(opt("--log-format", process.env.HOPTELL_LOG_FORMAT || "text"));
+      const { defaultStateDir, loadRealm, lockStateDir } = await import("../lib/realm.js");
+      const stateDirectory = opt("--state-dir", process.env.HOPTELL_STATE_DIR) || defaultStateDir();
+      const release = lockStateDir(stateDirectory);
+      for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => (release(), process.exit(0)));
+      process.on("exit", release);
+      const realmName = opt("--realm-name", process.env.HOPTELL_REALM_NAME);
+      if (realmName && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(realmName)) fail("invalid --realm-name: letters, digits, '.', '_' and '-', up to 64 characters");
+      const realm = { id: loadRealm(stateDirectory, process.env.HOPTELL_REALM_ID || null), name: realmName || undefined };
+      const requireMembers = args.includes("--require-members") || /^(1|true|on|yes)$/i.test(process.env.HOPTELL_REQUIRE_MEMBERS || "");
+      // Sign-in with identity providers (design 1.6): explicit issuers from --oidc / HOPTELL_OIDC.
+      const oidcFile = opt("--oidc", process.env.HOPTELL_OIDC);
+      let oidc = null;
+      // Broker sign-ins of a relay whose broker issuers were all removed end at startup (design 1.7:
+      // removing an issuer ends its families); the broker starts whenever its state exists.
+      const brokerState = fs.existsSync(path.join(stateDirectory, "broker", "families.json"));
+      if (!oidcFile && brokerState) {
+        const broker = await (await import("../lib/broker.js")).createBroker({ issuers: [], stateDir: stateDirectory, log });
+        oidc = { config: { issuers: [] }, verifier: null, discovery: null, broker };
+      }
+      if (oidcFile) {
+        const o = await import("../lib/oidc.js");
+        const config = o.loadOidcConfig(oidcFile);
+        const brokerIssuers = config.issuers.filter((i) => i.mode === "broker");
+        // Broker mode (design 1.7): its families and refresh key live in this relay's state directory.
+        const broker = brokerIssuers.length || brokerState ? await (await import("../lib/broker.js")).createBroker({ issuers: brokerIssuers, stateDir: stateDirectory, log }) : null;
+        oidc = { config, verifier: config.issuers.some((i) => i.mode === "resource") ? await o.createVerifier(config, { log }) : null, discovery: o.discoveryDocument(config, realm.id), broker };
+        log(`sign-in with ${config.issuers.map((i) => `${i.issuer}${i.mode === "broker" ? ` (broker ${i.id})` : ""}`).join(", ")}`);
+      }
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, requireMembers, realm, fingerprint, trustedProxies, oidc, log });
+      const metricsPort = opt("--metrics-port", process.env.HOPTELL_METRICS_PORT);
+      if (metricsPort) {
+        const mp = Number(metricsPort);
+        if (!Number.isInteger(mp) || mp < 1 || mp > 65535) fail("invalid --metrics-port");
+        const metricsHost = opt("--metrics-host", process.env.HOPTELL_METRICS_HOST || "127.0.0.1");
+        await startMetrics(relay, { host: metricsHost, port: mp });
+        log(`metrics on http://${metricsHost}:${mp}/metrics`);
+      }
       // kill -HUP: re-read the members file (revoked tokens are disconnected); on any problem keep the current list.
       if (membersFile) {
         process.on("SIGHUP", () => {
@@ -113,6 +491,29 @@ try {
           }
         });
       }
+      break;
+    }
+    case "mcp-http": {
+      const sub = args.find((a, i) => !a.startsWith("--") && !["--port", "--name", "--roles"].includes(args[i - 1]));
+      if (sub === "client") {
+        const h = await import("../lib/httpmcp.js");
+        const [, action, label] = args.filter((a, i) => !a.startsWith("--") && !["--port", "--name", "--roles"].includes(args[i - 1]));
+        if (action === "add" && label) {
+          const r = await h.addClient(home(), label, { name: opt("--name") ?? null, roles: parseRoles(opt("--roles") ?? "") });
+          console.log(`Client "${r.label}" added. Its token (shown only now): ${r.token}`);
+          console.log(`Configure the client with the URL http://127.0.0.1:<port>/mcp and the header "Authorization: Bearer <token>".`);
+        } else if (action === "list") {
+          const rows = h.listClients(home());
+          if (!rows.length) console.log("No clients.");
+          for (const c of rows) console.log(`${c.label}${c.name ? `  name ${c.name}` : ""}${c.roles?.length ? `  roles ${c.roles.join(",")}` : ""}  since ${c.created}`);
+        } else if (action === "remove" && label) {
+          await h.removeClient(home(), label);
+          console.log(`Removed client "${label}"; its token no longer works and its open sessions end within a minute.`);
+        } else fail("usage: hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>", 2);
+        break;
+      }
+      const { runMcpHttp } = await import("../lib/mcp.js");
+      await runMcpHttp({ port: opt("--port") ? Number(opt("--port")) : undefined });
       break;
     }
     case "mcp": {
@@ -127,15 +528,16 @@ try {
         fail("usage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
       }
       const { launch } = await import("../lib/tmux.js");
-      launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "");
+      launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home() });
       break;
     }
     case "inject": {
       const { inject } = await import("../lib/tmux.js");
-      await inject(args[0], args[1], args[2]);
+      await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice() });
       break;
     }
     case "list": {
+      await selectRelay();
       const c = await connect("send");
       const peers = await c.list();
       const { formatPeer } = await import("../lib/client.js");
@@ -147,42 +549,97 @@ try {
       const { describeAck, parseRef, parseTtl } = await import("../lib/client.js");
       let ttl;
       let replyTo;
+      let relayFlag = null;
       let rest = args;
       // Options come first; "--" ends them, so a message may itself start with "--".
       for (;;) {
-        if (rest[0] === "--ttl") ttl = parseTtl(rest[1]);
+        if (rest[0] === "--relay") relayFlag = rest[1] ?? fail("--relay needs an alias", 2);
+        else if (rest[0] === "--ttl") ttl = parseTtl(rest[1]);
         else if (rest[0] === "--reply-to") replyTo = parseRef(rest[1]);
         else break;
         rest = rest.slice(2);
       }
       if (rest[0] === "--") rest = rest.slice(1);
-      const [to, ...words] = rest;
-      if (!to || !words.length) fail("usage: hoptell send [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>", 2);
+      let [to, ...words] = rest;
+      if (!to || !words.length) fail("usage: hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>", 2);
+      const at = /^(@?[A-Za-z0-9][A-Za-z0-9_-]{0,63})@([a-z0-9][a-z0-9-]{0,31})$/.exec(to);
+      if (at) to = at[1];
+      const sel = await selectRelay(at?.[2] ?? null, relayFlag);
+      if (sel && replyTo) {
+        // The same reply rule as agent sessions: the reference must have come through this relay.
+        const { checkReply, routesStore } = await import("../lib/routes.js");
+        const { profileKey } = await import("../lib/profiles.js");
+        const prof = (x) => {
+          try {
+            return profileKey(x.url, x.profile);
+          } catch {
+            return null;
+          }
+        };
+        try {
+          checkReply({ origins: routesStore(home()).lookup(replyTo), routeProfile: prof(sel.entry), target: to, qualified: sel.qualified, several: sel.relays.relays.length > 1, aliasOf: (p) => sel.relays.relays.find((x) => prof(x) === p)?.alias ?? null, aliases: sel.relays.relays.map((x) => x.alias) });
+        } catch (e) {
+          fail(e.message, 2);
+        }
+      }
       const c = await connect("send");
       console.log(describeAck(to, await c.send(to, words.join(" "), ttl, replyTo), ttl, replyTo));
       c.close();
       break;
     }
     case "wait": {
-      const secs = Number(args[0]) || 300;
+      // wait [--relay <alias>] [--wait-for-name | --replace] [seconds]
+      await selectRelay();
+      const waitForName = args.includes("--wait-for-name");
+      const replace = args.includes("--replace");
+      if (waitForName && replace) fail("use --wait-for-name or --replace, not both", 2);
+      const secs = Number(args.find((a) => !a.startsWith("--"))) || 300;
+      const deadline = Date.now() + secs * 1000;
       const { format } = await import("../lib/inbox.js");
       process.stdout.on("error", (err) => fail(`cannot write output: ${err.message}`));
       let c = null;
       let timer = null;
       let idle = null;
       const done = () => (c ? c.close() : setTimeout(done, 50));
-      c = await connect("peer", (m, confirm) => {
-        clearTimeout(timer);
-        // Confirm only once printed; on a write error the relay keeps the message.
-        process.stdout.write(`${format(m)}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : confirm()));
-        clearTimeout(idle);
-        idle = setTimeout(done, 500); // also collect messages arriving together
-      });
+      // The owner's contacts apply here too: only allowed senders are printed; others are held
+      // in the quarantine of this name's storage (or dropped when blocked), then confirmed.
+      const contacts = await contactsOf();
+      const relayProfile = await relayProfileOf();
+      let holdAt = null;
+      const holdPlace = async (client) => {
+        if (holdAt) return holdAt;
+        if (client.protocolInUse === 2 && client.realm) {
+          const { openBound, sessionKey } = await import("../lib/session.js");
+          const key = sessionKey(client.name, { explicit: Boolean(cliName()), member: client.member });
+          const bound = await openBound(home(), { realm: client.realm.id, member: client.member, key });
+          holdAt = { dir: bound.dir, session: { realm: client.realm.id, name: key } };
+        } else holdAt = { dir: path.join(home(), "legacy", client.name), session: { realm: null, name: client.name } };
+        return holdAt;
+      };
+      const { stamp } = await import("../lib/quarantine.js");
+      c = await connect("peer", (raw, confirm, client) => {
+        const m = stamp(raw, relayProfile); // an unverified sender's relay, recorded at arrival
+        holdPlace(client)
+          .then(async (place) => {
+            const v = contacts.verdict(m, place.session);
+            if (v !== "allow") {
+              await contacts.hold(place.dir, place.session, m, v);
+              return confirm();
+            }
+            clearTimeout(timer);
+            // Confirm only once printed; on a write error the relay keeps the message.
+            process.stdout.write(`${format(m)}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : confirm()));
+            clearTimeout(idle);
+            idle = setTimeout(done, 500); // also collect messages arriving together
+          })
+          // A storage problem leaves the message unconfirmed: the relay keeps it for a later receiver.
+          .catch((e) => console.error(`hoptell: a message could not be stored and stays with the relay: ${e.message}`));
+      }, secs * 1000, { waitForName, replace });
       if (!idle) {
         timer = setTimeout(() => {
           console.log(`No messages within ${secs}s.`);
           c.close();
-        }, secs * 1000);
+        }, Math.max(0, deadline - Date.now()));
       }
       c.on("fatal", (r) => fail(`relay closed the connection: ${r}`));
       break;
@@ -212,20 +669,134 @@ try {
     }
     case "doctor": {
       const { doctor } = await import("../lib/doctor.js");
-      process.exitCode = (await doctor()) ? 1 : 0;
+      process.exitCode = (await doctor(process.env, console.log, { relayCheck: args.includes("--relay-check"), homedir: os.homedir() })) ? 1 : 0;
       break;
     }
     case "listen": {
-      const name = checkName(args[0], "name");
-      const secs = Number(args[1]) || 3600;
+      // listen [--no-ack] (--session <folder> | <name>) [seconds]
+      const noAck = args.includes("--no-ack");
+      const rest = args.filter((a) => a !== "--no-ack");
+      const bySession = rest[0] === "--session";
+      const target = bySession ? rest[1] : rest[0] && checkName(rest[0], "name");
+      if (!target) fail("usage: hoptell listen [--no-ack] <name> [seconds]   or   hoptell listen [--no-ack] --session <folder> [seconds]", 2);
+      const secs = Number(rest[bySession ? 2 : 1]) || 3600;
       const inbox = await import("../lib/inbox.js");
-      const msgs = await inbox.waitFor(name, secs * 1000);
-      // Let stdout drain before exiting so long messages are not cut off.
-      process.stdout.write(
-        msgs.length
-          ? `${msgs.map(inbox.format).join("\n\n")}\n\n${inbox.NOT_YOUR_USER}\nReply with send_message, then start this listener again.\n`
-          : `No messages within ${secs}s. Start the listener again to keep receiving.\n`,
-      );
+      const { boundFromPath, resolveNameStore } = await import("../lib/session.js");
+      const { openStore, processConsumer } = await import("../lib/store.js");
+      // A name follows its receiving session (resolved at each check); a folder is fixed.
+      const resolve = () => {
+        if (bySession) return { state: "bound", store: boundFromPath(home(), target) };
+        const r = resolveNameStore(home(), target, relayChoice());
+        if (r.state === "invalid") throw new Error(r.error);
+        return r;
+      };
+      const consumer = noAck ? { kind: "manual", id: crypto.randomUUID() } : processConsumer("listen");
+      const deadline = Date.now() + secs * 1000;
+      let out = null;
+      const pipes = new Map();
+      const contacts = await contactsOf();
+      while (!out) {
+        const r = resolve();
+        if (r.state === "legacy") {
+          // Protocol 1: the messages the owner released (legacy store), then the legacy inbox, each
+          // file claimed until it is printed or moved to quarantine (a failed move keeps it).
+          // Everything selected stays recoverable until it is printed: released messages are taken with
+          // a receipt (this process), old inbox files stay claimed. --no-ack applies to current relays only.
+          const sid = { realm: null, name: r.store.name };
+          const legacyDir = path.join(home(), "legacy", r.store.name);
+          const legacyPipe = await openStore({ dir: legacyDir, inbox: path.join(legacyDir, "inbox"), seen: path.join(legacyDir, "seen") }, { receipts: "on", managed: contacts.isManaged() });
+          const me = processConsumer("listen");
+          const shown = [];
+          const released = await legacyPipe.take(me, { screen: contacts.screenFor(sid) });
+          if (released?.quarantined?.length) await contacts.adopt();
+          for (const x of released?.messages ?? []) shown.push(x.msg);
+          const claims = [];
+          try {
+            for (const f of inbox.list(r.store)) {
+              const cl = inbox.claim(r.store, f);
+              if (!cl) continue;
+              if (!cl.msg) {
+                cl.commit();
+                continue;
+              }
+              const v = contacts.verdict(cl.msg, sid);
+              if (v === "allow") {
+                shown.push(cl.msg);
+                claims.push(cl);
+                continue;
+              }
+              try {
+                await contacts.adoptBacklog(legacyDir, sid, cl.msg, v, { source: inbox.fileOf(r.store, f) }); // accepted backlog: never dropped
+              } catch (e) {
+                cl.release();
+                throw e;
+              }
+              cl.commit();
+            }
+          } catch (e) {
+            for (const k of claims) k.release();
+            if (released?.receipt) await legacyPipe.release(me);
+            throw new Error(`a message could not be moved to the quarantine (${e.message}); nothing was taken from the inbox`);
+          }
+          const undo = async () => {
+            for (const k of claims) k.release();
+            if (released?.receipt) await legacyPipe.release(me);
+          };
+          if (shown.length) out = { text: shown.map(inbox.format).join("\n\n"), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
+          else await undo();
+        } else if (r.state === "bound") {
+          // Keeps the session's receipt policy; claims use the configured lease.
+          if (!pipes.has(r.store.dir)) pipes.set(r.store.dir, await openStore(r.store, { leaseMs: leaseMinutes() * 60_000 }));
+          const pipe = pipes.get(r.store.dir);
+          // A message that cannot be read is an error (nothing is acknowledged); the current policy
+          // is applied, and messages it holds back join their requests.
+          const batch = await pipe.take(consumer, { screen: contacts.screenFor(sessionOfDir(r.store.dir)) });
+          if (batch?.quarantined?.length) await contacts.adopt();
+          if (batch && (batch.messages.length || batch.damaged?.length)) {
+            const notes = (batch.damaged ?? []).map((f) => `(A stored message was damaged and was set aside, unread, in ${f}.)`);
+            out = { text: [...notes, ...batch.messages.map((m) => inbox.format(m.msg))].join("\n\n"), receipt: batch.receipt, pipe };
+          }
+        }
+        if (out || Date.now() >= deadline) break;
+        await new Promise((res) => setTimeout(res, 250));
+      }
+      if (!out) {
+        process.stdout.write(`No messages within ${secs}s. Start the listener again to keep receiving.\n`);
+        break;
+      }
+      const footer = out.receipt && noAck ? `\nReceipt: ${out.receipt} (acknowledge with: hoptell ack ${out.receipt} ${bySession ? `--session "${target}"` : target})` : "";
+      // Acknowledge only after the output is written (automatic mode); a failed write keeps them.
+      process.stdout.write(`${out.text}\n\n${inbox.NOT_YOUR_USER}${footer}\nReply with send_message, then start this listener again.\n`, async (err) => {
+        if (err) {
+          if (out.undo) await out.undo(); // not printed: the messages stay
+          else for (const k of out.claims ?? []) k.release();
+          return fail(`cannot write output: ${err.message}`);
+        }
+        if (out.receipt && !noAck) await out.pipe.ack(out.receipt);
+        for (const k of out.claims ?? []) k.commit(); // legacy inbox files go once they are printed
+        if (out.legacy) await out.legacy.pipe.ack(out.legacy.receipt);
+      });
+      break;
+    }
+    case "ack": {
+      // ack <receipt> (--session <folder> | <name>)
+      const [receipt, ...where] = args;
+      const bySession = where[0] === "--session";
+      const target = bySession ? where[1] : where[0];
+      if (!receipt || !target) fail("usage: hoptell ack <receipt> --session <folder>   or   hoptell ack <receipt> <name>", 2);
+      const { boundFromPath, resolveNameStore } = await import("../lib/session.js");
+      const { openStore } = await import("../lib/store.js");
+      let bound;
+      if (bySession) bound = boundFromPath(home(), target);
+      else {
+        const r = resolveNameStore(home(), checkName(target, "name"), relayChoice());
+        if (r.state !== "bound") fail(r.state === "invalid" ? r.error : `no protocol-2 session storage for "${target}" on this machine (receipts are not used there)`);
+        bound = r.store;
+      }
+      const pipe = await openStore(bound);
+      const r = await pipe.ack(receipt);
+      if (r !== "ok") fail(`unknown receipt ${receipt}: it may have expired (its messages were returned to the inbox) or be mistyped`);
+      console.log("Acknowledged.");
       break;
     }
     case undefined:

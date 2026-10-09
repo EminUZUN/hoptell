@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "maxRevocationDelaySeconds": 300,
+  "maxTokenLifetimeSeconds": 3600,
+  "issuers": [
+    {
+      "issuer": "https://sso.example.com/realms/acme",
+      "mode": "resource",
+      "audience": "hoptell-relay",
+      "validation": "jwt",
+      "profile": "claims",
+      "requiredClaims": { "typ": "Bearer" },
+      "clientClaim": "azp",
+      "requiredScopes": ["hoptell"],
+      "allowedClients": ["hoptell-cli", "build-bot"],
+      "algorithms": ["RS256"],
+      "claims": { "name": "preferred_username", "groups": "groups" },
+      "cli": { "clientId": "hoptell-cli", "scopes": ["openid", "hoptell"], "redirectPath": "/callback", "grants": ["authorization_code", "device_code"] }
+    },
+    {
+      "issuer": "https://login.example.org",
+      "mode": "broker",
+      "id": "example",
+      "publicBaseUrl": "https://relay.example.com",
+      "client": { "clientId": "hoptell-relay", "clientSecretFile": "/etc/hoptell/broker-client-secret" },
+      "scopes": ["openid"],
+      "reverifyAfterSeconds": 86400
+    }
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EminUZUN/hoptell/schema/contacts.schema.json",
+  "title": "hoptell contacts",
+  "description": "Who may reach the agent sessions of a hoptell home. Kept in <home>/contacts.json (default ~/.hoptell/contacts.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "default"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Increased by hoptell on every change."
+    },
+    "default": {
+      "enum": [
+        "ask",
+        "allow",
+        "block"
+      ],
+      "description": "Verified senders without a grant or block."
+    },
+    "unverified": {
+      "enum": [
+        "ask",
+        "block"
+      ],
+      "default": "ask",
+      "description": "Senders on relays that do not authenticate them (protocol 1)."
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "replies": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Reserved: reply allowances are not supported yet; allowWithin must be null.",
+      "properties": {
+        "allowWithin": {
+          "type": "null"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "realm": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "realm": {
+          "$ref": "#/$defs/realm"
+        },
+        "member": {
+          "type": "string",
+          "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+        },
+        "shared": {
+          "const": true
+        },
+        "name": {
+          "$ref": "#/$defs/name",
+          "description": "With shared: the exact sender name."
+        },
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "realm",
+            "name"
+          ],
+          "properties": {
+            "realm": {
+              "$ref": "#/$defs/realm"
+            },
+            "name": {
+              "$ref": "#/$defs/name"
+            }
+          },
+          "description": "Optional: only this receiving session."
+        },
+        "added": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[gb]_[a-z2-7]{16}$",
+          "description": "Stable id (g_ for grants, b_ for blocks), used by revoke and unblock."
+        },
+        "unverified": {
+          "const": true,
+          "description": "Blocks only: a sender on a relay that does not authenticate senders."
+        },
+        "relay": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "With unverified: the relay profile key."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "realm",
+            "member"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "shared"
+                ]
+              },
+              {
+                "required": [
+                  "name"
+                ]
+              },
+              {
+                "required": [
+                  "unverified"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "realm",
+            "shared",
+            "name"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "member"
+                ]
+              },
+              {
+                "required": [
+                  "unverified"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "unverified",
+            "relay",
+            "name"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "realm"
+                ]
+              },
+              {
+                "required": [
+                  "member"
+                ]
+              },
+              {
+                "required": [
+                  "shared"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

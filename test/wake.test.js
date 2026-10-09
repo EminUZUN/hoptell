@@ -67,7 +67,7 @@ async function fakeClaude(w, t, env = {}) {
 
 const inboxFiles = (w, name) => {
   try {
-    return fs.readdirSync(path.join(w.home, "inbox", name)).filter((f) => f.endsWith(".json"));
+    return fs.readdirSync(w.inboxOf(name)).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
@@ -352,30 +352,27 @@ test("hook delivery: a callback delayed past a newer notice does not show the ol
 /** A pretend Claude Code host (this test process) with a registration, and MCP-side helpers. */
 async function ownershipWorld(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-own-"));
-  const saved = process.env.HOPTELL_HOME;
-  process.env.HOPTELL_HOME = home;
   const kids = [];
   t.after(async () => {
-    process.env.HOPTELL_HOME = saved;
     await Promise.all(kids.map((k) => (k.exitCode !== null || k.signalCode !== null ? null : (k.kill(), new Promise((r) => k.once("exit", r))))));
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const { currentBoot, hostKey, processInfo } = await import("../lib/host.js");
   const wake = await import("../lib/wake.js");
   const host = { pid: process.pid, start: processInfo(process.pid).start, uid: process.getuid(), boot: currentBoot() };
-  const dir = wake.ensureWakeDir();
+  const dir = wake.ensureWakeDir(home);
   const key = hostKey(host);
   const f = wake.filesFor(dir, key);
   const bell = wake.ensureBell(f.bell);
   wake.writeRecord(f.reg, { key, host, session_id: "s", epoch: "e1", bell: f.bell, bell_id: { dev: bell.dev, ino: bell.ino }, at: Date.now() });
   const barrier = path.join(home, "barrier");
   const url = new URL("../lib/wake.js", import.meta.url).href;
-  const script = `const w = await import(${JSON.stringify(url)}); const c = w.hookChannel({ host: JSON.parse(process.env.HOST), peer: "p" });
+  const script = `const w = await import(${JSON.stringify(url)}); const c = w.hookChannel({ home: process.env.HOME_DIR, host: JSON.parse(process.env.HOST), peer: "p", barrier: process.env.BARRIER || null });
     process.stdout.write((await c.arm()) + "\\n"); process.stdin.on("end", () => { c.close(); process.exit(0); }); process.stdin.resume();`;
   /** An MCP-side process that arms hook delivery; `pauseAt` pauses it at that step. */
   const server = (pauseAt) => {
-    const env = { ...process.env, HOST: JSON.stringify(host) };
-    if (pauseAt) env.HOPTELL_WAKE_TEST_BARRIER = barrier;
+    const env = { ...process.env, HOST: JSON.stringify(host), HOME_DIR: home };
+    if (pauseAt) env.BARRIER = barrier;
     const k = spawn(process.execPath, ["--input-type=module", "-e", script], { env, stdio: ["pipe", "pipe", "inherit"] });
     kids.push(k);
     return {
@@ -412,7 +409,7 @@ test("hook delivery: two servers taking over an ended owner at once: exactly one
 
   // A broken owner record (as if its server stopped mid-write) does not block forever.
   fs.writeFileSync(o.f.owner(5), "{partial", { mode: 0o600 });
-  const c = o.wake.hookChannel({ host: o.host, peer: "c" });
+  const c = o.wake.hookChannel({ home: o.home, host: o.host, peer: "c" });
   const started = Date.now();
   assert.equal(await c.arm(), "unverified");
   assert.equal(o.owner().n, 6);
@@ -468,16 +465,30 @@ test("delivery: explicit modes never inspect processes; doctor survives malforme
   const w = await world();
   t.after(() => w.close());
   const wake = await import("../lib/wake.js");
-  const saved = process.env.HOPTELL_HOME;
-  process.env.HOPTELL_HOME = w.home;
-  try {
-    const dir = wake.ensureWakeDir();
-    wake.writeRecord(path.join(dir, "k1.mcp.json"), { key: "k1", peer: "odd", generation: "g", mcp: { pid: process.pid, start: "x" }, verified_at: Number.MAX_SAFE_INTEGER });
-    wake.writeRecord(path.join(dir, "k1.ack.json"), { key: "k1", generation: "g", kind: "notice", id: "i", at: -5 });
-  } finally {
-    process.env.HOPTELL_HOME = saved;
-  }
+  const dir = wake.ensureWakeDir(w.home);
+  wake.writeRecord(path.join(dir, "k1.mcp.json"), { key: "k1", peer: "odd", generation: "g", mcp: { pid: process.pid, start: "x" }, verified_at: Number.MAX_SAFE_INTEGER });
+  wake.writeRecord(path.join(dir, "k1.ack.json"), { key: "k1", generation: "g", kind: "notice", id: "i", at: -5 });
   const doc = await w.cli(["doctor"]);
   assert.match(doc.stdout, /hook sessions: peer odd: ended/);
   assert.match(doc.stdout, /checks? failed|No checks failed/, "doctor completed");
+});
+
+test("hook registration for HTTP sessions: SessionStart's id, hook-header prints it, and it names the live host only", { skip: !supported }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const host = await fakeClaude(w, t);
+  await host.sessionStart({ session_id: "conv-http" });
+  const from = host.events.length;
+  host.send({ op: "hook", tag: "hdr", cmd: "hook-header", input: {} });
+  const ev = await host.next((e) => e.ev === "hook" && e.tag === "hdr", 15000, from);
+  const header = JSON.parse(ev.stdout);
+  const id = header["X-Hoptell-Hook-Registration"];
+  assert.match(id ?? "", /^[0-9a-f]{32}$/, ev.stdout);
+  const { hostOfRegistration } = await import("../lib/wake.js");
+  const found = hostOfRegistration(w.home, id);
+  assert.ok(found?.pid, "the registration names a live Claude Code process");
+  assert.equal(hostOfRegistration(w.home, "0".repeat(32)), null, "an unknown id names nothing");
+  host.send({ op: "exit" });
+  for (let i = 0; i < 50 && hostOfRegistration(w.home, id); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(hostOfRegistration(w.home, id), null, "once the process ended, the id names nothing");
 });

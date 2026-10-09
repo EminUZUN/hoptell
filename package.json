@@ -9,6 +9,7 @@
   "files": [
     "bin/",
     "lib/",
+    "schema/",
     ".env.example",
     "README.md",
     "SECURITY.md",
@@ -23,10 +24,11 @@
     "test": "node --test test/*.test.js",
     "lint": "eslint .",
     "test:e2e": "node test/e2e/run.mjs",
-    "test:compat": "node test/compat.mjs"
+    "test:compat": "node test/compat.mjs",
+    "test:oidc": "node --test test/keycloak/keycloak.test.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "keywords": [
     "claude-code",
@@ -42,6 +44,8 @@
   "author": "Emin Uzun",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "jose": "6.2.12",
+    "openid-client": "6.8.8",
     "ws": "^8.22.0"
   },
   "mcpName": "io.github.EminUZUN/hoptell",

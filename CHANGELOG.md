@@ -1,5 +1,91 @@
 # Changelog
 
+## Unreleased
+
+- `hoptell mcp-http` serves MCP over HTTP on 127.0.0.1 for clients that only speak HTTP: per-client
+  tokens (stored hashed), loopback Host check, no web-page requests, one agent session per client
+  session, limits on sessions, calls and streams. Reads are held under receipts until they are
+  acknowledged, so a response lost with its connection is shown again. `hoptell hook-header` lets
+  such a client use Claude Code hook notices.
+- One agent session can use several relays (a relays file): peers are addressed as `name@relay`,
+  bare names go only to the default relay, and nothing is forwarded between relays. Reads merge
+  every relay with one receipt; replies go back through the relay their message came from.
+  Relays can be send-only. `hoptell send|list|wait` accept `--relay` and `name@relay`.
+- Sign-in with an identity provider (OIDC), tested with Keycloak. A relay started with
+  `--oidc <file>` accepts access tokens that the provider issues for the relay, checked with
+  the provider's keys or by introspection. `hoptell members link` links an identity to a
+  member. `hoptell login` signs in with the browser (authorization code with PKCE), with a code
+  on another device, or as a service account. With `HOPTELL_AUTH=login`, sessions sign in
+  without a token. Tokens are renewed on the live connection. Credentials are kept in the OS
+  keychain or, by choice, an encrypted file. `hoptell logout` removes and revokes them.
+  `hoptell doctor` shows the sign-in. Member tokens keep working.
+- Broker mode for providers that only sign users in (ID tokens, no access tokens for the
+  relay): the relay signs the user in at the provider and issues its own credential to
+  `hoptell login`. Refresh tokens are used once; a reused one ends that sign-in everywhere.
+  `hoptell members signout <name>` ends a member's broker sign-ins, and `hoptell relay
+  broker-reset` recovers from a lost key.
+- `hoptell local-relay` runs a private relay for your own sessions on this machine as a user
+  service (macOS LaunchAgent, Linux systemd user unit): loopback only, members only, with a
+  token only your account can read. `hoptell doctor` shows its state.
+- Relays report whether names are authenticated with a shared token, per-member
+  tokens or both. `hoptell doctor` displays the mode and warns when a shared-token
+  holder can use a member's name.
+- `hoptell send`, `list` and `wait` retry connection attempts within their time
+  limits. `wait` also reconnects after a dropped connection. Rejected credentials
+  and name takeovers stop retries. Sends with an uncertain outcome are never
+  retried automatically.
+- Closing a relay client cancels reconnects and name checks and settles pending
+  waits and requests.
+- `--trusted-proxies` enables client-address logging behind a reverse proxy.
+  Forwarded headers are read only from configured proxies and used only in logs.
+- Optional JSON Lines logging (`--log-format json`) replaces control characters
+  in logged values. An optional metrics endpoint (`--metrics-port`) exposes
+  aggregate counts, sizes and ages and binds to 127.0.0.1 by default.
+- `hoptell doctor --relay-check` sends a test message to a temporary receiver and
+  reports the elapsed time for connection setup, delivery and acknowledgement.
+- Node.js 22 or newer is required. CI runs on Node.js 22 and 24.
+- The README documents the observed client behavior and configurations.
+- Peer names are leased (relay protocol 2). While a session is online, another
+  connection cannot take its name. When a session's connection drops, other
+  members cannot take the name for 30 seconds, but the same member can (for
+  example a restarted session); a clean exit frees it at once. A second agent session with the same
+  name waits for it. `hoptell wait` stops instead, or waits with
+  `--wait-for-name`, or takes the name over once with `--replace`. Clients fall
+  back to the earlier protocol with earlier relays; `HOPTELL_PROTOCOL=1` keeps it.
+- Without `HOPTELL_NAME`, the relay assigns the name: `<member>-<host>-<n>` with a
+  member token, `<host>-<n>` with the shared token.
+- Each relay has a realm id, kept in its state directory (`--state-dir`,
+  `HOPTELL_STATE_DIR`; the Docker image uses `/data`). Clients record it per relay
+  and refuse a relay URL that starts answering with another realm.
+- Messages show how the relay says the sender signed in: member name and id, the
+  shared token, or unknown with earlier relays.
+- Agent sessions keep messages in a folder bound to the relay realm, member and
+  session, and usually store a redelivered message only once. `hoptell listen --session`
+  reads such a folder.
+- Messages stay until acknowledged (receipts). `read_inbox` and `wait_for_message`
+  return a batch with a receipt, which the agent passes back as `ack` (or with the
+  new `ack_messages` tool) once handled; unacknowledged batches are shown again
+  after a lease (`HOPTELL_LEASE_MINUTES`, default 30). `hoptell listen` acknowledges
+  after printing; `--no-ack` prints a receipt for `hoptell ack`. `HOPTELL_RECEIPTS=off`
+  keeps read-means-removed.
+- Received messages are written durably before they are confirmed; a session's
+  inbox holds at most 1,000 messages or 50 MB, and further messages wait at the
+  relay until room is freed.
+- Sends carry an operation id on relays that support it: when a reply is lost, the
+  client resends to the same relay instance and the relay delivers the message once.
+- Contacts: you decide who may reach your agent sessions. In a new install, senders
+  without a grant are held back until you decide with `hoptell contacts` (allow,
+  allow once, block); the agent only sees how many messages wait, and a desktop
+  notification points you to the command. Existing installs keep today's behavior
+  until `hoptell contacts init`. Decisions name the exact revisions you were shown,
+  so a newer block is never undone by an older allow. `hoptell doctor` summarizes it.
+- `hoptell members list|add|revoke|migrate` manages the members file on the relay
+  host. New tokens are shown once and stored as SHA-256. Members get immutable ids;
+  `--require-members` refuses a shared token. The relay refuses duplicate ids and a
+  token used by two credentials.
+- `hoptell doctor` shows the relay realm, the member it signed in as, and whether
+  the local relay profile agrees.
+
 ## 0.2.2 (2026-10-08)
 
 - `hoptell tmux` now starts tmux servers without `HOPTELL_` variables in their

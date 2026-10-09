@@ -41,12 +41,12 @@ async function setup(t, initial = "prompt") {
   const [pane, pid] = execFileSync("tmux", ["new-session", "-d", "-P", "-F", "#{pane_id} #{pane_pid}", "-s", session, "-n", "agent", "-x", "200", "-y", "40", process.execPath, AGENT, ctl, log], { encoding: "utf8" })
     .trim()
     .split(" ");
-  execFileSync("tmux", ["new-window", "-d", "-t", `=${session}`, "-n", "injector", `env HOPTELL_HOME='${w.home}' '${process.execPath}' '${BIN}' inject ${name} '${pane}' ${pid}`]);
+  execFileSync("tmux", ["new-window", "-d", "-t", `=${session}`, "-n", "injector", `env HOPTELL_HOME='${w.home}' HOPTELL_RELAY='${w.env.HOPTELL_RELAY}' '${process.execPath}' '${BIN}' inject ${name} '${pane}' ${pid}`]);
   const alice = await w.mcp("alice");
   await w.mcp(name);
   const entries = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
   const screen = () => execFileSync("tmux", ["capture-pane", "-p", "-J", "-t", pane], { encoding: "utf8" });
-  const waiting = () => fs.readdirSync(path.join(w.home, "inbox", name)).filter((f) => f.endsWith(".json")).length;
+  const waiting = () => fs.readdirSync(w.inboxOf(name)).filter((f) => f.endsWith(".json")).length;
   const until = async (fn, ms = 15000) => {
     for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (fn()) return true;
     return false;

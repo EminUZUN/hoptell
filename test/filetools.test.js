@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parseRoots, supported } from "../lib/files.js";
-import { sleep, world } from "./helpers.js";
+import { existingInstall, sleep, world } from "./helpers.js";
 
 const skip = !supported() && "file tools need macOS or Linux";
 
@@ -19,7 +19,7 @@ function machine(w, label, files = {}) {
     fs.mkdirSync(path.dirname(path.join(app, rel)), { recursive: true });
     fs.writeFileSync(path.join(app, rel), content);
   }
-  const env = { HOPTELL_HOME: path.join(home, "state"), HOPTELL_SNAPSHOT_ROOTS: JSON.stringify([{ id: "app", path: app }]) };
+  const env = { HOPTELL_HOME: existingInstall(path.join(home, "state")), HOPTELL_SNAPSHOT_ROOTS: JSON.stringify([{ id: "app", path: app }]) };
   return { home, app, env };
 }
 
@@ -327,19 +327,17 @@ test("records: corrupted sizes and times, unsafe stores and bad ids are refused 
 test("records: at most 256 live per server, and cleanup never removes another live server's folder", { skip }, async (t) => {
   const w = await world();
   t.after(() => w.close());
-  const prev = process.env.HOPTELL_HOME;
-  process.env.HOPTELL_HOME = path.join(w.home, "cap");
-  t.after(() => (prev === undefined ? delete process.env.HOPTELL_HOME : (process.env.HOPTELL_HOME = prev)));
+  const home = path.join(w.home, "cap");
   const { RecordStore, MAX_RECORDS } = await import("../lib/records.js");
-  const a = new RecordStore();
+  const a = new RecordStore({ home });
   const fields = () => ({ owner_peer: "sam", review_request_id: crypto.randomUUID(), root_id: "app", root_identity: `sha256:${"0".repeat(64)}`, path: "a.js", sha256: `sha256:${"1".repeat(64)}`, bytes: 1, to: "alex" });
   for (let i = 0; i < MAX_RECORDS; i++) a.prepare(fields());
   assert.throws(() => a.prepare(fields()), (e) => e.code === "storage_full");
 
-  const b = new RecordStore();
+  const b = new RecordStore({ home });
   b.dir(); // a live server with no records yet
   a.cleanup();
-  assert.ok(fs.existsSync(path.join(process.env.HOPTELL_HOME, "snapshots", b.session)), "another live server's empty folder stays");
+  assert.ok(fs.existsSync(path.join(home, "snapshots", b.session)), "another live server's empty folder stays");
   b.prepare(fields());
 });
 
