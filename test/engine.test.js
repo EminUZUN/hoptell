@@ -57,6 +57,7 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       signIn: { credentialStore: "auto", passphrase: null },
       receipts: "on",
       leaseMinutes: 30,
+      elicitation: "off",
       notify: true,
       pid: process.pid,
       hostname: "testhost",

@@ -55,6 +55,43 @@
           "type": "null"
         }
       }
+    },
+    "pins": {
+      "type": "array",
+      "description": "EXPERIMENTAL (design 3.2): the device pin identities the owner verified, by (realm, member). hoptell contacts verify writes them.",
+      "items": {
+        "$ref": "#/$defs/pin"
+      }
+    },
+    "requireVerified": {
+      "type": "array",
+      "description": "EXPERIMENTAL (design 3.2): realms where unverified contacts (no pin, or relay-tofu only) hold messages.",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "encryption": {
+      "type": "array",
+      "maxItems": 1000,
+      "description": "EXPERIMENTAL (design 3.3): the require-encryption policy per contact (realm and member) and per realm (no member: the realm's default). required: never send or accept plaintext with that contact; preferred: encrypted when both sides have devices; off: plaintext. Unset means off.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["realm", "mode"],
+        "properties": {
+          "realm": {
+            "$ref": "#/$defs/realm"
+          },
+          "member": {
+            "type": "string",
+            "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+          },
+          "mode": {
+            "enum": ["required", "preferred", "off"]
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -198,6 +235,124 @@
           }
         }
       ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "realm",
+        "member",
+        "devices",
+        "verifiedAt",
+        "how"
+      ],
+      "properties": {
+        "realm": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "member": {
+          "type": "string",
+          "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "pin",
+              "key",
+              "seq"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "pin": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The pin identity: SHA-256 of the canonical (domain, realm, member, device, key)."
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The device's signature public key."
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The accepted rotation sequence."
+              },
+              "retired": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "description": "Keys this device rotated away from (never accepted again)."
+              }
+            }
+          }
+        },
+        "verifiedAt": {
+          "type": "string"
+        },
+        "how": {
+          "enum": [
+            "in-person",
+            "out-of-band",
+            "relay-tofu"
+          ],
+          "description": "relay-tofu records first use only and never satisfies requireVerified."
+        },
+        "requireVerified": {
+          "type": "boolean"
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object"
+          },
+          "description": "The owner's key decisions, naming old and new fingerprints."
+        },
+        "revokedOverflow": {
+          "const": true,
+          "description": "More unresolved revocations than can be kept: everything with this contact stops until they are resolved."
+        },
+        "revoked": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "by"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "by": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$",
+                "description": "The pinned device that signed the revocation."
+              },
+              "at": {
+                "type": "integer"
+              }
+            }
+          },
+          "description": "Trusted revocations observed (signed by another pinned device): sending to these devices holds until the device's accepted removal, whatever the relay serves later."
+        }
+      }
     }
   }
 }

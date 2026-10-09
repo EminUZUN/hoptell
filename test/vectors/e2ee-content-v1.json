@@ -1,0 +1,295 @@
+{
+  "description": "Deterministic CBOR (RFC 8949 4.2.1) for hoptell's authenticated content v1 (design 3.3). encode: the value (byte strings as {\"$bytes\": hex}) and its only valid encoding. content: valid v1 contents. reject: encodings a decoder must refuse.",
+  "encode": [
+    {
+      "name": "zero",
+      "value": 0,
+      "cbor": "00"
+    },
+    {
+      "name": "23",
+      "value": 23,
+      "cbor": "17"
+    },
+    {
+      "name": "24",
+      "value": 24,
+      "cbor": "1818"
+    },
+    {
+      "name": "255",
+      "value": 255,
+      "cbor": "18ff"
+    },
+    {
+      "name": "256",
+      "value": 256,
+      "cbor": "190100"
+    },
+    {
+      "name": "65535",
+      "value": 65535,
+      "cbor": "19ffff"
+    },
+    {
+      "name": "65536",
+      "value": 65536,
+      "cbor": "1a00010000"
+    },
+    {
+      "name": "2^32",
+      "value": 4294967296,
+      "cbor": "1b0000000100000000"
+    },
+    {
+      "name": "max safe",
+      "value": 9007199254740991,
+      "cbor": "1b001fffffffffffff"
+    },
+    {
+      "name": "empty bytes",
+      "value": {
+        "$bytes": ""
+      },
+      "cbor": "40"
+    },
+    {
+      "name": "bytes",
+      "value": {
+        "$bytes": "00ff"
+      },
+      "cbor": "4200ff"
+    },
+    {
+      "name": "empty text",
+      "value": "",
+      "cbor": "60"
+    },
+    {
+      "name": "text utf8",
+      "value": "ü✓🙂",
+      "cbor": "69c3bce29c93f09f9982"
+    },
+    {
+      "name": "array",
+      "value": [
+        1,
+        [
+          2,
+          3
+        ]
+      ],
+      "cbor": "8201820203"
+    },
+    {
+      "name": "map key order (shorter first, then bytewise)",
+      "value": {
+        "bb": 2,
+        "a": 1,
+        "b": 3
+      },
+      "cbor": "a361610161620362626202"
+    },
+    {
+      "name": "depth 8",
+      "value": [
+        [
+          [
+            [
+              [
+                [
+                  [
+                    0
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ],
+      "cbor": "8181818181818100"
+    }
+  ],
+  "content": [
+    {
+      "name": "text",
+      "value": {
+        "v": 1,
+        "message_id": {
+          "$bytes": "00112233445566778899aabbccddeeff"
+        },
+        "created": 1760000000000,
+        "expires": 1760604800000,
+        "conversation": {
+          "realm": "0123456789abcdef0123456789abcdef",
+          "a": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "b": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "from": {
+          "member": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "device": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "session": "alice"
+        },
+        "to": {
+          "member": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "session": "bob-main"
+        },
+        "kind": "text",
+        "body": "hello, bob: ünïcødé ✓ 🙂"
+      },
+      "cbor": "a961760162746fa2666d656d626572781c6d5f62626262626262626262626262626262626262626262626262626773657373696f6e68626f622d6d61696e64626f6479782068656c6c6f2c20626f623a20c3bc6ec3af63c3b864c3a920e29c9320f09f99826466726f6da366646576696365781a6161616161616161616161616161616161616161616161616161666d656d626572781c6d5f61616161616161616161616161616161616161616161616161616773657373696f6e65616c696365646b696e64647465787467637265617465641b00000199c82cc00067657870697265731b00000199ec3944006a6d6573736167655f69645000112233445566778899aabbccddeeff6c636f6e766572736174696f6ea36161781c6d5f61616161616161616161616161616161616161616161616161616162781c6d5f6262626262626262626262626262626262626262626262626262657265616c6d78203031323334353637383961626364656630313233343536373839616263646566"
+    },
+    {
+      "name": "reply",
+      "value": {
+        "v": 1,
+        "message_id": {
+          "$bytes": "00112233445566778899aabbccddeeff"
+        },
+        "created": 1760000000000,
+        "expires": 1760604800000,
+        "conversation": {
+          "realm": "0123456789abcdef0123456789abcdef",
+          "a": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "b": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "from": {
+          "member": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "device": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "session": "alice"
+        },
+        "to": {
+          "member": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "session": "bob-main"
+        },
+        "kind": "reply",
+        "body": "re",
+        "reply_to": {
+          "$bytes": "ffeeddccbbaa99887766554433221100"
+        }
+      },
+      "cbor": "aa61760162746fa2666d656d626572781c6d5f62626262626262626262626262626262626262626262626262626773657373696f6e68626f622d6d61696e64626f64796272656466726f6da366646576696365781a6161616161616161616161616161616161616161616161616161666d656d626572781c6d5f61616161616161616161616161616161616161616161616161616773657373696f6e65616c696365646b696e64657265706c7967637265617465641b00000199c82cc00067657870697265731b00000199ec394400687265706c795f746f50ffeeddccbbaa998877665544332211006a6d6573736167655f69645000112233445566778899aabbccddeeff6c636f6e766572736174696f6ea36161781c6d5f61616161616161616161616161616161616161616161616161616162781c6d5f6262626262626262626262626262626262626262626262626262657265616c6d78203031323334353637383961626364656630313233343536373839616263646566"
+    },
+    {
+      "name": "file",
+      "value": {
+        "v": 1,
+        "message_id": {
+          "$bytes": "00112233445566778899aabbccddeeff"
+        },
+        "created": 1760000000000,
+        "expires": 1760604800000,
+        "conversation": {
+          "realm": "0123456789abcdef0123456789abcdef",
+          "a": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "b": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "from": {
+          "member": "m_aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "device": "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "session": "alice"
+        },
+        "to": {
+          "member": "m_bbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "session": "bob-main"
+        },
+        "kind": "file",
+        "body": {
+          "name": "a.txt",
+          "sha256": {
+            "$bytes": "abababababababababababababababababababababababababababababababab"
+          },
+          "size": 12,
+          "text": "hello world\n"
+        }
+      },
+      "cbor": "a961760162746fa2666d656d626572781c6d5f62626262626262626262626262626262626262626262626262626773657373696f6e68626f622d6d61696e64626f6479a4646e616d6565612e7478746473697a650c64746578746c68656c6c6f20776f726c640a667368613235365820abababababababababababababababababababababababababababababababab6466726f6da366646576696365781a6161616161616161616161616161616161616161616161616161666d656d626572781c6d5f61616161616161616161616161616161616161616161616161616773657373696f6e65616c696365646b696e646466696c6567637265617465641b00000199c82cc00067657870697265731b00000199ec3944006a6d6573736167655f69645000112233445566778899aabbccddeeff6c636f6e766572736174696f6ea36161781c6d5f61616161616161616161616161616161616161616161616161616162781c6d5f6262626262626262626262626262626262626262626262626262657265616c6d78203031323334353637383961626364656630313233343536373839616263646566"
+    }
+  ],
+  "reject": [
+    {
+      "name": "integer not shortest (24 as 1 byte extra)",
+      "cbor": "1817"
+    },
+    {
+      "name": "integer not shortest (uint16 for 255)",
+      "cbor": "1900ff"
+    },
+    {
+      "name": "integer not shortest (uint32 for 65535)",
+      "cbor": "1a0000ffff"
+    },
+    {
+      "name": "integer not shortest (uint64 for 2^32-1)",
+      "cbor": "1b00000000ffffffff"
+    },
+    {
+      "name": "integer above 2^53-1",
+      "cbor": "1b0020000000000000"
+    },
+    {
+      "name": "negative integer",
+      "cbor": "20"
+    },
+    {
+      "name": "float",
+      "cbor": "f93c00"
+    },
+    {
+      "name": "true",
+      "cbor": "f5"
+    },
+    {
+      "name": "null",
+      "cbor": "f6"
+    },
+    {
+      "name": "tag",
+      "cbor": "c11a514b67b0"
+    },
+    {
+      "name": "indefinite-length text",
+      "cbor": "7f6161ff"
+    },
+    {
+      "name": "indefinite-length map",
+      "cbor": "bf616101ff"
+    },
+    {
+      "name": "map keys out of order",
+      "cbor": "a2616202616101"
+    },
+    {
+      "name": "longer key before shorter",
+      "cbor": "a262626202616101"
+    },
+    {
+      "name": "repeated map key",
+      "cbor": "a2616101616102"
+    },
+    {
+      "name": "integer map key",
+      "cbor": "a10101"
+    },
+    {
+      "name": "invalid UTF-8",
+      "cbor": "62c328"
+    },
+    {
+      "name": "trailing bytes",
+      "cbor": "0000"
+    },
+    {
+      "name": "truncated",
+      "cbor": "6261"
+    },
+    {
+      "name": "nesting deeper than 8",
+      "cbor": "81818181818181818100"
+    },
+    {
+      "name": "reserved additional info",
+      "cbor": "1c"
+    }
+  ]
+}

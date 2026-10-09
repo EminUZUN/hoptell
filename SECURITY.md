@@ -44,6 +44,25 @@ refuses overlapping member names). Roles are self-chosen routing labels, not per
   another agent, but the receiving agent's own permission settings are the real boundary
 - availability: there is one relay with in-memory queues
 
+**Experimental device keys (not released):** with `HOPTELL_EXPERIMENTAL_E2EE=1` and a relay
+started with `--experimental-e2ee`, a home can enroll an MLS device key, publish KeyPackages and
+pin other members' devices (`hoptell contacts verify`). Nothing is encrypted with them yet, and
+no MLS library is qualified for release. One limit is known and stated here on purpose: a
+restore through `hoptell device restore` (or `migrate`) retires the restored device before
+anything else, and state found on another machine refuses to send; but restoring an **older raw
+copy** of `~/.hoptell` on the **same** machine, outside those commands, brings back the same
+machine identifier and older keys, and hoptell cannot detect it. There is no independent freshness
+anchor yet (`hoptell doctor` says so too).
+
+**Owner decisions (`hoptell contacts`, `hoptell ui`, the optional question in the client):**
+they protect against peers, stale views and accidents. A decision is bound to what was shown and
+refused if that changed. An agent running as the same OS user can run the CLI, open the UI or
+edit the files, so none of these proves that a person decided. `hoptell ui` listens on
+127.0.0.1 only and accepts only its exact address as Host, its own Origin on forms, a single-use
+launch link and an in-memory session cookie; every form carries a token bound to the session and
+to the choices it offered. The question in the client (`HOPTELL_ELICITATION=read_inbox`, off by
+default) offers only `allow-once` and `later`, and a client may answer it automatically.
+
 ## Hardening checklist
 
 - Run the relay only on a private interface or VPN address (`--host`).

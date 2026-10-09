@@ -378,7 +378,8 @@ test("a first sign-in is journaled too; concurrent logins of one profile never l
     assert.equal(keychainBackend.size(), 1);
   }
   // Login B fails to remove A (transition A -> B kept) while login C waits behind it: C first finishes
-  // A -> B, then replaces B; logout leaves nothing.
+  // A -> B, then replaces B; logout leaves nothing. Which of the two takes the lock first is not
+  // fixed: the first one fails, the other one wins.
   {
     const { relayUrl, home, profile, keychainBackend } = await setup(t, { clients: { "hoptell-cli": {}, "hoptell-relay": { secret: "rs" }, "build-bot": { secret: "bot-secret" }, "ci-bot": { secret: "ci-secret" } } });
     await login({ relayUrl, home, profile, open: browser, say: () => {}, keychainBackend });
@@ -388,11 +389,10 @@ test("a first sign-in is journaled too; concurrent logins of one profile never l
     keychainBackend.remove = (a) => (a === userAccount && failOnce ? ((failOnce = false), false) : remove(a));
     const b = login({ relayUrl, home, profile, keychainBackend, ...service("build-bot") });
     const c = login({ relayUrl, home, profile, keychainBackend, ...service("ci-bot") });
-    const [rb, rc] = await Promise.allSettled([b, c]);
-    assert.equal(rb.status, "rejected");
-    assert.equal(rc.status, "fulfilled");
-    assert.equal(signInStatus(home, profile).clientId, "ci-bot");
-    assert.equal(keychainBackend.size(), 1, "A and B are gone, only C remains");
+    const settled = await Promise.allSettled([b, c]);
+    assert.deepEqual(settled.map((r) => r.status).sort(), ["fulfilled", "rejected"]);
+    assert.equal(signInStatus(home, profile).clientId, settled[0].status === "fulfilled" ? "build-bot" : "ci-bot", "the login that finished is the one signed in");
+    assert.equal(keychainBackend.size(), 1, "A and the failed login's credential are gone, only the winner's remains");
     await logout({ home, profile, keychainBackend });
     assert.equal(keychainBackend.size(), 0);
   }

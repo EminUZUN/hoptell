@@ -11,6 +11,17 @@ import { RelayClient } from "../lib/client.js";
 import { createAccess } from "../lib/access.js";
 import { startRelay } from "../lib/relay.js";
 import { sleep } from "./helpers.js";
+import { lockStateDir } from "../lib/realm.js";
+import { openRelayDb } from "../lib/relaydb.js";
+import { createDeviceDirectory } from "../lib/mls/relaydir.js";
+import { E2EE_MIGRATIONS, createDeliveryService } from "../lib/mls/relayds.js";
+import { DEVICE_MIGRATIONS } from "../lib/mls/relaydir.js";
+import { RELAY_MIGRATIONS } from "../lib/relaystore.js";
+import { fakeDevice, memoryContacts, newOp } from "./mls-helpers.js";
+import { deviceStore } from "../lib/mls/device.js";
+import { createE2ee } from "../lib/mls/e2ee.js";
+import { evaluate, pinFirstUse } from "../lib/mls/trust.js";
+import { createFakeDriver } from "./fake-mls-driver.js";
 
 const ID = { alice: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", bob: "m_bbbbbbbbbbbbbbbbbbbbbbbbbb", carol: "m_cccccccccccccccccccccccccc", dave: "m_dddddddddddddddddddddddddd" };
 const IDP = "https://idp.example";
@@ -49,20 +60,36 @@ function fakeBroker() {
   };
 }
 
-async function setup(t, { policy = null, token = null, stateDir = null, fault = null, revocationDelay = 300 } = {}) {
+async function setup(t, { policy = null, token = null, stateDir = null, fault = null, revocationDelay = 300, devices = false, e2ee = false } = {}) {
   stateDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-"));
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
   const clock = { t: Date.now() };
   const access = createAccess({ stateDir, policy, now: () => clock.t, fault });
   const provider = fakeProvider();
   const broker = fakeBroker();
-  const relay = await startRelay({ host: "127.0.0.1", port: 0, token, members, realm: { id: "e".repeat(32) }, access, oidc: { config: { issuers: [], maxRevocationDelaySeconds: revocationDelay }, verifier: provider, discovery: null, broker }, log: process.env.DEBUG_RELAY ? (...a) => console.log("RELAY", ...a) : () => {}, sweepMs: 100_000 });
+  // The device store (and with `e2ee` the Delivery Service, on its clock `clock.t`); restart()
+  // reopens it, with other migrations or without sign-ins (an upgrade, a reconfigured relay).
+  let ddir = null;
+  let db = null;
+  let deviceOpt = null;
+  const openStore = (migrations) => {
+    db = openRelayDb({ dir: ddir, migrations, fullfsync: false });
+    const directory = createDeviceDirectory({ db, realm: "e".repeat(32) });
+    deviceOpt = { directory, ...(e2ee ? { ds: createDeliveryService({ db, directory, realm: "e".repeat(32), now: () => clock.t }) } : {}) };
+  };
+  if (devices || e2ee) {
+    ddir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-devices-"));
+    const release = lockStateDir(ddir);
+    openStore(Array.isArray(e2ee) ? [...DEVICE_MIGRATIONS, ...e2ee] : RELAY_MIGRATIONS);
+    t.after(() => (db?.close(), release(), fs.rmSync(ddir, { recursive: true, force: true })));
+  }
+  const start = ({ signIns = true } = {}) => startRelay({ host: "127.0.0.1", port: 0, token, members, realm: { id: "e".repeat(32) }, access, devices: deviceOpt, ...(signIns ? { oidc: { config: { issuers: [], maxRevocationDelaySeconds: revocationDelay }, verifier: provider, discovery: null, broker } } : {}), log: process.env.DEBUG_RELAY ? (...a) => console.log("RELAY", ...a) : () => {}, sweepMs: 100_000 });
+  let relay = await start();
   t.after(() => relay.close());
-  const url = `ws://127.0.0.1:${relay.port}`;
   const clients = [];
   t.after(() => clients.forEach((c) => c.close()));
   const open = async ({ got, held = false, ...o }) => {
-    const c = new RelayClient({ url, reconnect: false, ...o });
+    const c = new RelayClient({ url: s.url, reconnect: false, ...o });
     clients.push(c);
     // A receiver's listener goes on before the hello: queued messages arrive right after it.
     if (got) c.on("message", (m, confirm) => (got.push(m), confirm({ released: !held })));
@@ -74,7 +101,39 @@ async function setup(t, { policy = null, token = null, stateDir = null, fault = 
   /** A session signed in at the scripted provider ({groups, iat, opaque}) or broker ({family, at}). */
   const signIn = (who, claims, mode = "peer", kind = "oidc") =>
     open({ signIn: async () => ({ kind, issuer: kind === "broker" ? "b1" : IDP, token: JSON.stringify({ sub: who, ...claims }), expiresAt: Date.now() + 300_000 }), name: mode === "send" ? `${who}-cli` : who, mode });
-  return { relay, access, clock, url, connect, signIn, stateDir, provider, broker };
+  /** Stop the relay and start it again on the same state; `migrations` reopens the device store with those. */
+  async function restart({ migrations = null, signIns = true } = {}) {
+    for (const c of clients.splice(0)) c.close();
+    await relay.close();
+    if (migrations) {
+      db.close();
+      openStore(migrations);
+    }
+    relay = await start({ signIns });
+  }
+  const s = {
+    access,
+    clock,
+    connect,
+    signIn,
+    restart,
+    stateDir,
+    provider,
+    broker,
+    get relay() {
+      return relay;
+    },
+    get url() {
+      return `ws://127.0.0.1:${relay.port}`;
+    },
+    get db() {
+      return db;
+    },
+    get ds() {
+      return deviceOpt?.ds ?? null;
+    },
+  };
+  return s;
 }
 /** Messages a client receives, confirmed as released to its session (gate 3 passed) unless `held`. */
 const inbox = (c, { held = false } = {}) => {
@@ -840,4 +899,497 @@ test("a repeated reply from another session names the same recipient as the firs
   assert.equal(again.a.message_id, first.a.message_id);
   assert.deepEqual(first.a.recipient, { auth: "member", member: { id: ID.alice, name: "alice" }, realm: "e".repeat(32) });
   assert.deepEqual(again.a.recipient, first.a.recipient, "not shown as an older relay");
+});
+
+test("device lists and KeyPackages follow the caller's signed-in reach: group deny, group grant, stale and closed views", async (t) => {
+  const s = await setup(t, { policy: POLICY({ groups: { suspended: { members: [], oidcGroups: [{ issuer: IDP, group: "suspended" }] }, team: { members: [], oidcGroups: [{ issuer: IDP, group: "team" }] } }, rules: [{ from: "group:suspended", to: "*", action: "deny" }] }), devices: true });
+  const bob = await s.connect("bob");
+  const bd = await fakeDevice("e".repeat(32), ID.bob);
+  await bob.rpc(bd.register());
+  await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(3, Date.now() + 86_400_000) });
+  const listed = async (c) => (await c.rpc({ type: "device_list", member: ID.bob })).devices.length;
+  const take = (c, request) => c.rpc({ type: "kp_take", request, device: "aaaaaaaaaaaaaaaaaaaaaaaaaa", target: { member: ID.bob, device: bd.device } }).then(() => "kp", (e) => e.code);
+  // bob is hidden and grants member alice and group team.
+  await publish(await s.connect("bob", "send"), { default: "deny", visible: "grantees", entries: [{ selector: `member:${ID.alice}`, action: "allow" }, { selector: "group:team", action: "allow" }] });
+  // 1. alice signed in with a suspended group: her admin deny applies to devices too.
+  const suspended = await s.signIn("alice", { groups: ["suspended"], iat: s.clock.t }, "send");
+  assert.equal(await listed(suspended), 0);
+  assert.equal(await take(suspended, "r1"), "no_device");
+  // 2. carol (not granted as a member) signed in with group team: allowed, as for names.
+  const team = await s.signIn("carol", { groups: ["team"], iat: s.clock.t }, "send");
+  assert.equal(await listed(team), 1);
+  // 3. a stale and then a closed claim view hides the devices again.
+  s.clock.t += 400_000;
+  assert.equal(await listed(team), 0, "stale");
+  s.clock.t -= 400_000;
+  assert.equal(await listed(team), 1);
+  s.access.invalidate(`${IDP}|carol`, "signed out");
+  assert.equal(await listed(team), 0, "closed");
+  // A broker sign-in: its group grant counts, and an ended family reaches nothing.
+  const broker = await s.signIn("dave", { family: "fd", groups: ["team"], at: s.clock.t }, "send", "broker");
+  assert.equal(await listed(broker), 1);
+  s.broker.ended.add("fd");
+  assert.equal(await listed(broker), 0, "ended family");
+  // A member token of the granted member still sees them, and bob sees his own.
+  assert.equal(await listed(await s.connect("alice", "send")), 1);
+  assert.equal((await bob.rpc({ type: "device_list" })).devices.length, 1);
+});
+
+// ---- pending recipients after a restore that lost the access state (design 4.4) -----------------
+
+/** A state directory whose access/restore.json lists `pending` ({memberId: revision | null}). */
+function pendingState(t, pending, grants = null) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-pending-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, "access"), { mode: 0o700 });
+  if (grants) fs.writeFileSync(path.join(dir, "access", "grants.json"), JSON.stringify({ v: 1, members: grants }));
+  writePending(dir, pending);
+  return dir;
+}
+const writePending = (dir, pending) => fs.writeFileSync(path.join(dir, "access", "restore.json"), JSON.stringify({ v: 1, restore: "0123456789abcdef", at: Date.now(), pending }));
+const pendingOf = (dir) => JSON.parse(fs.readFileSync(path.join(dir, "access", "restore.json"), "utf8")).pending;
+
+test("pending recipients: held at dispatch and retry at send, before an inactive realm's allow; a publish clears the mark", async (t) => {
+  const s = await setup(t, { stateDir: pendingState(t, {}) });
+  const bob = await s.connect("bob", "send");
+  (await s.connect("alice")).close(); // known to the relay, now offline
+  (await s.connect("carol")).close();
+  await sleep(100);
+  // Queued while alice is offline (nothing configured: allowed), then alice becomes pending.
+  const queued = await sendTo(bob, "alice", "queued before");
+  assert.equal(queued.ok, true, queued.error);
+  writePending(s.stateDir, { [ID.alice]: null });
+  s.access.reloadRestore();
+  assert.equal(s.access.active(), false, "no policy and no grants: the realm is inactive, and still the hold applies");
+  const refused = await sendTo(bob, "alice", "new send");
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /try again/);
+  assert.equal((await sendTo(bob, "carol", "to a member not pending")).ok, true);
+  const got = [];
+  const alice = await s.connect("alice", "peer", { got });
+  await sleep(300);
+  assert.equal(got.length, 0, "the queued message is held, not delivered under the old grants");
+  // alice publishes: the grants are durable first, then the mark goes, and the held message flows.
+  const aliceCli = await s.connect("alice", "send");
+  await publish(aliceCli, { default: "allow", visible: "all", entries: [] });
+  assert.deepEqual(pendingOf(s.stateDir), {});
+  assert.ok(await until(() => got.some((m) => m.text === "queued before")), "released once alice published");
+  void alice;
+});
+
+test("pending recipients: a reply under an existing reply allowance is held; the allowance is neither consulted nor used", async (t) => {
+  const s = await setup(t, { policy: POLICY() });
+  const aliceCli = await s.connect("alice", "send");
+  await publish(aliceCli, { default: "deny", visible: "all", entries: [] });
+  const alice = await s.connect("alice");
+  inbox(alice);
+  const bob = await s.connect("bob");
+  const bobGot = inbox(bob);
+  const sent = await alice.rpc({ type: "send", to: "bob", text: "question" });
+  assert.ok(await until(() => bobGot.length === 1));
+  await sleep(100);
+  // alice becomes pending (its revision now): bob's reply is held at send, and the allowance stays unused.
+  writePending(s.stateDir, { [ID.alice]: s.access.grantsOf(ID.alice).revision });
+  s.access.reloadRestore();
+  const held = await sendTo(bob, "alice", "answer", { reply_to: sent.message_id, op: op() });
+  assert.equal(held.ok, false);
+  assert.match(held.error, /try again/);
+  const allowances = JSON.parse(fs.readFileSync(path.join(s.stateDir, "access", "allowances.json"), "utf8")).entries;
+  assert.equal(allowances.length, 1);
+  assert.equal(allowances[0].used, null, "not consumed by the held reply");
+  // Once alice publishes again, the same allowance carries the reply.
+  await publish(aliceCli, { default: "deny", visible: "all", entries: [] });
+  assert.equal((await sendTo(bob, "alice", "answer", { reply_to: sent.message_id, op: op() })).ok, true);
+});
+
+test("pending recipients: cleared only after the grants are durable; a crash between leaves the mark, the next load clears it by revision", (t) => {
+  const dir = pendingState(t, { [ID.alice]: 1 }, { [ID.alice]: { revision: 1, default: "deny", visible: "all", entries: [] } });
+  const failing = (file) => (p, f) => {
+    if (p === "rename" && path.basename(f) === file) throw Object.assign(new Error("injected"), { code: "EIO" });
+  };
+  // The grants write fails: nothing changes, the mark stays.
+  const a1 = createAccess({ stateDir: dir, fault: failing("grants.json") });
+  assert.throws(() => a1.putGrants(ID.alice, 1, { default: "allow", visible: "all", entries: [] }), /could not be saved/);
+  assert.deepEqual(pendingOf(dir), { [ID.alice]: 1 });
+  assert.deepEqual(a1.pendingRecipients(), [{ memberId: ID.alice, revision: 1 }]);
+  // The grants are written, the rewrite of restore.json "crashes": still pending (safe).
+  const a2 = createAccess({ stateDir: dir, fault: failing("restore.json") });
+  assert.deepEqual(a2.putGrants(ID.alice, 1, { default: "allow", visible: "all", entries: [] }), { revision: 2 });
+  assert.deepEqual(pendingOf(dir), { [ID.alice]: 1 });
+  assert.equal(a2.decide({ memberId: ID.bob }, { memberId: ID.alice }), "hold");
+  // The next load sees revision 2 where 1 was recorded: alice published since, the mark goes.
+  const a3 = createAccess({ stateDir: dir });
+  assert.deepEqual(pendingOf(dir), {});
+  assert.deepEqual(a3.pendingRecipients(), []);
+  assert.equal(a3.decide({ memberId: ID.bob }, { memberId: ID.alice }), "allow");
+});
+
+test("pending recipients: an unreadable restore.json refuses the start; it is never dropped", (t) => {
+  const dir = pendingState(t, { [ID.alice]: null });
+  fs.writeFileSync(path.join(dir, "access", "restore.json"), "{oops");
+  assert.throws(() => createAccess({ stateDir: dir }), /restore\.json cannot be read/);
+  fs.writeFileSync(path.join(dir, "access", "restore.json"), JSON.stringify({ v: 1, pending: { [ID.alice]: "x" } }));
+  assert.throws(() => createAccess({ stateDir: dir }), /unknown version or shape/);
+});
+
+/**
+ * Encrypted messages to bob (design 3.3): bob's device, `conversation(client, who)` creates the
+ * conversation of a device of `who` (on `client`) with it and returns a function queueing one
+ * application message for bob's session; `receive()` attaches bob's device on his session and
+ * collects what arrives, acknowledging each.
+ */
+async function encryptedToBob(s) {
+  const realm = "e".repeat(32);
+  const blob = () => crypto.randomBytes(48).toString("base64");
+  const bob = await s.connect("bob", "send");
+  const bd = await fakeDevice(realm, ID.bob);
+  await bob.rpc(bd.register());
+  await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(4, Date.now() + 86_400_000) });
+  const conversation = async (c, who) => {
+    const d = await fakeDevice(realm, ID[who]);
+    await c.rpc(d.register());
+    const { reservation } = await c.rpc({ type: "kp_take", request: `req-${crypto.randomBytes(6).toString("hex")}`, device: d.device, target: { member: ID.bob, device: bd.device } });
+    const group = crypto.randomBytes(16).toString("hex");
+    await c.rpc({ type: "group_create", op: newOp(), device: d.device, peer: ID.bob, group, epoch: 1, welcome: { recipients: [bd.device], mls: blob() }, kp_reservations: [reservation] });
+    const sent = [];
+    const send = async (via = c) => {
+      const mls = blob();
+      sent.push(mls);
+      return (await via.rpc({ type: "send_e2ee", kind: "app", op: newOp(), device: d.device, group, mls, target: "bob" })).state;
+    };
+    send.sent = sent;
+    return send;
+  };
+  let peer = null;
+  const receive = async () => {
+    const got = [];
+    if (peer) {
+      peer.close();
+      await sleep(80);
+    }
+    peer = await s.connect("bob");
+    peer.on("message_e2ee", (m, ack) => (got.push(m), ack()));
+    await peer.rpc({ type: "e2ee_attach", device: bd.device });
+    return got;
+  };
+  return { bob, bd, conversation, receive };
+}
+const apps = (got) => got.filter((m) => m.kind === "app").map((m) => m.from_member);
+
+test("encrypted messages are rechecked at dispatch as their sender was signed in: a deny by the sender's provider groups drops a queued one", async (t) => {
+  const s = await setup(t, { policy: POLICY({ groups: { suspended: { members: [], oidcGroups: [{ issuer: IDP, group: "suspended" }] } } }), e2ee: true });
+  const e = await encryptedToBob(s);
+  await publish(e.bob, { default: "allow", visible: "all", entries: [] });
+  // alice is signed in with the provider group suspended, carol without it: both may send now.
+  const fromAlice = await e.conversation(await s.signIn("alice", { groups: ["suspended"], iat: s.clock.t }, "send"), "alice");
+  const fromCarol = await e.conversation(await s.signIn("carol", { groups: [], iat: s.clock.t }, "send"), "carol");
+  assert.equal(await fromAlice(), "accepted");
+  assert.equal(await fromCarol(), "accepted");
+  // bob denies the group: alice's member is unchanged, but her sign-in is in it.
+  await publish(e.bob, { default: "allow", visible: "all", entries: [{ selector: "group:suspended", action: "deny" }] });
+  const got = await e.receive();
+  assert.ok(await until(() => apps(got).length >= 1));
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.carol], "carol's message is delivered, alice's is not");
+  assert.equal(got.filter((m) => m.kind === "welcome").length, 2);
+  assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0, "alice's message was dropped, not held");
+});
+
+test("encrypted messages are rechecked at dispatch as their sender was signed in: a broker family that ended drops a queued one", async (t) => {
+  const s = await setup(t, { e2ee: true });
+  const e = await encryptedToBob(s);
+  const fromAlice = await e.conversation(await s.signIn("alice", { family: "fa", at: s.clock.t }, "send", "broker"), "alice");
+  const fromCarol = await e.conversation(await s.signIn("carol", { family: "fc", at: s.clock.t }, "send", "broker"), "carol");
+  assert.equal(await fromAlice(), "accepted");
+  assert.equal(await fromCarol(), "accepted");
+  // alice's broker sign-in ends (logout or replay); carol's stays live.
+  s.broker.ended.add("fa");
+  const got = await e.receive();
+  assert.ok(await until(() => apps(got).length >= 1));
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.carol], "carol's message is delivered, alice's is not");
+  assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0, "alice's message was dropped, not held");
+});
+
+test("an allowed encrypted message from a signed-in sender is delivered once, and its frame does not carry the sender's sign-in", async (t) => {
+  const s = await setup(t, { policy: POLICY({ groups: { team: { members: [], oidcGroups: [{ issuer: IDP, group: "team" }] } } }), e2ee: true });
+  const e = await encryptedToBob(s);
+  // bob admits only the provider group team.
+  await publish(e.bob, { default: "deny", visible: "all", entries: [{ selector: "group:team", action: "allow" }] });
+  const fromAlice = await e.conversation(await s.signIn("alice", { groups: ["team"], iat: s.clock.t }, "send"), "alice");
+  assert.equal(await fromAlice(), "accepted");
+  const got = await e.receive();
+  assert.ok(await until(() => apps(got).length >= 1));
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.alice]);
+  const app = got.find((m) => m.kind === "app");
+  assert.deepEqual(Object.keys(app).filter((k) => /sender|identity|family|principal/.test(k)), []);
+  assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0);
+});
+
+/**
+ * A store created before the queue recorded senders (migration 2 only), holding bob's device and,
+ * queued for it as an older relay left them (its rows, column for column), a Welcome, a commit
+ * and an application message from each of `from` (member names) without senders; with `self`,
+ * also one from another device of bob's own. `before(s)` runs first, on the old relay (its
+ * sign-ins). Returns the encryptedToBob handle.
+ */
+async function storeBeforeSenders(t, { policy = null, from = ["alice"], self = false, before = null } = {}) {
+  const s = await setup(t, { policy, e2ee: E2EE_MIGRATIONS.slice(0, 1) });
+  if (before) await before(s);
+  const e = await encryptedToBob(s);
+  const blob = () => crypto.randomBytes(48).toString("base64");
+  let seq = 0;
+  const row = (group, frame) => {
+    const delivery = `e_${crypto.randomBytes(16).toString("hex")}`;
+    const full = JSON.stringify({ type: "message_e2ee", delivery, ...frame });
+    s.db.tx((h) => h.run("INSERT INTO e2ee_queue (delivery, member_id, device_id, group_id, target, frame, bytes, created, expires, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", delivery, ID.bob, e.bd.device, group, frame.kind === "app" ? "bob" : null, full, Buffer.byteLength(full), s.clock.t, s.clock.t + 86_400_000, ++seq));
+  };
+  for (const who of from) {
+    const c = await s.connect(who, "send");
+    const d = await fakeDevice("e".repeat(32), ID[who]);
+    await c.rpc(d.register());
+    const group = crypto.randomBytes(16).toString("hex");
+    const g = await c.rpc({ type: "group_create", op: newOp(), device: d.device, peer: ID.bob, group, epoch: 1, welcome: null, kp_reservations: [] });
+    assert.equal(g.group, group);
+    const base = { group, generation: 1, conversation: g.conversation ?? null, mls: blob(), from_member: ID[who], from_device: d.device };
+    row(group, { ...base, kind: "welcome" });
+    row(group, { ...base, kind: "commit", log: { position: 1, epoch: 1 } });
+    row(group, { ...base, kind: "app", target: "bob", epoch: 1 });
+    if (self && who === from[0]) row(group, { ...base, kind: "app", target: "bob", epoch: 1, from_member: ID.bob, from_device: (await fakeDevice("e".repeat(32), ID.bob)).device });
+  }
+  assert.equal(s.db.get("SELECT count(*) AS n FROM e2ee_queue").n, 3 * from.length + (self ? 1 : 0));
+  return { s, e };
+}
+const upgraded = RELAY_MIGRATIONS; // every migration of this hoptell, the relay admin's (4.4) last
+
+test("the queue's sender column is a migration of its own: migration 2 is as released, and a store from before it upgrades in place", async (t) => {
+  // Migration 2 as the 3.3 branch applied it; an applied migration never changes.
+  assert.equal(crypto.createHash("sha256").update(E2EE_MIGRATIONS[0]).digest("hex"), "dc333a57797f5bf2385ad4ba0daf5a4e5b16ef80ec516398863a7302cae5f892");
+  const { s, e } = await storeBeforeSenders(t);
+  await s.restart({ migrations: upgraded });
+  assert.equal(s.db.version, upgraded.length);
+  assert.deepEqual(s.db.all("SELECT sender FROM e2ee_queue").map((r) => r.sender), [null, null, null], "the rows queued before keep no sender");
+  // The upgraded relay delivers the queued control frames, and queues and delivers new messages.
+  const fromCarol = await e.conversation(await s.signIn("carol", { groups: [], iat: s.clock.t }, "send"), "carol");
+  assert.equal(await fromCarol(), "accepted");
+  const got = await e.receive();
+  assert.ok(await until(() => got.filter((m) => m.kind === "welcome").length === 2 && apps(got).length >= 1));
+  await sleep(200);
+  assert.ok(got.some((m) => m.kind === "commit" && m.from_member === ID.alice), "the queued commit");
+  assert.deepEqual(apps(got), [ID.carol]);
+});
+
+test("a message from another member queued before senders were recorded is refused, whatever the relay's sign-ins are now", async (t) => {
+  // Sign-ins accepted now: the original sign-in (its claim view, its broker family) cannot be known.
+  {
+    const { s, e } = await storeBeforeSenders(t);
+    await s.restart({ migrations: upgraded });
+    const got = await e.receive();
+    assert.ok(await until(() => got.length >= 2));
+    await sleep(200);
+    assert.deepEqual(apps(got), [], "alice's message is not delivered");
+    assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0, "it was dropped, not held");
+  }
+  // The old relay accepted sign-ins: alice's message came from her provider sign-in, which then
+  // signed out. The relay is upgraded with sign-ins turned off: nothing records how her message
+  // was authenticated, so it is refused all the same, not checked as the bare member. Control
+  // frames, bob's own message from his other device, and a new message from a member token go.
+  {
+    const { s, e } = await storeBeforeSenders(t, { self: true, before: async (s) => (await s.signIn("alice", { groups: [], iat: s.clock.t }, "send")).close() });
+    s.access.invalidate(`${IDP}|alice`, "signed out");
+    await s.restart({ migrations: upgraded, signIns: false });
+    const fromCarol = await e.conversation(await s.connect("carol", "send"), "carol");
+    assert.equal(await fromCarol(), "accepted");
+    const got = await e.receive();
+    assert.ok(await until(() => apps(got).length >= 2 && got.filter((m) => m.kind === "welcome").length === 2));
+    await sleep(200);
+    assert.ok(got.some((m) => m.kind === "commit" && m.from_member === ID.alice), "the queued commit");
+    assert.deepEqual(apps(got).sort(), [ID.bob, ID.carol].sort(), "bob's own and carol's new message; alice's is refused");
+    assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0);
+  }
+});
+
+test("a message queued before senders were recorded is refused also on a relay without access rules", async (t) => {
+  const { s, e } = await storeBeforeSenders(t, { from: ["alice", "carol"], self: true });
+  // Upgrade the store, then serve it from a relay with no access configured (no gates at all).
+  await s.restart({ migrations: upgraded, signIns: false });
+  await s.relay.close();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members, realm: { id: "e".repeat(32) }, devices: { directory: createDeviceDirectory({ db: s.db, realm: "e".repeat(32) }), ds: s.ds }, log: () => {}, sweepMs: 100_000 });
+  t.after(() => relay.close());
+  const peer = new RelayClient({ url: `ws://127.0.0.1:${relay.port}`, token: tok("bob"), name: "bob", mode: "peer", reconnect: false });
+  t.after(() => peer.close());
+  const got = [];
+  peer.on("message_e2ee", (m, ack) => (got.push(m), ack()));
+  await peer.start().ready(5000);
+  await peer.rpc({ type: "e2ee_attach", device: e.bd.device });
+  assert.ok(await until(() => got.filter((m) => m.kind !== "app").length === 4 && apps(got).length >= 1));
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.bob], "only bob's own message; alice's and carol's are refused");
+  assert.equal(s.ds.usage({ member: ID.bob, device: e.bd.device }).messages, 0);
+});
+
+/**
+ * `n` application messages to bob from `who`, signed in with `claims`; a session sends 100 at
+ * most (the rate limit). Returns their MLS payloads, in the order sent.
+ */
+async function queueMany(s, e, who, n, claims) {
+  let c = await s.signIn(who, claims, "send");
+  const send = await e.conversation(c, who);
+  for (let i = 0; i < n; i++) {
+    if (i && i % 100 === 0) {
+      c.close();
+      await sleep(80);
+      c = await s.signIn(who, claims, "send");
+    }
+    assert.equal(await send(c), "accepted");
+  }
+  c.close();
+  await sleep(80);
+  return send.sent;
+}
+const queuedFor = (s, e) => s.ds.usage({ member: ID.bob, device: e.bd.device }).messages;
+
+test("held encrypted messages do not hide later ones: more than a page held, a restart, and a hold that becomes allow", async (t) => {
+  const s = await setup(t, { policy: POLICY(), e2ee: true });
+  const e = await encryptedToBob(s);
+  // 250 messages from alice (a provider sign-in, fresh for five minutes), then one from carol (a
+  // broker sign-in, fresh for an hour).
+  const fromAlice = await queueMany(s, e, "alice", 250, { groups: [], iat: s.clock.t });
+  const carol = () => s.signIn("carol", { family: "fc", at: s.clock.t }, "send", "broker");
+  const c1 = await carol();
+  const fromCarol = await e.conversation(c1, "carol");
+  assert.equal(await fromCarol(), "accepted");
+  c1.close();
+  // alice's claim view goes stale: her messages are held, carol's passes them.
+  s.clock.t += 600_000;
+  let got = await e.receive();
+  assert.ok(await until(() => apps(got).length >= 1), "carol's message passes 250 held ones");
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.carol]);
+  assert.equal(queuedFor(s, e), 250, "alice's stay queued");
+  // After a restart (nothing of a round is kept), the same.
+  await s.restart();
+  assert.equal(await fromCarol(await carol()), "accepted");
+  got = await e.receive();
+  assert.ok(await until(() => apps(got).length >= 1), "after a restart too");
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.carol]);
+  assert.equal(queuedFor(s, e), 250);
+  // alice's view is fresh again (the clock back within her sign-in's five minutes): her messages
+  // go, all of them, in their order.
+  s.clock.t -= 600_000;
+  got = await e.receive();
+  assert.ok(await until(() => apps(got).length === 250, 5000), `alice's 250 delivered (got ${apps(got).length})`);
+  await sleep(200);
+  assert.deepEqual(got.filter((m) => m.kind === "app").map((m) => m.mls), fromAlice);
+  assert.equal(queuedFor(s, e), 0);
+});
+
+test("held encrypted messages: a new message passes them, and a hold that becomes deny drops them all in one round", async (t) => {
+  const s = await setup(t, { policy: POLICY(), e2ee: true });
+  const e = await encryptedToBob(s);
+  await queueMany(s, e, "alice", 250, { groups: [], iat: s.clock.t });
+  s.clock.t += 600_000; // alice's view is stale: held
+  const got = await e.receive();
+  await sleep(200);
+  assert.deepEqual(apps(got), []);
+  // The queue changes while they are held: a message from carol arrives behind them and goes.
+  const fromCarol = await e.conversation(await s.signIn("carol", { family: "fc", at: s.clock.t }, "send", "broker"), "carol");
+  assert.equal(await fromCarol(), "accepted");
+  assert.ok(await until(() => apps(got).length >= 1), "carol's new message passes the held ones");
+  // alice is removed from the realm: her held messages are now refused, and dropped, past the
+  // first page too; carol's next message still goes.
+  s.relay.reload(members.filter((m) => m.name !== "alice"));
+  assert.equal(await fromCarol(), "accepted");
+  assert.ok(await until(() => apps(got).length >= 2));
+  await sleep(200);
+  assert.deepEqual(apps(got), [ID.carol, ID.carol]);
+  assert.equal(queuedFor(s, e), 0, "alice's 250 were dropped");
+});
+
+/**
+ * An enrolled device (fake driver) of `who` with an e2ee engine on `client` (its session), on the
+ * relay of setup `s`; `contacts` keeps pins (memoryContacts). Deliveries are collected in `got`.
+ */
+async function e2eeHome(t, s, who, client, { contacts = null } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-home-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const now = () => s.clock.t;
+  const driver = createFakeDriver({ seed: `${who}-${dir}`, now });
+  const store = deviceStore({ home: dir, profile: "access-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now });
+  await store.enroll(client);
+  const got = [];
+  const e2ee = createE2ee({ store, driver, client, session: client.name, home: dir, profile: "access-test", contacts, deliver: async (m) => void got.push(m), now });
+  await e2ee.attach();
+  return { store, e2ee, got, device: store.record().device };
+}
+/** Pin `member`'s current devices (relay-tofu, as a first direct send would). */
+async function pinIn(contacts, client, member) {
+  const devices = (await client.rpc({ type: "device_list", member })).devices;
+  pinFirstUse(contacts.doc, "e".repeat(32), member, evaluate(contacts.doc, "e".repeat(32), member, devices).active);
+  contacts.doc.revision++;
+}
+
+test("encrypted fan-out (4.3), gate 1: a member the admin policy denies is no candidate and not counted; named, it answers as an unknown name", async (t) => {
+  const s = await setup(t, { policy: POLICY({ rules: [{ from: `member:${ID.alice}`, to: `member:${ID.carol}`, action: "deny" }] }), e2ee: true });
+  const contacts = memoryContacts();
+  contacts.doc.encryption = [{ realm: "e".repeat(32), mode: "preferred" }];
+  const aliceC = await s.connect("alice");
+  const alice = await e2eeHome(t, s, "alice", aliceC, { contacts });
+  const bob = await e2eeHome(t, s, "bob", await s.connect("bob"));
+  const carol = await e2eeHome(t, s, "carol", await s.connect("carol"));
+  await pinIn(contacts, aliceC, ID.bob);
+  await pinIn(contacts, aliceC, ID.carol);
+  const r = await alice.e2ee.fanout({ to: "@all", body: "to everyone allowed" });
+  assert.deepEqual([r.candidates, r.copies, r.states.accepted, r.excluded.first_contact, r.excluded.unavailable], [1, 1, 1, 0, 0], "carol is not listed, so not counted");
+  assert.ok(await until(() => bob.got.length === 1, 3000));
+  const named = await alice.e2ee.fanout({ to: ["carol", "nobody"], body: "named" });
+  assert.deepEqual(named.names, [{ name: "carol", state: "unavailable" }, { name: "nobody", state: "unavailable" }], "refused and unknown alike");
+  assert.equal(named.copies, 0);
+  await sleep(200);
+  assert.equal(carol.got.length, 0);
+  assert.equal(s.db.get("SELECT count(*) AS n FROM e2ee_queue WHERE member_id = ? AND json_extract(frame, '$.kind') = 'app'", ID.carol).n, 0, "nothing queued for carol");
+});
+
+test("encrypted fan-out (4.3): a sender's sign-in that ended after acceptance stops its queued copies at dispatch; a live one is delivered", async (t) => {
+  const s = await setup(t, { e2ee: true });
+  const contacts = memoryContacts();
+  contacts.doc.encryption = [{ realm: "e".repeat(32), mode: "preferred" }];
+  const aliceC = await s.signIn("alice", { family: "fa", at: s.clock.t }, "peer", "broker");
+  const alice = await e2eeHome(t, s, "alice", aliceC, { contacts });
+  const bobC = await s.connect("bob");
+  const bob = await e2eeHome(t, s, "bob", bobC);
+  await pinIn(contacts, aliceC, ID.bob);
+  // The conversation exists (bob joined), then bob goes offline.
+  assert.equal((await alice.e2ee.fanout({ to: ["bob"], body: "while signed in" })).states.accepted, 1);
+  assert.ok(await until(() => bob.got.length === 1, 3000));
+  bobC.close();
+  await sleep(100);
+  const queued = await alice.e2ee.fanout({ to: ["bob"], body: "queued, then the sign-in ends" });
+  assert.equal(queued.states.accepted, 1, "accepted while the sign-in was live");
+  s.broker.ended.add("fa"); // logout or replay: the family ends
+  const back = await s.connect("bob");
+  const got = [];
+  back.on("message_e2ee", (m, ack) => (got.push(m), ack()));
+  await back.rpc({ type: "e2ee_attach", device: bob.device });
+  await sleep(400);
+  assert.equal(got.filter((m) => m.kind === "app").length, 0, "the queued copy is not dispatched");
+  assert.equal(s.ds.usage({ member: ID.bob, device: bob.device }).messages, 0, "dropped, not held");
+});
+
+test("the access manifest: written before a file is first created; a listed file missing refuses the start, never an empty state", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-manifest-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifest = () => JSON.parse(fs.readFileSync(path.join(dir, "access", "manifest.json"), "utf8")).files;
+  const a = createAccess({ stateDir: dir });
+  assert.deepEqual(manifest(), [], "a first start records what exists: nothing");
+  // The manifest write fails: the grants are not written either (nothing unrecorded is created).
+  const failing = createAccess({ stateDir: dir, fault: (p, f) => { if (p === "rename" && path.basename(f) === "manifest.json") throw Object.assign(new Error("injected"), { code: "EIO" }); } });
+  assert.throws(() => failing.putGrants(ID.alice, 0, { default: "deny", visible: "all", entries: [] }), /could not be saved/);
+  assert.equal(fs.existsSync(path.join(dir, "access", "grants.json")), false);
+  a.putGrants(ID.alice, 0, { default: "deny", visible: "all", entries: [] });
+  assert.deepEqual(manifest(), ["grants.json"]);
+  fs.rmSync(path.join(dir, "access", "grants.json"));
+  assert.throws(() => createAccess({ stateDir: dir }), /grants\.json cannot be read/, "a lost deny is not an empty grants file");
 });

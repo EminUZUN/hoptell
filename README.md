@@ -381,8 +381,8 @@ deliberately, never created automatically. Member tokens keep working alongside.
    `requiredClaims` that only access tokens carry (Keycloak: `{"typ": "Bearer"}`). The relay
    publishes the issuer and the CLI client at `/.well-known/hoptell` (no secrets).
 3. **Link identities** to members: `hoptell members link alice --issuer <issuer> --subject <sub>`
-   (the provider's `sub` for that user or service account), then reload the relay (`kill -HUP`
-   or a restart).
+   (the provider's `sub` for that user or service account). The command reloads a running
+   relay itself (see "Members").
 4. **On each machine**: `hoptell login` opens the browser (`--device` prints a code for another
    device; `--client-credentials --client-id <id> --client-secret-file <file>` for a service
    account), then set `HOPTELL_AUTH=login`. The credential is kept in the OS keychain (macOS
@@ -450,6 +450,18 @@ messages. Fan-out is not queued for offline peers. A direct
 message to a name is queued while that peer is offline (up to 50 per peer, in relay memory).
 Roles are labels that agents choose for themselves to route work. They are not permissions.
 
+**Roles under an encryption policy (experimental).** When encrypted sending is available
+(`HOPTELL_EXPERIMENTAL_E2EE=1` and an enrolled device) and the realm has a non-off encryption
+policy (`hoptell contacts encryption`), `@role` and `@all` are sent encrypted, one copy per
+recipient session, and only to members whose devices you have already pinned (a new member
+needs a first direct message). They never send plaintext: a session whose contact is set to
+`off`, or that cannot receive encrypted messages, is left out and counted in the result. To
+reach those sessions in plaintext, send to each one by name. When encrypted sending is not
+available and the policy is only `preferred`, `@role` and `@all` go as plaintext, and the result
+says they were not encrypted. `hoptell send @role` and `hoptell send @all` are refused when the
+realm has any non-off encryption policy. A contact whose encryption is `required` never gets
+plaintext, including from `hoptell send` or when `HOPTELL_EXPERIMENTAL_E2EE` is unset.
+
 **Many people.** Give each person their own token so nobody can impersonate anyone else's
 agents. Create a members file on the relay (chmod 600):
 
@@ -468,16 +480,23 @@ them and, with `--yes`, gives them ids. Reloading the relay then closes their co
 restart those sessions so they connect under the new ids. Messages queued for their names under
 the old identity are dropped when the new identities take the names.
 
+The `members` commands record each change in the relay's audit log. Run them on the relay host,
+with the relay's state directory (`--state-dir` or `HOPTELL_STATE_DIR`, as for the relay). If
+the relay is running, the command reloads it through its admin socket in the state directory,
+then reports the result. If the relay is stopped, the relay applies the change when it starts.
+`hoptell relay admin audit` shows the log, and `hoptell relay admin help` lists the relay
+owner's other commands.
+
 Run `hoptell relay --members members.json` or set `HOPTELL_MEMBERS`. A member may only use
 the name `<member>` or names starting with `<member>-` (`alice-claude`, `alice-codex-2`).
 The relay refuses member names that overlap, such as `alice` and `alice-bob`.
 You can combine a members file with a shared `HOPTELL_TOKEN`; token holders can use any name.
 `--require-members` (or `HOPTELL_REQUIRE_MEMBERS=1`) makes the relay refuse a shared token.
 
-To add, remove or change member tokens without a restart, edit the file and run
-`kill -HUP <relay pid>`. The relay re-reads it and closes connections whose token was removed
-or changed. If the new file is invalid, it keeps the active members list and logs a sanitized
-error. An empty list (`{"members": []}`) removes every member. The shared token is not
+If you edit the file by hand, run `hoptell relay admin reload` or `kill -HUP <relay pid>`. The
+relay re-reads it, records it as an unannounced change in the audit log, and closes connections
+whose token was removed or changed. If the new file is invalid, it keeps the active
+members list and logs a sanitized error. An empty list (`{"members": []}`) removes every member. The shared token is not
 reloaded. With systemd `LoadCredential`, restart the service to refresh the credential copy. A
 Docker bind mount of a single file can keep the old file when an editor replaces it
 atomically; restart the container after such edits, or bind-mount the containing directory to
@@ -535,6 +554,53 @@ messages already waiting in your sessions are held back on their next read. Ever
 receives messages for this home must run this version or later. `HOPTELL_NOTIFY=off` turns the
 desktop notifications off.
 
+### Deciding in a browser: hoptell ui
+
+`hoptell ui` serves the same decisions as pages on `127.0.0.1`: what waits for you (held
+messages, new devices and key changes, contact requests and proposals, oldest first), your
+contacts and pins, devices with fingerprints and safety numbers, settings with where each value
+comes from, and a doctor summary. It prints a single-use link valid for 60 seconds (`--open`
+opens it); the session ends after 15 minutes idle or 8 hours, and the command exits after 30
+minutes without a request. Pages have no JavaScript. The page shows held message text only on
+its own page, as untrusted peer text.
+
+Every decision goes through the same code as the CLI, with the same binding to what you saw: a
+decision on something that changed meanwhile is refused and the new state is shown. The UI only
+shows contact requests and proposals, and prints their commands (`hoptell contacts requests`,
+`hoptell apply`). Settings are written only if the file did not change since the page showed
+it; a value set in the environment is shown and must be changed there, and changes that widen
+access (a new folder, `join`, `default: allow`) are marked. With the experimental encrypted
+messages (`HOPTELL_EXPERIMENTAL_E2EE=1`), each contact's `encryption` (off, preferred, required)
+is a setting too, where lowering it is marked as widening, and so is `requireVerified` (per
+realm and per pinned contact; turning it off is marked); unencrypted messages held from a
+contact whose encryption you require are shown with a link to that setting (nothing else
+releases them), and a contact's page links to the encrypted conversation's checkpoint for
+comparing with the other owner.
+
+The views that need the relay (contact requests, device lists, the encrypted conversation's
+checkpoint) reach it only through `HOPTELL_RELAY` (and `HOPTELL_PROFILE`) for now, not through
+a relays file; without it they say that the relay is not available.
+
+Other users of the machine can reach the port: the launch link and the session cookie keep them
+out. An agent running as your OS user can open the UI as well as run the CLI; the UI protects
+against peers, stale pages and accidents, not against such an agent.
+
+### Asking in the agent client (optional)
+
+With `HOPTELL_ELICITATION=read_inbox`, a `read_inbox` call may first ask you through the client's
+own question dialog about one sender whose messages are held: who it is (as the relay
+authenticated it), how many messages, for which sessions, never the text. The answers are
+`allow-once` (release exactly those messages) and `later`; lasting decisions (allow, block) and
+device keys stay with the CLI and `hoptell ui`. A decline, a cancel, no answer within 60 seconds or
+any other answer leaves the messages waiting and does not ask about that sender again for 30
+minutes. It is off by default.
+
+It asks only in sessions on MCP revision 2025-06-18 or 2025-11-25 whose client declares form
+questions; with the 2026-07-28 revision or an unknown one it never asks. The answer comes from
+the client, not from the agent's tool calls, but a client can answer automatically (Claude Code's
+`Elicitation` hook can; Codex with `approval_policy = "never"` declines at once), so an answer
+does not prove that a person answered. See [Tested clients](#tested-clients).
+
 ### Who may reach you through the relay (grants and the relay's policy)
 
 Your machine's contacts decide what reaches your sessions. On a relay with member credentials, two
@@ -542,8 +608,9 @@ more checks happen before a message leaves the relay, and each can only refuse:
 
 - **The relay's policy** (`hoptell relay --policy policy.json` or `HOPTELL_POLICY`), set by the
   relay's operator: groups of members (by member id, or by the identity provider's groups for
-  signed-in members) and allow or deny rules between them. `kill -HUP <relay pid>` reloads it; a
-  file with a mistake keeps the active policy.
+  signed-in members) and allow or deny rules between them. `hoptell relay admin reload` (or
+  `kill -HUP <relay pid>`) reloads it and records the change in the audit log; a file with a
+  mistake keeps the active policy.
 
 ```json
 { "v": 1,
@@ -752,6 +819,7 @@ hoptell snapshot <file>               # prints a UTF-8 file snapshot with its SH
 hoptell snapshot --check <sha256> <file>  # exit 0 if the bytes match; nonzero if different or the check fails
 hoptell apply [<proposal id> [--preview | --yes]]   # proposals that answered your review sets; apply one
 hoptell apply --recover [--finish | --roll-back]    # finish or roll back an interrupted apply
+hoptell ui [--port N] [--open]        # the owner's pages on 127.0.0.1 (prints a single-use launch link)
 ```
 
 Expiry does not remove messages already delivered to a local inbox.
@@ -777,6 +845,7 @@ literal, and an empty value counts as unset.
 | `HOPTELL_PROFILE` | peers | name of the local relay profile (default: derived from the relay URL) |
 | `HOPTELL_RECEIPTS` | peers | `on` (default): messages stay until acknowledged; `off`: reading removes them |
 | `HOPTELL_NOTIFY` | peers | `off` disables desktop notifications about senders waiting for your decision |
+| `HOPTELL_ELICITATION` | peers | `read_inbox`: `read_inbox` may ask you about held messages in the client's dialog (allow-once or later); off otherwise |
 | `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440) |
 | `HOPTELL_HOST`, `HOPTELL_PORT` | relay | listen address (required) and port (default 7777) |
 | `HOPTELL_MEMBERS` | relay | members file with per-member tokens |
@@ -893,8 +962,9 @@ Results observed on 2026-10-08; behavior depends on the client build and configu
 | Antigravity 1.3.1 | tmux; listener | cancelled automatically |
 
 A listener must be started by the client and does not, by itself, wake an idle
-session. Elicitation results come from separate probe servers; hoptell does not
-yet request access approvals through elicitation.
+session. The elicitation results come from separate probe servers. hoptell's optional question
+during `read_inbox` (`HOPTELL_ELICITATION=read_inbox`) asks only in sessions on MCP revisions
+2025-06-18 and 2025-11-25 with form questions; behavior of other client versions is untested.
 
 ## Roadmap
 

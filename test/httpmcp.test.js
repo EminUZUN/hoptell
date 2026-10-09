@@ -49,6 +49,11 @@ async function setup(t, { env = {}, ...options } = {}) {
   };
   return { w, h, base, connect, hosts };
 }
+/** Poll `fn` until it holds or `ms` pass; returns whether it held. */
+async function until(fn, ms) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(25)) if (fn()) return true;
+  return Boolean(fn());
+}
 const init = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "0" } } });
 
 test("browser defenses and client tokens come before any MCP processing", async (t) => {
@@ -190,19 +195,27 @@ test("an idle session expires (404 afterwards); an engine start or connect that 
 });
 
 test("removing a client ends its pending wait with an answer; a long wait is not idleness", async (t) => {
-  const { w, h, connect } = await setup(t, { sweepMs: 100, idleMs: 300 });
+  // The idle limit is generous next to scheduling delays on a loaded machine: before the call
+  // arrives the session is genuinely idle, and a short limit could end it in that window.
+  const idleMs = 1500;
+  const sweepMs = 100;
+  const { w, h, connect } = await setup(t, { sweepMs, idleMs });
   const c = await addClient(w.home, "rm", { name: "rm-http" });
   const { client } = await connect(c.token);
   const wait = client.callTool({ name: "wait_for_message", arguments: { timeout_seconds: 60 } }).then(() => "returned", () => "ended");
-  await sleep(700); // longer than idleMs: the wait keeps the session
+  // A barrier, not a delay: from the moment the server holds the call, wait past the idle limit
+  // and several sweeps.
+  assert.ok(await until(() => h.sessions()[0]?.calls === 1, 10_000), "the wait is in progress");
+  const held = Date.now();
+  await until(() => Date.now() - held > idleMs + 5 * sweepMs, 10_000);
   assert.equal(h.sessions().length, 1, "a session with a call in progress is not idle");
+  assert.equal(h.sessions()[0].calls, 1);
   const t0 = Date.now();
   await removeClient(w.home, "rm");
   const outcome = await wait;
   assert.equal(outcome, "returned", "the wait answers (no messages) instead of hanging until the client gives up");
-  assert.ok(Date.now() - t0 < 2000, "it ends with the session");
-  for (let i = 0; i < 50 && h.sessions().length; i++) await sleep(50);
-  assert.equal(h.sessions().length, 0);
+  assert.ok(Date.now() - t0 < 10_000, "it ends with the session, long before its 60 s timeout");
+  assert.ok(await until(() => h.sessions().length === 0, 10_000));
 });
 
 test("simultaneous initializations with one hook registration: only one gets it", async (t) => {
@@ -257,24 +270,26 @@ test("a read whose response is lost keeps its messages: protocol 1 and receipts 
 });
 
 test("a dropped connection neither frees the call quota nor makes the session idle", async (t) => {
-  const { w, h, connect } = await setup(t, { idleMs: 200, sweepMs: 50 });
+  // As above: an idle limit generous next to scheduling delays, and a call that outlasts it well.
+  const idleMs = 1500;
+  const sweepMs = 50;
+  const { w, h, connect } = await setup(t, { idleMs, sweepMs });
   const c = await addClient(w.home, "q", { name: "q-http" });
   const { transport } = await connect(c.token);
   const sid = transport.sessionId;
   await transport.close(); // no stream of its own: only the call keeps the session busy
-  await droppedCall(h.port, c.token, sid, "wait_for_message", { timeout_seconds: 2 }, 901);
+  await droppedCall(h.port, c.token, sid, "wait_for_message", { timeout_seconds: 6 }, 901);
   // A barrier, not a delay: the second call goes only once the server holds the first one.
-  for (let i = 0; i < 200 && h.sessions()[0]?.calls !== 1; i++) await sleep(10);
-  assert.equal(h.sessions()[0]?.calls, 1, "the dropped call is in progress");
+  assert.ok(await until(() => h.sessions()[0]?.calls === 1, 10_000), "the dropped call is in progress");
+  const held = Date.now();
   // The first wait's handler still runs: a second one is refused, and the session stays.
   const second = await fetch(`http://127.0.0.1:${h.port}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${c.token}`, "mcp-session-id": sid, "mcp-protocol-version": "2025-06-18" }, body: JSON.stringify({ jsonrpc: "2.0", id: 902, method: "tools/call", params: { name: "wait_for_message", arguments: { timeout_seconds: 1 } } }) });
   assert.equal(second.status, 429);
-  await sleep(600); // past idleMs
+  await until(() => Date.now() - held > idleMs + 5 * sweepMs, 10_000); // past idleMs, the call still running
   assert.equal(h.sessions().length, 1, "a session with a call in progress is not idle");
-  await sleep(2000); // the first wait ends: quota free, and then idleness counts
-  // The first wait ends (its 2 s timeout), then idleness counts: polled, so a loaded machine has time.
-  for (let i = 0; i < 200 && h.sessions().length; i++) await sleep(50);
-  assert.equal(h.sessions().length, 0, "idle once no call is in progress");
+  assert.equal(h.sessions()[0].calls, 1, "the dropped connection did not free the quota");
+  // The first wait ends (its 6 s timeout), then idleness counts.
+  assert.ok(await until(() => h.sessions().length === 0, 20_000), "idle once no call is in progress");
 });
 
 test("DELETE answers a pending wait before closing; an invalid DELETE leaves the session alone", async (t) => {

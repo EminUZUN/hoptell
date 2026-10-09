@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Relay administration (`hoptell relay admin`) for the relay owner, on the relay host: views of
+  members (whether each has a token and how it is stored, never the token), devices, the policy,
+  grants summaries, revocations, metrics and the store's health, and an audit log of every change
+  (a hash chain, without message text, tokens or key material). `members` commands and
+  `relay broker-reset` record what they do there. With the relay running, the commands go through
+  a private admin socket in the state directory; with it stopped, they open the store themselves.
+  Online backups (`backup <dir>`) and an offline, resumable `restore` that never rolls
+  authorization back: grants, denies and used reply allowances stay as they are, and if the
+  access state was lost, messages to each member wait until that member publishes its grants
+  again. With the experimental encrypted messages, a restore makes each conversation replace
+  its group before its next commit, and encrypted messages accepted after the backup are lost.
+  `ui` serves a read-only page on loopback. The relay now opens its store at every start.
+- `hoptell ui`: the owner's pages on 127.0.0.1, without JavaScript, for what waits for a
+  decision, contacts, devices, settings and a doctor summary. A single-use launch link opens the
+  session; the Host, Origin and Sec-Fetch-Site are checked, and every form carries a token bound
+  to the session and to the choices it offered. The CLI and the UI decide through one shared
+  service, and a decision is refused when what was shown changed. Settings are written only if
+  the file did not change since it was shown; values from the environment are shown, not
+  written. With the experimental encrypted messages, a contact's encryption is a setting there,
+  held plaintext from a contact whose encryption is required is shown with a link to it, and
+  the encrypted conversation's checkpoint has its own page.
+- Optional: with `HOPTELL_ELICITATION=read_inbox`, `read_inbox` may first ask the owner in the
+  client's own dialog about one held sender (`allow-once` or `later`), on MCP revisions
+  2025-06-18 and 2025-11-25 only, within 60 seconds, with a 30-minute pause after a decline.
+- `hoptell contacts allow-once` is now refused while the contacts policy is damaged, as `allow`
+  and `block` already were.
 - Access control at the relay, in two parts. Each part can only refuse a message:
   - an operator policy (`hoptell relay --policy`), with groups of members or identity-provider
     groups;
