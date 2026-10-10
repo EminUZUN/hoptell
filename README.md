@@ -425,6 +425,41 @@ broker sign-ins made until now; removing or unlinking the member does too. If th
 `hoptell relay broker-reset --yes` (with the relay stopped) creates a new key and ends every
 broker sign-in.
 
+### Hosted MCP endpoints (experimental)
+
+**The host can read every message its tenants send and receive.** Hosted mode lets a relay
+operator serve MCP endpoints for people whose clients cannot run hoptell locally (for example
+custom connectors that connect from a vendor's cloud). It is not end-to-end encrypted, and it is
+experimental: `hoptell mcp-hosted --experimental`.
+
+- **Custody.** A hosted member is its own member id with `custody: "hosted"` and a host in the
+  relay's members file (`hoptell members host add <id>`, then `hoptell members add-hosted <name>
+  --host <id>`). It has no token and no devices; only its host signs in for it, with the host's
+  own token. Custody never changes: moving a person to or from hosted custody means a new member.
+  Peers see hosted members labeled in `list_peers`, and their messages carry that label.
+- **Senders.** A contact whose encryption is `required` is never sent to a hosted member. Under
+  `preferred`, a send needs `"custody": "allow-hosted"` on that contact's encryption entry in
+  contacts.json, and then goes as plaintext. An encrypted `@role` or `@all` never sends a hosted
+  member a copy: it is left out and counted as not encrypted (unavailable under `required`), also
+  with `allow-hosted`; a hosted name in a list of names is refused. A plaintext `@role` or `@all`
+  under an encryption policy leaves hosted members out. To reach one, send to it by name.
+  Recipients can treat hosted senders as a class with
+  `"hosted": "ask" | "block" | "allow"` (`ask` by default: a grant for that member is needed).
+- **The fence.** While the relay's access policy has a group with provider groups
+  (`oidcGroups`), hosted custody is fenced: hosted connections are refused, messages to or from
+  hosted members are held, and hosted members look unknown to everyone else. The policy itself
+  applies as always. `hoptell relay admin status` shows the fence and the held count.
+- **The endpoint** runs behind the operator's HTTPS proxy. It takes OAuth access tokens issued
+  for it (scope `hoptell.mcp`), links each `(issuer, subject)` to one hosted member
+  (`hoptell mcp-hosted --experimental link`), and offers `send_message`, `read_inbox`,
+  `wait_for_message`, `ack_messages` and `list_peers`. Owners decide held contacts at
+  `https://<host>/owner`; grants and contact requests are shown only there. Owner sign-ins are
+  kept in memory: restarting the endpoint signs owners out.
+- **Limits** (sessions, rates, stored messages and bytes, the disk floors, live engines) and
+  retention (messages are deleted 7 days after arrival, read or not; the data of a member that
+  is unlinked, or that the relay confirms it no longer holds, is deleted within 24 hours) use placeholder values; they are configurable and still open for
+  the owner to decide.
+
 ## Teams and swarms
 
 **Names.** Each agent has a peer name: letters, digits, `_` and `-`. Set it with
@@ -792,6 +827,126 @@ because a proposal asks.
 Review set records (with the captured files) are kept for 7 days, or until every proposal for
 the set is applied or expired, whichever is later.
 
+### Encrypted messages: your devices and verification (experimental)
+
+With `HOPTELL_EXPERIMENTAL_E2EE=1` and a relay started with `--experimental-e2ee`, each hoptell
+home has one MLS device per relay realm. Encrypted messaging is experimental and not
+independently reviewed.
+
+- **Enroll.** `hoptell device enroll` needs managed contacts (`hoptell contacts init`): the
+  new device is recorded there as this home's own device before the relay hears of it. A home
+  holds one device per realm; enrolling a second relay profile in a realm the home already has is
+  refused. `hoptell device retire` gives up this profile's device (it may still read, never
+  send). Retiring the profile that holds this home's own device in the realm keeps that record,
+  marked retired: any later enrollment in that realm, from any profile, is refused until you run
+  `hoptell device enroll --new-baseline`. Retiring a duplicate profile (a second one in the same
+  realm) leaves the other profile's device as it is.
+- **Your other devices** are trusted only when you accept them, never because the relay lists
+  them. Compare the fingerprint `hoptell device status` shows on the new device, then run
+  `hoptell device accept <device>` on a device you already accepted, and the same in the other
+  direction on the new one. `hoptell device list` shows your accepted devices, devices the relay
+  lists that you have not accepted, and devices no longer listed. A conversation that holds a
+  device of yours you have not accepted stops (nothing is sent or committed there) until you
+  accept it or revoke it. `hoptell device enroll --new-baseline` starts again with a new device
+  id, on your explicit confirmation: after you retired this home's device in the realm, when
+  every device of yours is lost, or when this device's record cannot be read. The replaced record
+  is kept for review, and your contacts see the new device as a new device of yours.
+- **Verify a contact** with `hoptell contacts verify <member id>`: it shows your devices and
+  theirs, each with its fingerprint and state, and the safety number to compare in person or over
+  a channel you trust. Your half of the number comes from the devices you accepted, never from
+  the relay's list. Verify refuses while the relay lists a device of yours you have not accepted,
+  and it does not pin while one of the contact's pinned devices is no longer listed.
+- **A device the relay stops listing** is not removed: messages to that contact wait until it is
+  listed again, a revocation signed by another of their devices arrives, or you run
+  `hoptell contacts forget-device <member id> <device>`. A message that reached no device of the
+  contact is reported as not delivered.
+- **Limit (first use).** A contact you have not verified is trusted on first use: hoptell takes
+  the relay's list of their devices at the first encrypted message. A relay can add a device
+  there. Verifying the contact, or setting `requireVerified`, closes this for later messages.
+- Only the post-quantum MLS suite 0x004D is used; a binding without it is refused. Each
+  conversation sends an update at least every 7 days of activity and after a member is removed;
+  `hoptell doctor` lists members whose last update is older than 30 days. A planned key rotation
+  (`hoptell device rotate`) needs a device without encrypted conversations, and device-signed
+  rotation and revocation need an MLS binding that can sign (otherwise they refuse before
+  changing anything; the relay owner can still revoke a device with
+  `hoptell members device-revoke`).
+- **Proof of the device key.** A connection acts for a device (receives its messages, publishes
+  its KeyPackages, transfers) only after it signs a fresh relay challenge with that device's key;
+  a member token alone is not enough. An older hoptell cannot attach to such a relay and needs an
+  update. Commands such as `hoptell device replenish` prove the device on their own connection
+  and receive none of its messages. A rotation is saved before the relay hears of it and is
+  retried at the next start if it was interrupted or the relay refused it.
+- **Expired KeyPackages.** With an MLS binding that can prune, the private keys of KeyPackages
+  that expired unused are deleted after a one-day grace period, within six hours while the engine
+  runs (it checks at start, at attach, when publishing, and every 6 hours, also while the relay
+  refuses the device). A device that is not running keeps them until its next
+  start, and older backups still hold them. `hoptell doctor` says when the binding cannot prune.
+
+### Larger file transfers (experimental)
+
+With the experimental encrypted messages (`HOPTELL_EXPERIMENTAL_E2EE=1` and an enrolled device),
+a relay started with `--experimental-e2ee`, and approved folders, agents also get
+`send_transfer`: one file of any content, up to 200 MiB, to one peer.
+
+- The file is read once through the guarded reader into a private outbox
+  (`~/.hoptell/outgoing/`), encrypted there in 256 KiB chunks (AES-256-GCM, a new key for each
+  transfer) and uploaded as ciphertext. Retries and resumes send the stored ciphertext again;
+  nothing is encrypted twice. The key travels only inside the encrypted message that announces
+  the file.
+- The relay keeps the encrypted chunks for 7 days after the upload is sealed (an upload not
+  finished within 24 hours expires). It serves them only to the recipient's devices that were in
+  the conversation when the message was accepted, and only while the relay's access rules still
+  let the sender reach the recipient, as the sender is signed in now (a changed identity-provider
+  group or a sign-out stops it). The sender can withdraw the file earlier.
+- The recipient's agent only sees `a file transfer from X (N bytes, label "...") is waiting for
+  your user`. hoptell fetches it only if you allowed transfers from that contact in
+  `contacts.json` (the default is not allowed):
+
+  ```json
+  "transfers": {
+    "contacts": [{ "realm": "<realm id>", "member": "<member id>", "allowed": true, "maxBytes": 104857600 }],
+    "stagedBytes": 2147483648, "stagedFiles": 20, "concurrent": 2
+  }
+  ```
+
+  The size comes from the encrypted, authenticated header and is checked before anything is
+  fetched, and so are this home's limits (by default 2 GiB and 20 files staged, 2 downloads at
+  once). A file refused because a limit is reached is not fetched later: the sender has to send
+  it again once space is free. The label is for display only.
+- A fetched file is checked chunk by chunk and as a whole, and waits in `~/.hoptell/incoming/`
+  under a local id; a name from the sender never chooses a path. A staged file you do not save is
+  deleted after 7 days.
+
+```sh
+hoptell transfers                      # what is staged or being fetched, with the relay's expiry
+hoptell transfers cancel <t_id>        # stop or delete one on this device only
+hoptell save <t_id> <path>             # never replaces an existing file
+hoptell save <t_id> <path> --overwrite [--yes]   # shows the file it replaces and asks
+hoptell save --forget <t_id>           # drop the record of an interrupted save you have looked at
+hoptell doctor [--fix]                 # finishes interrupted saves; --fix removes leftovers
+```
+
+`save` writes a temporary file next to the destination, checks its SHA-256 again, then links it
+into place, which fails if anything exists there; with `--overwrite` it renames it over the file
+it showed you, after checking again that it is still that file. A journal in
+`~/.hoptell/saves/` lets `hoptell doctor` finish or report an interrupted save; it deletes only a
+file it can prove it created, and keeps (and reports) anything else. A process of your own
+account that swaps the folder or the file in the instant before the rename can redirect it
+within your own files; the check after the rename reports a swapped file. No MCP tool saves or
+opens anything.
+
+A review set larger than one frame goes the same way when encrypted messages reach the peer: the
+manifest in the message, the contents as the transfer, up to 8 MiB. It needs no `transfers`
+entry; the reviewer's hoptell checks every file against the manifest before the agent sees it.
+
+On the relay, transfers live in its store. `--transfer-quota` (20 GiB in all) and
+`--transfer-member-quota` (1 GiB per member) bound what members can keep there, with at most
+20 open uploads and 1,000 transfers (recently ended ones included) per member. Plan for about
+1.25 times the transfer quota on disk, plus the write-ahead log limit (below) and 128 MiB. The
+relay's policy can refuse uploads with `"transfers": [{ "from": "group:<name>", "action": "deny" }]`
+(selectors as in its rules, the first match decides, default allow); a group's identity-provider
+groups count as the uploader is signed in now.
+
 ## CLI
 
 ```
@@ -820,6 +975,8 @@ hoptell snapshot --check <sha256> <file>  # exit 0 if the bytes match; nonzero i
 hoptell apply [<proposal id> [--preview | --yes]]   # proposals that answered your review sets; apply one
 hoptell apply --recover [--finish | --roll-back]    # finish or roll back an interrupted apply
 hoptell ui [--port N] [--open]        # the owner's pages on 127.0.0.1 (prints a single-use launch link)
+hoptell transfers [cancel <t_id>]     # experimental: file transfers staged for you
+hoptell save <t_id> <path> [--overwrite] [--yes]    # experimental: save one where you choose
 ```
 
 Expiry does not remove messages already delivered to a local inbox.
@@ -859,6 +1016,8 @@ literal, and an empty value counts as unset.
 | `HOPTELL_TRUSTED_PROXIES` | relay | proxy addresses or CIDR ranges whose `X-Forwarded-For` is used in logs |
 | `HOPTELL_LOG_FORMAT` | relay | `text` (default) or `json` |
 | `HOPTELL_METRICS_PORT`, `HOPTELL_METRICS_HOST` | relay | serve `/metrics` on this port; host defaults to 127.0.0.1 |
+| `HOPTELL_WAL_SOFT_LIMIT`, `HOPTELL_WAL_HARD_LIMIT` | relay | the store's write-ahead log limits (`--wal-soft-limit`, `--wal-hard-limit`; defaults 256MiB and 512MiB): above the soft limit uploads wait, above the hard limit messages and commits too, and 64 MiB later everything but reads, until a checkpoint succeeds |
+| `HOPTELL_TRANSFER_QUOTA`, `HOPTELL_TRANSFER_MEMBER_QUOTA` | relay | experimental transfers: storage in all and per member (defaults 20GiB and 1GiB) |
 
 ### Keyed log fingerprints (optional)
 
@@ -947,8 +1106,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). How hoptell handles d
   tested with the Claude Code terminal app; the VS Code extension and Desktop app are untested.
   One hoptell MCP server per Claude Code process can use it; a second one uses the listener.
 - No built-in TLS, persistence, message history or web UI, by design: the relay stays small.
-- The file tools (`send_file`, `verify_snapshot`, `send_review_set`, `verify_review_set`) and
-  `hoptell apply` need macOS or Linux. Windows peers can still
+- The file tools (`send_file`, `verify_snapshot`, `send_review_set`, `verify_review_set`,
+  `send_transfer`) and `hoptell apply` need macOS or Linux. Windows peers can still
   receive and review snapshots.
 
 ## Tested clients

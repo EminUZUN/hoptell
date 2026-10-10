@@ -18,7 +18,7 @@ import { loadMembersFile, revokeMember } from "../lib/members.js";
 import { auditedChange } from "../lib/admincli.js";
 import { loadRealm, lockStateDir } from "../lib/realm.js";
 import { newMemberId, startRelay } from "../lib/relay.js";
-import { openRelayStore } from "../lib/relaystore.js";
+import { RELAY_MIGRATIONS, openRelayStore } from "../lib/relaystore.js";
 import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { RelayClient } from "../lib/client.js";
 import { sleep } from "./helpers.js";
@@ -179,9 +179,13 @@ test("store view: table counts come from the sweep's cache, with their age; chec
   const w = await adminRelay(t);
   let s = await adminRequest(w.state, "store");
   assert.deepEqual(s.counts.admin_audit, { count: null, ageSeconds: null, cap: 100000 }, "never counted for a view");
-  assert.equal(s.schema.version, 4);
+  assert.equal(s.schema.version, RELAY_MIGRATIONS.length, "with phase 6's transfer tables and the later migrations");
   assert.match(s.instance, /^[0-9a-f]{32}$/);
-  assert.equal(s.admission, null);
+  // WAL admission (design 6): the limits in force and nothing refused on an idle store.
+  assert.deepEqual(s.admission.limits, { soft: 256 * 1024 * 1024, hard: 512 * 1024 * 1024, maintenanceBudget: 64 * 1024 * 1024 });
+  assert.deepEqual(s.admission.refused, { bulk: false, progress: false, maintenance: false });
+  assert.equal(s.size.autoVacuum, 2, "a new store has incremental auto-vacuum");
+  assert.equal(s.schema.pageSize, 4096);
   await w.admin.maintain();
   s = await adminRequest(w.state, "store");
   assert.equal(s.counts.admin_audit.count, 0);

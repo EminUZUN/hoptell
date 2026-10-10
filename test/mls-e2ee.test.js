@@ -17,7 +17,7 @@ import { decide, evaluate, pinOf } from "../lib/mls/trust.js";
 import { DAY } from "../lib/mls/policy.js";
 import { verifyCommand } from "../lib/mls/cli.js";
 import { createFakeDriver } from "./fake-mls-driver.js";
-import { deviceRelay, memoryContacts, refusal, tmpDir } from "./mls-helpers.js";
+import { acceptOwnDevices, deviceRelay, memoryContacts, ownFor, refusal, tmpDir } from "./mls-helpers.js";
 
 const PASS = "correct horse battery staple";
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
@@ -26,8 +26,8 @@ const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
  * A device of `member` (a home with its store, enrolled) and sessions on it. `sessions` are the
  * session names this device's connections hold; each gets an e2ee engine that records deliveries.
  */
-async function device(t, w, member, { sessions = [member], dir = tmpDir(t), contacts = null, capacity, fault = null, driver = createFakeDriver({ seed: `${member}-${dir}`, now: w.clock.now }) } = {}) {
-  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now });
+async function device(t, w, member, { sessions = [member], dir = tmpDir(t), contacts = memoryContacts(undefined, { file: path.join(dir, "contacts-test.json") }), capacity, fault = null, driver = createFakeDriver({ seed: `${member}-${dir}`, now: w.clock.now }) } = {}) {
+  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(contacts, dir, "relay-test") });
   // An encrypted send implies a policy for the realm (the session sends encrypted only then).
   if (contacts?.doc) contacts.doc.encryption ??= [{ realm: w.realm, mode: "preferred" }];
   const enrollClient = await w.client(member);
@@ -105,6 +105,7 @@ test("MI4 target sessions: two sessions on one device, two devices of one member
   const alice = await device(t, w, "alice");
   const bob = await device(t, w, "bob", { sessions: ["bob", "bob-other"] });
   const bob2 = await device(t, w, "bob", { sessions: ["bob-laptop"] });
+  await acceptOwnDevices(bob, bob2); // the owner's two-way acceptance (A1)
   const sent = capture(alice.s.alice.client, (f) => f.type === "send_e2ee" && f.kind === "app");
   assert.equal((await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "for the bob session" })).state, "accepted");
   await until(() => bob.s.bob.got.length === 1, "bob's delivery");
@@ -187,6 +188,7 @@ test("a roster delta that disagrees with the authenticated commit is refused by 
   const alice = await device(t, w, "alice");
   const bob = await device(t, w, "bob");
   const bob2 = await device(t, w, "bob", { sessions: ["bob-laptop"] });
+  await acceptOwnDevices(bob, bob2);
   await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "one" });
   await until(() => bob.s.bob.got.length === 1, "first");
   // A relay that lies about the delta (it claims bob's laptop was removed) to both bob devices.
@@ -300,7 +302,7 @@ test("MI5 at the device: a tampered application message first, the valid one nex
   const bytes = Buffer.from(genuine.mls, "base64");
   bytes[bytes.length - 3] ^= 1;
   // An engine of the "bob" session on bob's device (its own connection is closed).
-  const e = createE2ee({ store: bob.store, driver: bob.driver, client: bob.s["bob-other"].client, session: "bob", home: bob.dir, profile: "relay-test", deliver: async (m) => void got.push(m), now: w.clock.now });
+  const e = createE2ee({ store: bob.store, driver: bob.driver, client: bob.s["bob-other"].client, session: "bob", home: bob.dir, profile: "relay-test", contacts: bob.contacts, deliver: async (m) => void got.push(m), now: w.clock.now });
   const got = [];
   assert.equal(await e.receive({ ...genuine, delivery: `e_${"1".repeat(32)}`, mls: bytes.toString("base64") }, () => {}), "refused");
   assert.equal(await e.receive({ ...genuine, delivery: `e_${"2".repeat(32)}`, mls: "AAAA" }, () => {}), "refused", "malformed content");
@@ -351,6 +353,7 @@ test("holds: a new device of a pinned contact holds sending until the owner acce
   await until(() => bob.s.bob.got.length === 1, "first");
   assert.equal(contacts.doc.pins.find((p) => p.member === bob.id).how, "relay-tofu");
   const bob2 = await device(t, w, "bob", { sessions: ["bob-laptop"] });
+  await acceptOwnDevices(bob, bob2);
   const held = await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "waits for a decision" });
   assert.equal(held.state, "held");
   await settle();
@@ -371,8 +374,13 @@ test("holds: a new device of a pinned contact holds sending until the owner acce
   const r = await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "after the revocation" });
   assert.equal(r.state, "unsent");
   await settle();
-  assert.equal(bob.s.bob.got.length, 2, "nothing sent before the removal is merged");
-  assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
+  if (bob.s.bob.got.length === 2) {
+    assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
+  } else {
+    // A merged removal makes bob owe an update (A2): his commit can show alice her own removal in
+    // the log before recover(), and she then sends; never before the removal was merged.
+    assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "sent only after the removal was merged");
+  }
   await alice.s.alice.e2ee.recover();
   await until(() => bob.s.bob.got.length === 3, "sent after the merge");
   assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "the revoked device left the routing roster");
@@ -393,7 +401,8 @@ const deliveriesOf = (d, extra = []) => {
 };
 
 test("crash windows (SIGKILL) at every receive point: delivered exactly once into the pipeline (deduplicated by delivery id)", async (t) => {
-  for (const point of ["receive-after-persist", "receive-after-deliver"]) {
+  // welcome-after-persist: the first message's Welcome joined and persisted, not yet acknowledged.
+  for (const point of ["welcome-after-persist", "receive-after-persist", "receive-after-deliver"]) {
     const w = await deviceRelay(t, { e2ee: true });
     const alice = await device(t, w, "alice");
     const bob = await device(t, w, "bob", { sessions: [] });
@@ -410,7 +419,7 @@ test("crash windows (SIGKILL) at every receive point: delivered exactly once int
     assert.ok(all.length >= 1, point);
     assert.equal(new Set(all.map((m) => m.id)).size, 1, `${point}: one delivery id (the pipeline stores it once)`);
     assert.equal(all[0].text, `through ${point}`);
-    if (point === "receive-after-persist") assert.equal(all.length, 1, "nothing reached the pipeline before the crash");
+    if (point !== "receive-after-deliver") assert.equal(all.length, 1, "nothing reached the pipeline before the crash");
   }
 });
 
@@ -472,7 +481,11 @@ test("a planned rotation is refused while the device has encrypted conversations
 const noop = () => {};
 /** Another e2ee engine of device `d` for `session`, not attached (its frames are handed in by the test). */
 async function manual(w, d, session = d.member, opts = {}) {
-  const client = await w.client(d.member);
+  const client = opts.client ?? (await w.client(d.member));
+  // A9: the device proves its key on a command-style (send-mode) connection before it acts there;
+  // a session's connection attaches through e2ee.attach() when the test says so.
+  client.proveWith = d.store;
+  if (client.mode === "send") await d.store.attach(client);
   const got = [];
   const e2ee = createE2ee({ store: d.store, driver: d.driver, client, session, home: d.dir, profile: "relay-test", contacts: d.contacts, deliver: async (m) => void got.push(m), now: w.clock.now, ...opts });
   return { client, e2ee, got };
@@ -481,12 +494,17 @@ async function manual(w, d, session = d.member, opts = {}) {
 async function initial(t, { bobContacts = null } = {}) {
   const w = await deviceRelay(t, { e2ee: true });
   const a = await device(t, w, "alice");
-  const b = await device(t, w, "bob", { contacts: bobContacts });
+  const b = await device(t, w, "bob", bobContacts ? { contacts: bobContacts } : {});
   await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "initial" });
   await until(() => b.s.bob.got.length === 1, "initial");
   b.s.bob.client.close();
   await settle(30);
   return { w, a, b };
+}
+/** `a`'s owner accepts `extra`, a new device of contact `b` (hoptell contacts accept-device). */
+async function acceptPeerDevice(a, b, extra) {
+  const listed = await a.s.alice.client.rpc({ type: "device_list", member: b.id });
+  await a.contacts.updatePins((d) => decide(d, listed.realm, b.id, evaluate(d, listed.realm, b.id, listed.devices), { accept: [extra.device] }));
 }
 const nextApp = (w, b) => w.ds.pending({ member: b.id, device: b.device, limit: 100 }).find((f) => f.kind === "app");
 
@@ -607,6 +625,7 @@ test("MII3: a sealed outbox entry never reaches a device whose trusted revocatio
   const a = await device(t, w, "alice", { contacts });
   const b = await device(t, w, "bob");
   const b2 = await device(t, w, "bob", { sessions: ["bob-laptop"] });
+  await acceptOwnDevices(b, b2);
   await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "initial" });
   await until(() => b.s.bob.got.length === 1, "initial");
   const writer = await manual(w, a, "alice", { fault: (p) => { if (p === "send-after-persist") throw new Error("crash before publishing"); } });
@@ -742,6 +761,7 @@ test("MII2: a commit adding a device the owner has not accepted waits (not merge
   const contacts = memoryContacts();
   const { w, a, b } = await initial(t, { bobContacts: contacts });
   const extra = await device(t, w, "alice", { sessions: [] });
+  await acceptOwnDevices(a, extra); // alice's owner accepted it on both of her devices; bob has not
   assert.equal(pinOf(contacts.doc, w.realm, a.id).devices.length, 1);
   const gid = (await a.s.alice.e2ee.checkpoint(b.id)).group;
   // alice's device adds her new device itself (bypassing her own gate, as a modified client could).
@@ -776,6 +796,7 @@ test("MII11: while a commit adding an own device waits for the owner, nothing is
   const contacts = memoryContacts();
   const { w, a, b } = await initial(t, { bobContacts: contacts });
   const extra = await device(t, w, "bob", { sessions: [] });
+  await acceptPeerDevice(a, b, extra);
   // alice's next message adds bob's new device; bob's owner has not accepted it yet.
   await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "adds bob's new device" });
   const commit = w.ds.pending({ member: b.id, device: b.device }).find((f) => f.kind === "commit");
@@ -787,9 +808,9 @@ test("MII11: while a commit adding an own device waits for the owner, nothing is
   assert.equal(sent.state, "held", "kept until the group is usable at the relay's epoch");
   assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 1);
   assert.equal(w.ds.pending({ member: a.id, device: a.device }).filter((f) => f.kind === "app").length, 0, "nothing sealed in the old epoch");
-  // The owner accepts the device: the commit merges and the message is sealed at the current epoch.
-  const listed = await old.client.rpc({ type: "device_list", member: b.id });
-  await contacts.updatePins((d) => decide(d, w.realm, b.id, evaluate(d, w.realm, b.id, listed.devices), { accept: [extra.device] }));
+  // The owner accepts the device (an own device: hoptell device accept, A1): the commit merges and
+  // the message is sealed at the current epoch.
+  await acceptOwnDevices(b, extra);
   assert.equal(await old.e2ee.receive(commit, noop), "delivered");
   await until(() => a.s.alice.got.length === 1, "the held message after the admission");
   assert.equal(a.s.alice.got[0].text, "sent while the own device's admission waits");
@@ -799,13 +820,14 @@ test("MII11: while a commit adding an own device waits for the owner, nothing is
 test("MII11 OpenMLS: an own-device admission deferred past the peer's epoch retention never yields an accepted, undecryptable send", { skip: noWasm }, async (t) => {
   const contacts = memoryContacts();
   const w = await deviceRelay(t, { e2ee: true });
-  const a = await device(t, w, "alice", { driver: createOpenMlsDriver(WASM, { suite: 77 }) });
-  const b = await device(t, w, "bob", { contacts, driver: createOpenMlsDriver(WASM, { suite: 77 }) });
+  const a = await device(t, w, "alice", { driver: createOpenMlsDriver(WASM, { testOnlySuite: 77 }) });
+  const b = await device(t, w, "bob", { contacts, driver: createOpenMlsDriver(WASM, { testOnlySuite: 77 }) });
   await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "initial" });
   await until(() => b.s.bob.got.length === 1, "initial");
   b.s.bob.client.close();
   await settle(30);
-  const extra = await device(t, w, "bob", { sessions: [], driver: createOpenMlsDriver(WASM, { suite: 77 }) });
+  const extra = await device(t, w, "bob", { sessions: [], driver: createOpenMlsDriver(WASM, { testOnlySuite: 77 }) });
+  await acceptPeerDevice(a, b, extra);
   await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "adds an own device bob has not accepted" });
   const commit = w.ds.pending({ member: b.id, device: b.device }).find((f) => f.kind === "commit");
   const old = await manual(w, b, "bob");
@@ -818,13 +840,14 @@ test("MII11 OpenMLS: an own-device admission deferred past the peer's epoch rete
   assert.equal(sent.state, "held");
   assert.equal(w.ds.pending({ member: a.id, device: a.device }).filter((f) => f.kind === "app").length, 0, "nothing undecryptable was accepted");
   assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 1);
-  // Accepted: the device catches up to epoch 6 and the message is delivered there.
-  const listed = await old.client.rpc({ type: "device_list", member: b.id });
-  await contacts.updatePins((d) => decide(d, w.realm, b.id, evaluate(d, w.realm, b.id, listed.devices), { accept: [extra.device] }));
+  // Accepted (an own device: hoptell device accept, A1): the device catches up to epoch 6 and the
+  // message is delivered there.
+  await acceptOwnDevices(b, extra);
   assert.equal(await old.e2ee.receive(commit, noop), "delivered");
   await until(() => a.s.alice.got.length === 1, "the held message, decrypted");
   assert.equal(a.s.alice.got[0].text, "never sealed in a pruned epoch");
-  assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 6);
+  // Epoch 7: its first send 8 days after joining updated first (the fresh-update policy, A2).
+  assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 7);
 });
 
 test("MII2: a Welcome into a group with an unaccepted device waits for the owner (the key is kept); with a trusted-revoked device it is refused", async (t) => {
@@ -832,6 +855,7 @@ test("MII2: a Welcome into a group with an unaccepted device waits for the owner
     const contacts = memoryContacts();
     const { w, a, b } = await initial(t, { bobContacts: contacts });
     const extra = await device(t, w, "alice", { sessions: [] });
+    await acceptOwnDevices(a, extra); // alice's own devices, accepted by her owner (A1)
     const listed = await (await w.client("bob")).rpc({ type: "device_list", member: a.id });
     if (kind === "revoked") {
       // bob accepted the device, then observed its trusted revocation (kept, whatever the relay serves).
@@ -860,6 +884,7 @@ test("MII8 at the device: a removed device whose older commits were coalesced aw
   const a = await device(t, w, "alice");
   const b = await device(t, w, "bob");
   const b2 = await device(t, w, "bob", { sessions: [] });
+  await acceptOwnDevices(b, b2);
   assert.equal((await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "initial" })).state, "accepted");
   const gid = (await a.s.alice.e2ee.checkpoint(b.id)).group;
   // Two commits (opaque to the relay); the second removes b2, whose queue is at its limit.
@@ -874,25 +899,44 @@ test("MII8 at the device: a removed device whose older commits were coalesced aw
   assert.equal((await r.e2ee.status()).groups[gid].state, "removed");
 });
 
-test("a legacy-allow home (contacts not managed, no pins or policy can be kept) receives as a home without pins, and seals nothing", async (t) => {
+test("a legacy-allow home (contacts not managed: no own baseline or pins can be kept) neither enrolls nor encrypts (A1)", async (t) => {
   const legacy = { currentPolicy: () => ({ doc: null, legacy: true }), updatePins: async () => Promise.reject(new Error("this home's contacts are not managed yet")) };
   const w = await deviceRelay(t, { e2ee: true });
-  const a = await device(t, w, "alice");
-  const b = await device(t, w, "bob", { contacts: legacy });
-  await a.s.alice.e2ee.send({ to: { member: b.id, session: "bob" }, body: "to a legacy home" });
-  await until(() => b.s.bob.got.length === 1, "delivered");
-  // It keeps no encryption policy either, so it seals nothing (its sessions send plaintext).
-  await assert.rejects(b.s.bob.e2ee.send({ to: { member: a.id, session: "alice" }, body: "back" }), (e) => e.code === "policy");
+  // Enrollment step 2 (the own baseline) cannot be written: nothing is registered with the relay.
+  await assert.rejects(device(t, w, "bob", { contacts: legacy }), (e) => e.code === "no_baseline");
+  assert.equal((await (await w.client("bob")).rpc({ type: "device_list" })).devices.length, 0, "the relay never heard of it");
+  // A device enrolled while the contacts were managed, in a home whose contacts are now unusable:
+  // its engine refuses to attach (no baseline, no encryption), never joining or sealing anything.
+  const b = await device(t, w, "bob", { sessions: [] });
+  const client = await w.client("bob", { session: "bob" });
+  const e = createE2ee({ store: b.store, driver: b.driver, client, session: "bob", home: b.dir, profile: "relay-test", contacts: legacy, now: w.clock.now });
+  t.after(() => e.close());
+  await assert.rejects(e.attach(), (x) => x.code === "no_baseline");
 });
 
-/** `client`'s requests of the types in `types` go over fresh connections of `member`, `every` per connection (the per-connection rate limit). */
-function spread(w, client, member, every = 15, types = null) {
+/**
+ * `client`'s requests of the types in `types` go over fresh connections of `member`, `every` per
+ * connection (the per-connection rate limit). A9: device-scoped frames need the device proven on
+ * each connection, which takes the device lock: a pool of `pool` connections is proven up front,
+ * outside any engine transaction.
+ */
+async function spread(w, client, member, every = 15, types = null, pool = 64) {
   const rpc = client.rpc.bind(client);
+  const prove = client.proveWith && (!types || types.some((x) => x !== "device_list"));
+  const ready = [];
+  if (prove) for (let i = 0; i < pool; i++) {
+    const c = await w.client(member);
+    await client.proveWith.attach(c);
+    ready.push(c);
+  }
   let via = null;
   let n = 0;
   client.rpc = async (f) => {
     if (types && !types.includes(f.type)) return rpc(f);
-    if (!via || n++ % every === 0) via = await w.client(member);
+    if (!via || n++ % every === 0) {
+      if (prove && !ready.length) throw new Error("spread: the pool of proven connections is used up");
+      via = prove ? ready.shift() : await w.client(member);
+    }
     return via.rpc(f);
   };
 }
@@ -902,13 +946,13 @@ test("MII8 at the device: an offline device reaches the replacement's Welcome pa
   const a = await device(t, w, "alice");
   const b = await device(t, w, "bob", { sessions: [] }); // enrolled, never attached: generation 1's Welcome is not processed
   const writer = await manual(w, a, "alice");
-  spread(w, writer.client, "alice");
+  await spread(w, writer.client, "alice");
   for (let i = 0; i < 50; i++) assert.equal((await writer.e2ee.send({ to: { member: b.id, session: "bob" }, body: `queued ${i}` })).state, "accepted");
   assert.equal((await writer.e2ee.replace(b.id)).generation, 2);
   const kinds = w.ds.pending({ member: b.id, device: b.device, limit: 200 }).map((f) => `${f.kind} ${f.generation}`);
   assert.deepEqual([kinds.length, kinds.indexOf("welcome 2"), kinds.filter((k) => k === "app 1").length], [101, 50, 50]);
   const client = await w.client("bob", { session: "bob" });
-  spread(w, client, "bob", 15, ["device_list"]);
+  await spread(w, client, "bob", 15, ["device_list"]);
   const recv = await manual(w, b, "bob", { client });
   // Before the device holds a newer generation, a message of a group it has not joined waits for its Welcome.
   assert.equal(await recv.e2ee.receive(w.ds.pending({ member: b.id, device: b.device, limit: 1 })[0], noop), "later");

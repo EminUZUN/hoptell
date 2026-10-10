@@ -10,7 +10,8 @@ import { DatabaseSync } from "node:sqlite";
 import { lockStateDir } from "../lib/realm.js";
 import { openRelayDb } from "../lib/relaydb.js";
 import { DEVICE_MIGRATIONS } from "../lib/mls/relaydir.js";
-import { E2EE_MIGRATIONS } from "../lib/mls/relayds.js";
+import { E2EE_MIGRATIONS, E2EE_PAYLOAD_MIGRATION } from "../lib/mls/relayds.js";
+import { RELATION_SENDER_MIGRATION, TRANSFER_MIGRATION } from "../lib/mls/relaytransfers.js";
 import { ADMIN_MIGRATION, RELAY_MIGRATIONS, appendAudit, auditOut, countRows, openRelayStore, storeMeta, sweepAudit, verifyAudit } from "../lib/relaystore.js";
 
 function stateDir(t) {
@@ -31,9 +32,12 @@ test("migration 4 is appended after 3.2's and 3.3's, one list: a v1 store keeps 
   v1.tx((h) => h.run("INSERT INTO devices (member_id, device_id, sig_key, pin, seq, created) VALUES ('m_x', 'd', x'00', x'00', 0, 1)"));
   v1.close();
   const db = openRelayStore({ dir, fullfsync: false });
-  assert.equal(db.version, 4);
+  assert.equal(db.version, RELAY_MIGRATIONS.length, "with migration 5 on, phase 6's transfers and the later ones");
   assert.deepEqual(RELAY_MIGRATIONS.slice(0, 3), [...DEVICE_MIGRATIONS, ...E2EE_MIGRATIONS], "migrations 1 to 3 are 3.2's and 3.3's, unchanged and in their order");
   assert.equal(RELAY_MIGRATIONS[3], ADMIN_MIGRATION);
+  assert.equal(RELAY_MIGRATIONS[4], TRANSFER_MIGRATION);
+  assert.equal(RELAY_MIGRATIONS[5], RELATION_SENDER_MIGRATION);
+  assert.equal(RELAY_MIGRATIONS[6], E2EE_PAYLOAD_MIGRATION);
   assert.equal(Number(db.get("SELECT replace_required FROM e2ee_groups LIMIT 1")?.replace_required ?? 0), 0);
   assert.deepEqual({ ...db.get("SELECT member_id, suspended FROM devices") }, { member_id: "m_x", suspended: 0 });
   assert.match(storeMeta(db, "instance"), /^[0-9a-f]{32}$/);
@@ -45,13 +49,13 @@ test("migration 4 is appended after 3.2's and 3.3's, one list: a v1 store keeps 
   again.close();
 });
 
-test("a store at next's migration 3 (3.2 and 3.3) upgrades to 4 in place, its conversations kept, none marked", (t) => {
+test("a store at next's migration 3 (3.2 and 3.3) upgrades to the later migrations in place, its conversations kept, none marked", (t) => {
   const dir = stateDir(t);
   const v3 = openRelayDb({ dir, migrations: [...DEVICE_MIGRATIONS, ...E2EE_MIGRATIONS], fullfsync: false });
   v3.tx((h) => h.run("INSERT INTO e2ee_groups (group_id, member_a, member_b, generation, state, epoch, created) VALUES (?, 'm_a', 'm_b', 1, 'active', 3, 1)", "0".repeat(32)));
   v3.close();
   const db = openRelayStore({ dir, fullfsync: false });
-  assert.equal(db.version, 4);
+  assert.equal(db.version, RELAY_MIGRATIONS.length);
   assert.deepEqual({ ...db.get("SELECT epoch, replace_required FROM e2ee_groups") }, { epoch: 3, replace_required: 0 });
   db.close();
 });

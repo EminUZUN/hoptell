@@ -8,6 +8,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { startRelay } from "../lib/relay.js";
 import { BIN } from "../lib/config.js";
 
+// The suite never shows desktop notifications, also from the CLI and servers it starts (they
+// inherit the environment); tests of notifications inject their own notifier.
+process.env.HOPTELL_NOTIFY = "off";
+
 // Test tokens are generated per run, so no token value is written in the source.
 export const fakeToken = () => crypto.randomBytes(16).toString("hex");
 export const TOKEN = fakeToken();

@@ -16,7 +16,7 @@ import { createDeviceDirectory, packageRef } from "../lib/mls/relaydir.js";
 import { RELAY_MIGRATIONS } from "../lib/relaystore.js";
 import { b64, makeRevocation, makeRotation, pinIdentity } from "../lib/mls/identity.js";
 import { DAY, HOUR, KP_LIFETIME_MS } from "../lib/mls/policy.js";
-import { deviceRelay, fakeDevice, refusal, tmpDir, tokenOf } from "./mls-helpers.js";
+import { deviceRelay, fakeDevice, proveOn, refusal, tmpDir, tokenOf } from "./mls-helpers.js";
 import { createAccess } from "../lib/access.js";
 
 const CRASH = fileURLToPath(new URL("./fixtures/devicedir-crash.mjs", import.meta.url));
@@ -24,8 +24,8 @@ const CRASH = fileURLToPath(new URL("./fixtures/devicedir-crash.mjs", import.met
 /** alice and bob each with an enrolled device; bob's pool has `n` packages. */
 async function setup(t, { n = 3, ...opts } = {}) {
   const w = await deviceRelay(t, opts);
-  const alice = await w.client("alice");
-  const bob = await w.client("bob");
+  const alice = await w.member("alice");
+  const bob = await w.member("bob");
   const ad = await fakeDevice(w.realm, w.members.alice.id);
   const bd = await fakeDevice(w.realm, w.members.bob.id);
   await alice.rpc(ad.register());
@@ -37,7 +37,7 @@ async function setup(t, { n = 3, ...opts } = {}) {
 
 test("without the experimental flag nothing changes: no capability, frames unknown", async (t) => {
   const w = await deviceRelay(t, { devices: false });
-  const c = await w.client("alice");
+  const c = await w.member("alice");
   assert.ok(!c.caps.includes(DEVICE_CAP));
   for (const type of ["device_register", "device_list", "kp_upload", "kp_take", "device_revoke"]) {
     assert.match((await refusal(c.rpc({ type }))).message, /unknown message type/, type);
@@ -84,12 +84,13 @@ test("device frames are for members on protocol 2: a shared-token connection is 
 
 test("enrollment: the pin must be the relay's own computation; idempotent; another key is refused; bounded", async (t) => {
   const w = await deviceRelay(t);
-  const alice = await w.client("alice");
+  const alice = await w.member("alice");
   const d = await fakeDevice(w.realm, w.members.alice.id);
   assert.equal((await refusal(alice.rpc({ ...d.register(), pin: b64(Buffer.alloc(32)) }))).code, "bad_pin");
-  // A device registered under another member's id: the pin binds the authenticated member.
+  // A device registered under another member's id: the pin and the register proof (A9) bind the
+  // authenticated member; the proof is checked first.
   const forBob = await fakeDevice(w.realm, w.members.bob.id);
-  assert.equal((await refusal(alice.rpc(forBob.register()))).code, "bad_pin");
+  assert.equal((await refusal(alice.rpc(forBob.register()))).code, "attach_proof");
   assert.equal((await alice.rpc(d.register())).state, "enrolled");
   assert.equal((await alice.rpc(d.register())).state, "unchanged");
   const other = await fakeDevice(w.realm, w.members.alice.id, { device: d.device });
@@ -103,7 +104,7 @@ test("enrollment: the pin must be the relay's own computation; idempotent; anoth
 
 test("KeyPackages: concurrent takes give distinct packages; a retry with the same request id the same one", async (t) => {
   const { w, take, alice } = await setup(t, { n: 6 });
-  const carol = await w.client("carol");
+  const carol = await w.member("carol");
   const cd = await fakeDevice(w.realm, w.members.carol.id);
   await carol.rpc(cd.register());
   const bobTarget = { member: w.members.bob.id, device: (await alice.rpc({ type: "device_list", member: w.members.bob.id })).devices[0].device };
@@ -133,7 +134,7 @@ test("KeyPackages: concurrent takes give distinct packages; a retry with the sam
 
 test("implementation note 1: the same request id with a changed target fails; ended reservations are terminal", async (t) => {
   const { w, take, alice, ad, bob, bd } = await setup(t, { n: 4 });
-  const carol = await w.client("carol");
+  const carol = await w.member("carol");
   const cd = await fakeDevice(w.realm, w.members.carol.id);
   await carol.rpc(cd.register());
   await carol.rpc({ type: "kp_upload", device: cd.device, packages: await cd.packages(1, w.clock.now() + DAY) });
@@ -207,7 +208,7 @@ test("a take is atomic: a fault before the commit changes nothing; after it, the
   assert.equal((await bob.rpc({ type: "kp_status", device: bd.device })).available, 0);
   // Durable across a restart of the relay.
   await w.restart();
-  const alice = await w.client("alice");
+  const alice = await w.member("alice");
   const ad = w.db.get("SELECT requester_device FROM kp_reservations WHERE request = 'req-fault-2'").requester_device;
   assert.equal((await alice.rpc({ type: "kp_take", request: "req-fault-2", device: ad, target: { member: w.members.bob.id, device: bd.device } })).ref, retried.ref);
 });
@@ -262,7 +263,7 @@ test("with access configured, a hidden member's devices follow its grants", asyn
   const hidden = await refusal(take("req-acc-1"));
   const absent = await refusal(take("req-acc-2", { member: w.members.carol.id, device: bd.device }));
   assert.deepEqual([hidden.code, hidden.message], [absent.code, absent.message]);
-  const carol = await w.client("carol");
+  const carol = await w.member("carol");
   assert.equal((await carol.rpc({ type: "device_list", member: w.members.bob.id })).devices.length, 1, "carol is granted");
   acc.putGrants(w.members.bob.id, 1, { default: "deny", visible: "grantees", entries: [{ selector: `member:${w.members.carol.id}`, action: "allow" }, { selector: `member:${w.members.alice.id}`, action: "allow" }] });
   assert.equal((await alice.rpc({ type: "device_list", member: w.members.bob.id })).devices.length, 1, "after alice is granted");
@@ -270,7 +271,7 @@ test("with access configured, a hidden member's devices follow its grants", asyn
 
 test("revocation from another device: signed, at once, the id never reused; a revoked device cannot act", async (t) => {
   const { w, alice, ad } = await setup(t, { n: 0 });
-  const bob = await w.client("bob");
+  const bob = await w.member("bob");
   const bd = (await bob.rpc({ type: "device_list" })).devices[0].device;
   const ad2 = await fakeDevice(w.realm, w.members.alice.id);
   await alice.rpc(ad2.register());
@@ -310,7 +311,7 @@ test("revocation by the relay admin (members file): applied at reload, durable, 
   w.relay.reload(Object.values(w.members).map((m) => (m.name === "alice" ? { ...m, devicesRevoked: [ad.device, later.device] } : m)));
   assert.equal((await refusal(alice.rpc(later.register()))).code, "device_revoked");
   await w.restart();
-  const again = await w.client("alice");
+  const again = await w.member("alice");
   assert.equal((await refusal(again.rpc(ad.register()))).code, "device_revoked", "durable across a restart");
   assert.throws(() => w.relay.reload([{ name: "alice", id: w.members.alice.id, token: w.members.alice.token, devicesRevoked: ["not-a-device"] }]), /devicesRevoked/);
 });
@@ -322,14 +323,21 @@ test("rotation at the relay: chained statements replace the key and its packages
   const newKey = Buffer.from(next.signaturePublicKey());
   const frame = (statement) => ({ type: "device_register", device: ad.device, key: b64(newKey), pin: b64(pinIdentity({ realm: w.realm, member: w.members.alice.id, device: ad.device, key: newKey })), rotation: statement });
   const st = (seq, signOld) => makeRotation({ realm: w.realm, member: w.members.alice.id, device: ad.device, oldKey: ad.key, newKey, sequence: seq }, signOld, (l, c) => next.sign(l, c));
-  assert.equal((await refusal(alice.rpc(frame(await st(2, (l, c) => ad.dev.sign(l, c)))))).code, "bad_rotation", "the sequence must follow");
-  assert.equal((await refusal(alice.rpc(frame(await st(1, (l, c) => next.sign(l, c)))))).code, "bad_rotation", "forged: not signed by the old key");
-  const ok = await alice.rpc(frame(await st(1, (l, c) => ad.dev.sign(l, c))));
+  // A9: the registration of the new key is proved by the new key, on the device's connection.
+  const conn = await alice.connection(ad.device);
+  const proved = async (f) => conn.rpc({ ...f, proof: await proveOn(conn, { realm: w.realm, member: w.members.alice.id, device: ad.device, dev: next, key: newKey }, "register") });
+  assert.equal((await refusal(proved(frame(await st(2, (l, c) => ad.dev.sign(l, c)))))).code, "bad_rotation", "the sequence must follow");
+  assert.equal((await refusal(proved(frame(await st(1, (l, c) => next.sign(l, c)))))).code, "bad_rotation", "forged: not signed by the old key");
+  const ok = await proved(frame(await st(1, (l, c) => ad.dev.sign(l, c))));
   assert.deepEqual([ok.state, ok.seq], ["rotated", 1]);
   const d = (await alice.rpc({ type: "device_list" })).devices[0];
   assert.equal(d.key, b64(newKey));
   assert.equal(d.rotations.length, 1);
-  assert.equal((await alice.rpc({ type: "kp_status", device: ad.device })).available, 0, "the old key's packages are dropped");
+  // The rotation dropped this connection's attachment; the old key no longer attaches, the new one does.
+  assert.equal((await refusal(conn.rpc({ type: "kp_status", device: ad.device }))).code, "not_attached");
+  assert.equal((await refusal(ad.attachOn(conn))).code, "attach_proof");
+  await conn.rpc({ type: "e2ee_attach", device: ad.device, proof: await proveOn(conn, { realm: w.realm, member: w.members.alice.id, device: ad.device, dev: next }, "attach") });
+  assert.equal((await conn.rpc({ type: "kp_status", device: ad.device })).available, 0, "the old key's packages are dropped");
   assert.equal((await refusal(alice.rpc(ad.register()))).code, "key_mismatch", "the old key cannot come back without a statement");
 });
 
@@ -390,7 +398,7 @@ test("admin revocations that cannot be stored at start: the relay does not start
   await assert.rejects(w.restart(), /device revocations could not be stored/);
   assert.deepEqual(w.db.all("SELECT device_id FROM device_revocations").map((r) => r.device_id), [a2.device]);
   await w.restart();
-  const list = (await (await w.client("alice")).rpc({ type: "device_list" })).devices;
+  const list = (await (await w.member("alice")).rpc({ type: "device_list" })).devices;
   for (const d of [a1, a2]) assert.equal(list.find((x) => x.device === d.device).revoked.by, "admin");
 });
 
@@ -419,7 +427,7 @@ test("suspension (design 4.4): every use of the device is refused, re-registrati
   // re-registration with the same id and key (idempotent before), and reconnecting: the flag stays.
   assert.equal((await refusal(bob.rpc(bd.register()))).code, "device_suspended");
   await w.restart();
-  const bobAgain = await w.client("bob");
+  const bobAgain = await w.member("bob");
   assert.equal((await refusal(bobAgain.rpc(bd.register()))).code, "device_suspended");
   assert.equal(Number(w.db.get("SELECT suspended FROM devices WHERE device_id = ?", bd.device).suspended), 1);
   // The 3.3 commit path's check: a suspended requester's reservations authorize nothing.
@@ -428,7 +436,7 @@ test("suspension (design 4.4): every use of the device is refused, re-registrati
   assert.deepEqual(w.directory.reinstate({ member: B, device: bd.device }), { state: "reinstated" });
   assert.equal((await bobAgain.rpc(bd.register())).state, "unchanged");
   assert.equal((await bobAgain.rpc({ type: "kp_status", device: bd.device })).available, 3);
-  const alice2 = await w.client("alice");
+  const alice2 = await w.member("alice");
   assert.ok((await alice2.rpc({ type: "kp_take", request: "req-sus-3", device: ad.device, target: { member: B, device: bd.device } })).kp);
   assert.ok((await alice2.rpc({ type: "device_list", member: B })).devices.find((d) => d.device === bd.device).key);
   assert.deepEqual(w.directory.reinstate({ member: B, device: bd.device }), { state: "not_suspended" });

@@ -16,7 +16,7 @@ import { LIMITS, SECURITY_HEADERS, esc, startOwnerUi } from "../lib/ownerui.js";
 import { openBound } from "../lib/session.js";
 import { openStore, processConsumer } from "../lib/store.js";
 import { openContacts } from "../lib/quarantine.js";
-import { fakeDevice } from "./mls-helpers.js";
+import { fakeDevice, seedOwn } from "./mls-helpers.js";
 
 const R = "a".repeat(32);
 const ALICE = "m_aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -356,7 +356,9 @@ test("a verify form names no comparison by default: submitted untouched it is re
   const c = await openContacts(home, { notify: false });
   const me = `m_${"m".repeat(26)}`;
   const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
-  const lists = { [me]: [served(await fakeDevice(R, me))], [BOB]: [served(await fakeDevice(R, BOB))] };
+  const m1 = await fakeDevice(R, me);
+  await seedOwn(c, R, me, m1);
+  const lists = { [me]: [served(m1)], [BOB]: [served(await fakeDevice(R, BOB))] };
   const devices = { fetch: async (m) => ({ theirs: { realm: R, member: m, devices: lists[m] }, mine: { realm: R, member: me, devices: lists[me] } }) };
   const ui = await startOwnerUi({ home, sources: { contacts: c, devices }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(home, "s.env"), relaysFile: path.join(home, "none.json") }) });
   t.after(() => ui.close());
@@ -419,8 +421,12 @@ test("Devices: this member's own devices with fingerprints from the key bytes an
   const c = await openContacts(home, { notify: false });
   const me = `m_${"m".repeat(26)}`;
   const [mine, known, fresh, gone] = [await fakeDevice(R, me), await fakeDevice(R, me), await fakeDevice(R, me), await fakeDevice(R, me)];
-  const pinned = (d) => ({ device: d.device, pin: d.register().pin, key: d.key.toString("base64"), seq: 0 });
-  await c.updatePins((doc) => void (doc.pins = [{ realm: R, member: me, devices: [pinned(mine), pinned(known)], verifiedAt: new Date().toISOString(), how: "relay-tofu" }]));
+  // This home's own pins (A1): its enrolled device and one it accepted; never the relay's list.
+  const { acceptOwn, writeBaseline } = await import("../lib/mls/own.js");
+  await c.updatePins((doc) => {
+    writeBaseline(doc, { rec: { realm: R, member: me, device: mine.device, key: mine.key.toString("base64"), seq: 0, retiredKeys: [] }, profile: "p", now: 1 });
+    acceptOwn(doc, R, { device: known.device, key: known.key, pin: Buffer.from(known.register().pin, "base64"), seq: 0 }, { by: mine.device, now: 2 });
+  });
   const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
   const list = { realm: R, member: me, devices: [served(mine), served(known), served(fresh), { device: gone.device, revoked: { at: Date.now(), by: "admin" } }] };
   const devices = { fetch: async () => ({ theirs: list, mine: list }), own: async () => ({ list, thisDevice: mine.device }) };
@@ -431,9 +437,9 @@ test("Devices: this member's own devices with fingerprints from the key bytes an
   assert.match(page, /<h2>Your devices<\/h2>/);
   const row = (d) => new RegExp(`<tr><td><code>${d.device}</code></td><td class="fp">${displayFingerprint({ realm: R, member: me, device: d.device, key: d.key })}</td><td>([^<]*|<a[^>]*>[^<]*</a>)</td></tr>`).exec(page)?.[1];
   assert.equal(row(mine), "this device");
-  assert.equal(row(known), "known");
-  assert.match(row(fresh), /new device of yours: check it/);
-  assert.match(page, new RegExp(`device-accept%3A${me}%2F${fresh.device}`));
+  assert.equal(row(known), "accepted");
+  assert.match(row(fresh), /listed by the relay, not accepted by you: check it/);
+  assert.match(page, new RegExp(`device-own%3A${fresh.device}`));
   assert.match(page, new RegExp(`<code>${gone.device}</code></td><td></td><td>revoked [^<]* by the relay admin`));
   // Without the relay's lists the section is not shown, and the page says why.
   const ui2 = await startOwnerUi({ home, sources: { contacts: c }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(home, "s.env"), relaysFile: path.join(home, "none.json") }) });

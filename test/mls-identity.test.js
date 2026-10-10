@@ -188,15 +188,20 @@ test("policy timers: replenishment, past-epoch retention, skipped keys, fresh up
   assert.deepEqual(P.pastEpochsToKeep(epochs([8 * P.DAY, 9 * P.DAY, 10 * P.DAY]), now), [10, 9, 8], "3 or fewer beyond 7 days: kept");
   assert.deepEqual(P.pastEpochsToKeep(epochs([8 * P.DAY, 9 * P.DAY, 10 * P.DAY, 11 * P.DAY]), now), [10, 9, 8], "both exceeded: deleted");
   assert.deepEqual(P.pastEpochsToKeep(epochs([P.DAY, P.DAY, P.DAY, 7 * P.DAY]), now), [10, 9, 8], "exactly 7 days is old");
+  assert.equal(P.MAX_PAST_EPOCHS, 16);
+  const twenty = Array.from({ length: 20 }, (_, i) => ({ epoch: 100 - i, began: now - (i + 1) * P.HOUR }));
+  assert.deepEqual(P.pastEpochsToKeep(twenty, now), Array.from({ length: 16 }, (_, i) => 100 - i), "20 within 7 days: the newest 16");
+  assert.deepEqual(P.pastEpochsToKeep(twenty.toReversed(), now), Array.from({ length: 16 }, (_, i) => 100 - i), "order of the input does not matter");
 
   assert.equal(P.mayKeepSkipped({ keptForSenderEpoch: 9, forward: 200 }), true);
   assert.equal(P.mayKeepSkipped({ keptForSenderEpoch: 10, forward: 1 }), false);
   assert.equal(P.mayKeepSkipped({ keptForSenderEpoch: 0, forward: 201 }), false);
 
-  assert.deepEqual(P.updateDue({ lastUpdate: now - P.DAY, rotatedAt: now - 1 }, now), { due: true, reason: "rotation" });
-  assert.deepEqual(P.updateDue({ lastUpdate: now - P.DAY, removalAt: now - 1 }, now), { due: true, reason: "member removal" });
-  assert.equal(P.updateDue({ lastUpdate: now - 7 * P.DAY, lastActivity: now - 1 }, now).due, true);
-  assert.equal(P.updateDue({ lastUpdate: now - 7 * P.DAY + 1, lastActivity: now - 1 }, now).due, false);
-  assert.equal(P.updateDue({ lastUpdate: now - 30 * P.DAY, lastActivity: now - 31 * P.DAY }, now).due, false, "an idle group owes nothing");
+  assert.deepEqual(P.updateDue({ lastOwnUpdate: now - P.DAY, rotatedAt: now - 1 }, now), { due: true, reason: "rotation" });
+  assert.deepEqual(P.updateDue({ lastOwnUpdate: now - P.DAY, removal: true }, now), { due: true, reason: "member removal" });
+  assert.equal(P.updateDue({ lastOwnUpdate: now - 7 * P.DAY, activeSince: now - 1 }, now).due, true);
+  assert.equal(P.updateDue({ lastOwnUpdate: now - 7 * P.DAY + 1, activeSince: now - 1 }, now).due, false);
+  assert.equal(P.updateDue({ lastOwnUpdate: now - 30 * P.DAY }, now).due, false, "an idle group owes nothing on the timer");
+  assert.equal(P.updateDue({ lastOwnUpdate: now - 30 * P.DAY, sending: true }, now).due, true, "its first send after the interval updates first");
   assert.deepEqual(P.staleMembers({ a: now - 31 * P.DAY, b: now - 29 * P.DAY }, now), ["a"]);
 });

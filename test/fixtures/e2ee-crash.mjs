@@ -8,16 +8,19 @@ import { RelayClient } from "../../lib/client.js";
 import { deviceStore } from "../../lib/mls/device.js";
 import { createE2ee } from "../../lib/mls/e2ee.js";
 import { createFakeDriver } from "../fake-mls-driver.js";
+import { memoryContacts, ownFor } from "../mls-helpers.js";
 
 const [url, home, session, point, role, ...rest] = process.argv.slice(2);
 const driver = createFakeDriver({ seed: `crash-${process.pid}` });
-const store = deviceStore({ home, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m" });
+// The test device's contacts (its own baseline and pins), shared through the home (mls-helpers).
+const contacts = memoryContacts(undefined, { file: path.join(home, "contacts-test.json") });
+const store = deviceStore({ home, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", own: ownFor(contacts, home, "relay-test") });
 const client = new RelayClient({ url, token: process.env.HOPTELL_TEST_TOKEN, name: session, mode: "peer", reconnect: false });
 client.on("error", () => {});
 client.start();
 await client.ready(5000);
 const e2ee = createE2ee({
-  store, driver, client, session, home, profile: "relay-test",
+  store, driver, client, session, home, profile: "relay-test", contacts,
   deliver: async (m) => fs.appendFileSync(path.join(home, "delivered.jsonl"), `${JSON.stringify({ id: m.id, message_id: m.message_id, text: m.text, by: "child" })}\n`),
   fault: (p) => p === point && process.kill(process.pid, "SIGKILL"),
 });

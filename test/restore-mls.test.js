@@ -22,6 +22,7 @@ import { startRelay } from "../lib/relay.js";
 import { openRelayStore } from "../lib/relaystore.js";
 import { runRestore } from "../lib/restore.js";
 import { ID, membersFile, tmp } from "./restore-helpers.js";
+import { memoryContacts, ownFor } from "./mls-helpers.js";
 
 const WASM = process.env.HOPTELL_MLS_WASM || path.join(ROOT, "..", "mls-bakeoff", "spike", "mls-bakeoff", "openmls-wasm", "pkg", "openmls_wasm.js");
 const skip = fs.existsSync(WASM) ? false : `the OpenMLS WASM binding is not built (${WASM})`;
@@ -71,16 +72,19 @@ async function mlsWorld(t) {
     let d = devices[name];
     if (!d) {
       const home = path.join(root, name);
-      const driver = createOpenMlsDriver(WASM, { suite: 77 });
-      const store = deviceStore({ home, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m" });
+      const driver = createOpenMlsDriver(WASM, { testOnlySuite: 77 });
+      const contacts = memoryContacts();
+      const store = deviceStore({ home, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", own: ownFor(contacts, home, "relay-test") });
       const c = await client(name, `${name}-enroll`);
       await store.enroll(c);
       c.close();
-      d = devices[name] = { home, driver, store, id: ID[name] };
+      // An encrypted send implies a policy for the realm (contacts keep the own baseline, A1).
+      contacts.doc.encryption = [{ realm: store.record().realm, mode: "preferred" }];
+      d = devices[name] = { home, driver, store, contacts, id: ID[name] };
     }
     const c = await client(name, name);
     const got = [];
-    const e = createE2ee({ store: d.store, driver: d.driver, client: c, session: name, home: d.home, profile: "relay-test", deliver: async (m) => void got.push(m), ...extra });
+    const e = createE2ee({ store: d.store, driver: d.driver, client: c, session: name, home: d.home, profile: "relay-test", contacts: d.contacts, deliver: async (m) => void got.push(m), ...extra });
     await e.attach();
     return { ...d, c, e, got };
   };

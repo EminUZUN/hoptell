@@ -11,14 +11,16 @@ import path from "node:path";
 import { createAccess } from "../lib/access.js";
 import { backupRelay } from "../lib/backup.js";
 import { loadRealm, lockStateDir, readRestoreIntent } from "../lib/realm.js";
-import { openRelayDb } from "../lib/relaydb.js";
-import { openRelayStore, storeMeta } from "../lib/relaystore.js";
+import { TRANSACTION_ALLOWANCE, openRelayDb } from "../lib/relaydb.js";
+import { RELAY_MIGRATIONS, openRelayStore, storeMeta } from "../lib/relaystore.js";
 import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { createDeliveryService } from "../lib/mls/relayds.js";
 import { DEVICE_MIGRATIONS } from "../lib/mls/relaydir.js";
 import { runRestore } from "../lib/restore.js";
-import { DEV, GROUP, ID, OPS, buildTemplate, cli, copyState, digest, enroll, exists, membersFile, setDigests, summary, tmp, work } from "./restore-helpers.js";
+import { createTransferStore } from "../lib/mls/relaytransfers.js";
+import { DEV, GROUP, ID, OPS, TX, buildLargeTemplate, buildTemplate, cli, copyState, digest, enroll, exists, membersFile, setDigests, summary, tmp, work } from "./restore-helpers.js";
 
+const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
 let TPL = null;
 const tpl = async () => (TPL ??= await buildTemplate(null));
 after(() => TPL && fs.rmSync(path.dirname(TPL.template), { recursive: true, force: true }));
@@ -362,6 +364,36 @@ test("restore, a backup carrying an earlier restore's id (R1) restored as R2", a
   }
 });
 
+/** The transfers' states in a restored store, by id (design 6). */
+function transferStates(dir) {
+  const release = lockStateDir(dir);
+  const db = openRelayStore({ dir, fullfsync: false });
+  try {
+    // The relay starts on the restored store: its transfer accounting is recomputed and must match.
+    const store = createTransferStore({ db });
+    assert.deepEqual(store.recompute().mismatches, []);
+    return Object.fromEntries(db.all("SELECT transfer_id, state FROM transfers ORDER BY transfer_id").map((r) => [r.transfer_id, r.state]));
+  } finally {
+    db.close();
+    release();
+  }
+}
+
+test("restore, transfers: they roll back with the store, but one the old store ended stays ended; with an unreadable old store every open or sealed transfer ends", async (t) => {
+  await tpl();
+  const dir = work(t, TPL);
+  const r = await restore(dir, "start");
+  assert.equal(r.counts.transfers_ended, 1);
+  assert.deepEqual(transferStates(dir), { [TX.aborted]: "aborted", [TX.sealed]: "sealed" }, "the withdrawal after the backup point is kept; the other is served as before");
+  const lost = work(t, TPL);
+  fs.writeFileSync(path.join(lost, "relay.db"), Buffer.alloc(8192, 7));
+  fs.writeFileSync(path.join(lost, "relay.db-wal"), Buffer.alloc(4096, 7));
+  const r2 = await restore(lost, "start");
+  assert.equal(r2.counts.old_store, "unreadable");
+  assert.equal(r2.counts.transfers_ended, 2);
+  assert.deepEqual(transferStates(lost), { [TX.aborted]: "aborted", [TX.sealed]: "aborted" }, "fail closed: an abort after the backup cannot be known");
+});
+
 test("restore, consequences: an unreadable old store suspends every device; they serve nothing until reinstated", async (t) => {
   await tpl();
   const dir = work(t, TPL);
@@ -427,7 +459,7 @@ test("restore, consequences: broker families revoked, another realm refused, an 
   fs.writeFileSync(path.join(oldBackup, "manifest.json"), manifest(digest(path.join(oldBackup, "relay.db")), 1));
   const dOld = work(t, TPL);
   const rOld = await runRestore({ stateDir: dOld, mode: "start", backupDir: oldBackup, membersFile: TPL.config.members });
-  assert.equal(summary(dOld).version, 4, "migrated to this hoptell's schema");
+  assert.equal(summary(dOld).version, RELAY_MIGRATIONS.length, "migrated to this hoptell's schema");
   assert.match(rOld.counts.new_instance, /^[0-9a-f]{32}$/);
   const newer = path.join(tmp(t), "newer");
   fs.cpSync(oldBackup, newer, { recursive: true });
@@ -715,5 +747,59 @@ test("restore, durability: a newly created access/ and broker/ are synced in the
     assert.ok(made >= 0, `${sub}/ was created`);
     const synced = events.findIndex(([k, p], i) => i > made && k === "fsync" && real(p) === real(dir));
     assert.ok(synced > made && synced < done, `the state directory is synced after ${sub}/ is created and before the result (${JSON.stringify(events.map(([k, p]) => `${k} ${path.relative(dir, p)}`))})`);
+  }
+});
+
+test("restore, phase 4 in bounded steps: on a larger store every reconcile transaction stays under A (a reader pinned, so the WAL only grows), and a crash at every step boundary resumes to the same result", async (t) => {
+  const big = await buildLargeTemplate(t);
+  const run = (dir, mode, fault = null) => runRestore({ stateDir: dir, mode, backupDir: big.backup, membersFile: big.config.members, fault });
+  // Uninterrupted, with a reader holding a snapshot of the installed store from before the reconcile's writes.
+  const ref = work(t, big);
+  let reader = null;
+  let last = 0;
+  const sizes = [];
+  const wal = () => (exists(path.join(ref, "relay.db-wal")) ? fs.statSync(path.join(ref, "relay.db-wal")).size : 0);
+  const r = await run(ref, "start", (p) => {
+    // Opened inside the first step's transaction (the restore's own open must find no reader).
+    if (!reader && (p === "reconcile-step-before-commit" || p === "reconcile-before-commit")) {
+      reader = new DatabaseSync(path.join(ref, "relay.db"));
+      reader.exec("BEGIN");
+      reader.prepare("SELECT count(*) AS n FROM devices").get();
+      last = wal();
+    }
+    if (p === "reconcile-step-after-commit" || p === "reconcile-after-commit") {
+      sizes.push(wal() - last);
+      last = wal();
+    }
+    if (p === "reconciled") {
+      reader.exec("COMMIT");
+      reader.close();
+    }
+  });
+  assert.equal(r.done, true);
+  assert.ok(sizes.length >= 20, `the reconcile ran in ${sizes.length} transactions`);
+  for (const n of sizes) assert.ok(n <= TRANSACTION_ALLOWANCE, `a reconcile transaction appended ${n} bytes <= A`);
+  t.diagnostic(`reconcile: ${sizes.length} transactions, the largest ${Math.max(...sizes)} bytes of WAL, in all ${sizes.reduce((a, b) => a + b, 0)}`);
+  const reference = summary(ref);
+  assert.equal(reference.keyPackages, 0);
+  assert.equal(reference.reservations, 0);
+  assert.equal(reference.revocations.length, 600);
+  assert.equal(reference.e2ee.groups.filter((g) => g.replace_required === 1).length, 300);
+  assert.deepEqual([reference.counts.key_packages_cleared, reference.counts.reservations_cleared, reference.counts.revocations_merged, reference.counts.e2ee_ops_merged, reference.counts.audit_copied, reference.counts.transfers_ended], [1200 - 300, 300, 600, 700, 600, 20]);
+  // A crash after each committed step (every transaction but the last), then --resume: the same result.
+  for (let i = 1; i < sizes.length; i++) {
+    const dir = work(t, big);
+    let n = 0;
+    await assert.rejects(
+      run(dir, "start", (p) => {
+        if (p === "reconcile-step-after-commit" && ++n === i) throw Object.assign(new Error(`crash at step ${i}`), { crash: true });
+      }),
+      /crash at step/,
+    );
+    assert.equal(readRestoreIntent(dir).phase, "installed");
+    const done = await run(dir, "resume");
+    assert.equal(done.done, true);
+    assert.deepEqual(summary(dir), reference, `crash after transaction ${i}: the same result as an uninterrupted restore`);
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   }
 });

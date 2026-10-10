@@ -11,16 +11,18 @@ import { deviceStore } from "../lib/mls/device.js";
 import { checkKeyPackage, evaluate, pinFirstUse } from "../lib/mls/trust.js";
 import { DAY, HOUR, KP_LIFETIME_MS } from "../lib/mls/policy.js";
 import { createFakeDriver, fakeWelcome } from "./fake-mls-driver.js";
-import { deviceRelay, refusal, tmpDir } from "./mls-helpers.js";
+import { deviceRelay, memoryContacts, ownFor, refusal, tmpDir } from "./mls-helpers.js";
 
 const PASS = "correct horse battery staple";
 
 /** A home of `member` on machine `machine`, with its device store and a relay client. */
 async function home(t, w, member, { machine = "machine-a", dir = tmpDir(t), seed = `${member}-${machine}-${dir}`, faults, fault = null } = {}) {
   const driver = createFakeDriver({ seed, now: w.clock.now, faults });
-  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine, now: w.clock.now, fault });
+  const contacts = memoryContacts();
+  const own = ownFor(contacts, dir, "relay-test");
+  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine, now: w.clock.now, fault, own });
   const client = await w.client(member);
-  return { dir, driver, store, client };
+  return { dir, driver, store, client, contacts, own };
 }
 
 test("enroll: durable before registration, the state encrypted, its key in the credential store, 20 KeyPackages", async (t) => {
@@ -56,7 +58,7 @@ test("enroll: durable before registration, the state encrypted, its key in the c
 test("one writer per device: concurrent enrollments make one device", async (t) => {
   const w = await deviceRelay(t);
   const a = await home(t, w, "alice");
-  const other = deviceStore({ home: a.dir, profile: "relay-test", driver: a.driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "machine-a", now: w.clock.now });
+  const other = deviceStore({ home: a.dir, profile: "relay-test", driver: a.driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "machine-a", now: w.clock.now, own: a.own });
   const [x, y] = await Promise.all([a.store.enroll(a.client), other.enroll(a.client)]);
   assert.equal(x.device, y.device);
   assert.equal((await a.client.rpc({ type: "device_list" })).devices.length, 1);
@@ -95,7 +97,10 @@ test("replenishment: below 5 the pool is filled to 20 outstanding, at a bounded 
   assert.equal(Object.keys(b.store.record().kps).length, 37, "every package made is in the ledger");
   // With room in the pool (10 taken and burned), packages nearing their expiry are renewed even
   // though 10 are still available; the bound of 20 outstanding holds throughout.
-  for (let i = 0; i < 10; i++) await a.client.rpc({ type: "kp_take", request: `req-renew-${i}`, device: a.store.record().device, target: { member: bobId, device } });
+  // (on a fresh connection, proven: A9's challenges count toward the per-connection rate limit)
+  const takeVia = await w.client("alice");
+  await a.store.attach(takeVia);
+  for (let i = 0; i < 10; i++) await takeVia.rpc({ type: "kp_take", request: `req-renew-${i}`, device: a.store.record().device, target: { member: bobId, device } });
   w.clock.advance(KP_LIFETIME_MS - 2 * DAY);
   w.directory.sweep();
   const renewed = await b.store.replenish(b.client);

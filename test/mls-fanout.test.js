@@ -23,7 +23,7 @@ import { MAX_FRAME_BYTES } from "../lib/mls/relayds.js";
 import { describeFanout } from "../lib/mls/session.js";
 import { DAY } from "../lib/mls/policy.js";
 import { createFakeDriver } from "./fake-mls-driver.js";
-import { deviceRelay, memoryContacts, tmpDir } from "./mls-helpers.js";
+import { acceptOwnDevices, deviceRelay, memoryContacts, ownFor, tmpDir } from "./mls-helpers.js";
 
 const PASS = "correct horse battery staple";
 const OP_RE = /^o_[a-z2-7]{26}$/;
@@ -46,10 +46,10 @@ async function until(fn, what = "condition", ms = 5000) {
  * A device of `member` (a home with its store, enrolled), and sessions on it: open(session,
  * {roles}) connects that session with its roles and an e2ee engine recording deliveries.
  */
-async function device(t, w, member, { sessions = [], contacts = null, limits, driver } = {}) {
+async function device(t, w, member, { sessions = [], contacts = memoryContacts(), limits, driver } = {}) {
   const dir = tmpDir(t);
   driver ??= createFakeDriver({ seed: `${member}-${dir}`, now: w.clock.now });
-  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now });
+  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(contacts, dir, "relay-test") });
   await store.enroll(await w.client(member));
   const d = { dir, store, driver, member, id: w.members[member].id, device: store.record().device, contacts, s: {} };
   d.engine = (client, session, opts = {}) => {
@@ -267,10 +267,82 @@ test("policy: a role session that is no member's (shared token) is not-encrypted
   assert.equal(got.length, 0, "never plaintext to it");
 });
 
+/** A hosted member's session (design 4.5): its host signs in for it, with `roles`; records what it is sent. */
+async function hostedSession(t, w, member, roles = []) {
+  const rc = new RelayClient({ url: w.url, token: w.hostToken, hostMember: w.members[member].id, name: member, mode: "peer", roles, reconnect: false });
+  rc.on("error", () => {});
+  const got = [];
+  rc.on("message", (m) => got.push(m));
+  rc.start();
+  await rc.ready(5000);
+  t.after(() => rc.close());
+  return Object.assign(rc, { got });
+}
+const OPEN_POLICY = { groups: {}, rules: [], defaultAction: "allow", requireGrants: false };
+const FENCED_POLICY = { ...OPEN_POLICY, groups: { claimed: { members: [], oidcGroups: [{ issuer: "https://idp.example", group: "x" }] } } };
+
+test("hosted custody: a hosted @role candidate is excluded before any copy, not-encrypted under preferred (also with allow-hosted), unavailable under required", async (t) => {
+  const { w, contacts, fan, alice } = await team(t, { relay: { hosted: ["hanna"] }, alicePins: ["bob", "carol"] });
+  const hanna = await hostedSession(t, w, "hanna", ["reviewer"]);
+  const listed = (await alice.s.alice.client.rpc({ type: "list" })).peers.find((p) => p.name === "hanna");
+  assert.deepEqual([listed.custody, listed.member_id], ["hosted", w.members.hanna.id], "the relay's list names its custody and member id");
+  const p = await fan({ to: "@reviewer" });
+  assert.deepEqual([p.candidates, p.excluded.not_encrypted, p.excluded.first_contact, p.excluded.unavailable, p.copies], [4, 1, 0, 0, 3], "counted not-encrypted, not first-contact");
+  contacts.doc.encryption.push({ realm: w.realm, member: w.members.hanna.id, mode: "preferred", custody: "allow-hosted" });
+  const o = await fan({ to: "@reviewer", body: "allow-hosted" });
+  assert.deepEqual([o.candidates, o.excluded.not_encrypted, o.copies], [4, 1, 3], "the override never applies inside a fan-out");
+  contacts.doc.encryption = [{ realm: w.realm, mode: "required" }];
+  const r = await fan({ to: "@reviewer", body: "required" });
+  assert.deepEqual([r.candidates, r.excluded.unavailable, r.excluded.not_encrypted, r.excluded.first_contact, r.copies], [4, 1, 0, 0, 3]);
+  assert.match(describeFanout("@reviewer", r), /1 session unavailable/);
+  const s = await stateOf(alice);
+  assert.ok(Object.values(s.logical).every((L) => L.target !== "hanna" && L.peer !== w.members.hanna.id), "no copy and no logical message for the hosted member");
+  await settle(200);
+  assert.equal(hanna.got.length, 0, "nothing reaches the hosted member");
+});
+
+test("hosted custody: a hosted name in an explicit list gets the direct send's refusal at preflight; allow-hosted is refused as 'send it separately'", async (t) => {
+  const { w, contacts, fan, alice, bob } = await team(t, { relay: { hosted: ["hanna"] }, alicePins: ["bob"] });
+  const hanna = await hostedSession(t, w, "hanna");
+  const r = await fan({ to: ["bob", "hanna"] });
+  assert.deepEqual(r.names, [{ name: "bob", state: "accepted" }, { name: "hanna", state: "refused", reason: "hosted_custody" }]);
+  assert.deepEqual([r.candidates, r.excluded.refused, r.copies], [2, 1, 1], "the counts add up");
+  assert.match(describeFanout("[bob, hanna]", r), /hanna refused \(hosted custody: the host can read; not sent\)/);
+  contacts.doc.encryption.push({ realm: w.realm, member: w.members.hanna.id, mode: "preferred", custody: "allow-hosted" });
+  const o = await fan({ to: ["hanna"], body: "allow-hosted" });
+  assert.deepEqual([o.names, o.excluded.refused, o.copies], [[{ name: "hanna", state: "refused", reason: "hosted_separately" }], 1, 0]);
+  assert.match(describeFanout("[hanna]", o), /hosted custody: send it separately/);
+  contacts.doc.encryption = [{ realm: w.realm, mode: "required" }, { realm: w.realm, member: w.members.hanna.id, mode: "required", custody: "allow-hosted" }];
+  const q = await fan({ to: ["hanna"], body: "required" });
+  assert.deepEqual(q.names, [{ name: "hanna", state: "refused", reason: "hosted_custody" }]);
+  const s = await stateOf(alice);
+  assert.ok(Object.values(s.logical).every((L) => L.target !== "hanna"), "no logical message for the hosted name");
+  assert.ok(!(contacts.doc.pins ?? []).some((x) => x.member === w.members.hanna.id), "the hosted name is not pinned");
+  await until(() => bob.s.bob.got.length === 1, "bob's copy");
+  await settle(200);
+  assert.equal(hanna.got.length, 0);
+});
+
+test("hosted custody: while the relay's fence is up, hosted members are not candidates and not counted; by name, the answer for an unknown name", async (t) => {
+  let acc;
+  const { w, fan } = await team(t, {
+    relay: { hosted: ["hanna"], access: () => (acc = createAccess({ stateDir: tmpDir(t), policy: OPEN_POLICY })) },
+    alicePins: ["bob", "carol"],
+  });
+  await hostedSession(t, w, "hanna", ["reviewer"]);
+  const down = await fan({ to: "@reviewer" });
+  assert.deepEqual([down.candidates, down.excluded.not_encrypted, down.copies], [4, 1, 3], "fence down: counted, not-encrypted");
+  acc.setPolicy(FENCED_POLICY);
+  const up = await fan({ to: "@reviewer", body: "fenced" });
+  assert.deepEqual([up.candidates, up.excluded.not_encrypted, up.excluded.unavailable, up.excluded.first_contact, up.copies], [3, 0, 0, 0, 3], "fence up: not a candidate, not counted");
+  const named = await fan({ to: ["hanna", "nobody-here"], body: "fenced, by name" });
+  assert.deepEqual(named.names, [{ name: "hanna", state: "unavailable" }, { name: "nobody-here", state: "unavailable" }], "as an unknown name");
+});
+
 test("states: a new device of one recipient holds only that copy; released after the owner accepts it; an expired held copy is never sent", async (t) => {
   const { w, contacts, alice, bob, carol, fan } = await team(t, { alicePins: ["bob", "carol"] });
   // bob enrolls a second device: sending to bob holds until alice's owner accepts it.
-  await device(t, w, "bob", { sessions: ["bob-laptop"] });
+  await acceptOwnDevices(bob, await device(t, w, "bob", { sessions: ["bob-laptop"] })); // bob's owner accepted it (A1)
   const r = await fan({ to: "@reviewer" });
   assert.deepEqual([r.copies, r.states.held, r.states.accepted], [3, 2, 1]);
   await until(() => carol.s.carol.got.length === 1, "carol's copy is not held");
@@ -284,7 +356,7 @@ test("states: a new device of one recipient holds only that copy; released after
   assert.deepEqual([s.states.held, s.states.accepted], [0, 3]);
   await until(() => bob.s.bob.got.length === 1 && bob.s["bob-2"].got.length === 1, "released copies");
   // Expired while held: never sent, final "expired".
-  await device(t, w, "bob", { sessions: ["bob-tablet"] });
+  await acceptOwnDevices(bob, await device(t, w, "bob", { sessions: ["bob-tablet"] }));
   const h = await fan({ to: ["bob"], body: "short-lived", lifetimeMs: 60_000 });
   assert.equal(h.states.held, 1);
   w.clock.advance(60_000 + SKEW_MS);
@@ -567,12 +639,14 @@ test("a replacement after a 20-copy fan-out: every accepted copy is sealed again
       });
   }
   // bob replaces the conversation's group; alice processes its Welcome on her own (no recover()).
+  // The relay records each accepted copy's op (a rate-limited request is refused before that);
+  // its queue is no measure, as bob's device takes the copies from it as they arrive.
+  const ops = appOps(w);
   await bob.s.bob.e2ee.replace(alice.id);
-  const resealed = () => w.ds.pending({ member: bob.id, device: bob.device, limit: 200 }).filter((f) => f.kind === "app" && f.group !== gid).length;
-  await until(() => resealed() === 20, "all 20 copies sealed again in the new group", 15_000);
+  await until(() => appOps(w) === ops + 20, "all 20 copies sealed again and accepted", 15_000);
   assert.ok(limited > 0, "a pass was stopped by the relay's rate limit");
   const s = await stateOf(alice);
-  assert.ok(Object.values(s.logical).every((L) => L.state === "sent"), "nothing left marked resend");
+  assert.ok(Object.values(s.logical).every((L) => L.state === "sent" && L.group !== gid), "all sent in the new group, nothing left marked resend");
   assert.ok(Object.values(s.fanout)[0].copies.every((c) => c.final.state === "accepted"), "finals unchanged");
 });
 
@@ -594,10 +668,13 @@ test("an accepted direct message whose reseal is refused rate_limited at publica
     }
     return rpc(f);
   };
+  // Accepted by the relay (its op recorded), not seen in bob's queue: bob's device may take it first.
+  const ops = appOps(w);
   await bob.s.bob.e2ee.replace(alice.id);
-  await until(() => w.ds.pending({ member: bob.id, device: bob.device, limit: 50 }).some((f) => f.kind === "app" && f.group !== gid), "sealed again in the new group", 10_000);
+  await until(() => appOps(w) === ops + 1, "sealed again and accepted", 10_000);
   assert.equal(armed, false, "the refusal happened");
-  assert.equal((await stateOf(alice)).logical[sent.message_id].state, "sent");
+  const L = (await stateOf(alice)).logical[sent.message_id];
+  assert.deepEqual([L.state, L.group !== gid], ["sent", true], "sent in the new group");
 });
 
 /** A crash right after a 20-copy fan-out's creation write: 20 copies "new", nothing sent. */
@@ -705,7 +782,7 @@ test("the frame bound R: content of every size class sealed with the fake driver
   await sealedWithin(createFakeDriver({ seed: "r" }));
 });
 test("the frame bound R: content of every size class sealed with OpenMLS (suite 0x004D) never exceeds R", { skip: noWasm }, async () => {
-  await sealedWithin(createOpenMlsDriver(WASM, { suite: 0x004d }));
+  await sealedWithin(createOpenMlsDriver(WASM, { testOnlySuite: 0x004d }));
 });
 async function sealedWithin(driver) {
   const realm = "a".repeat(32);
@@ -864,11 +941,11 @@ test("retained send state: a failed or expired message releases its reservation;
 
 test("results: the tool text adds up, with the denominator", () => {
   const r = { copies: 5, candidates: 8, excluded: { first_contact: 2, not_encrypted: 1, unavailable: 0 }, states: { pending: 0, held: 1, accepted: 4, unavailable: 0, refused: 0, expired: 0 } };
-  assert.equal(describeFanout("@reviewer", r), "Encrypted fan-out (EXPERIMENTAL) to @reviewer: sent to 4 of 5 copies; 1 waits for a key decision by your user. Not included: 2 sessions need a first direct message (first-contact), 1 session cannot receive encrypted messages (not-encrypted). 8 sessions matched @reviewer.");
+  assert.equal(describeFanout("@reviewer", r), "Fan-out to @reviewer, encrypted (experimental, unreviewed): sent to 4 of 5 copies; 1 waits for a key decision by your user. Not included: 2 sessions need a first direct message (first-contact), 1 session cannot receive encrypted messages (not-encrypted). 8 sessions matched @reviewer.");
 });
 
 test("measurement: encryption per copy (1 KB, 1 MB), sealing 50 copies, and one save at the byte bound", { skip: noWasm }, async (t) => {
-  const driver = createOpenMlsDriver(WASM, { suite: 0x004d });
+  const driver = createOpenMlsDriver(WASM, { testOnlySuite: 0x004d });
   const realm = "a".repeat(32);
   const a = await driver.createDevice(credentialIdentity({ realm, member: `m_${"a".repeat(26)}`, device: newDeviceId() }));
   const b = await driver.createDevice(credentialIdentity({ realm, member: `m_${"b".repeat(26)}`, device: newDeviceId() }));
@@ -897,7 +974,7 @@ test("measurement: encryption per copy (1 KB, 1 MB), sealing 50 copies, and one 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-fanout-measure-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const w = await deviceRelay(t);
-  const store = deviceStore({ home: dir, profile: "relay-test", driver: createFakeDriver({ seed: "m" }), store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now });
+  const store = deviceStore({ home: dir, profile: "relay-test", driver: createFakeDriver({ seed: "m" }), store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(memoryContacts(), dir, "relay-test") });
   await store.enroll(await w.client("alice"));
   const body = b64(crypto.randomBytes(190_000));
   const save = await store.transact(async (ctx) => {

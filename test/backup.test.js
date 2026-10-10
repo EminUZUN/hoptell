@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createAccess } from "../lib/access.js";
 import { MIN_PAGES, backupRelay, readBackup } from "../lib/backup.js";
 import { loadRealm, lockStateDir } from "../lib/realm.js";
-import { appendAudit, openRelayStore } from "../lib/relaystore.js";
+import { RELAY_MIGRATIONS, appendAudit, openRelayStore } from "../lib/relaystore.js";
 import { ID, membersFile, tmp } from "./restore-helpers.js";
 
 async function store(t, { rows = 0 } = {}) {
@@ -65,7 +65,7 @@ test("backup under concurrent writes with small steps and a slowed destination: 
   assert.ok(writes > 0, "the relay's writes went on during the backup");
   assert.ok(maxWal > 0, `the -wal grew to ${maxWal} bytes while the backup read`);
   const b = readBackup(dest);
-  assert.equal(b.store.version, 4);
+  assert.equal(b.store.version, RELAY_MIGRATIONS.length);
   const copy = new DatabaseSync(path.join(dest, "relay.db"), { readOnly: true });
   assert.ok(Number(copy.prepare("SELECT count(*) AS n FROM admin_audit").get().n) >= 20_000);
   copy.close();

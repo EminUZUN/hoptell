@@ -148,11 +148,12 @@ test("MII5: plaintext held before its contact became required, or adopted under 
 async function homeOf(t, w, member, { enroll = true, contacts = null, flag = true, roles = null, extra = {} } = {}) {
   const dir = tmpDir(t);
   const env = { HOPTELL_RELAY: w.url, HOPTELL_TOKEN: w.members[member].token, HOPTELL_NAME: member, ...(roles ? { HOPTELL_ROLES: roles } : {}), HOPTELL_HOME: dir, HOPTELL_PUSH: "listener", HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: PASS, HOPTELL_MLS_DRIVER: FAKE, HOPTELL_MACHINE_ID: "m", ...(flag ? { HOPTELL_EXPERIMENTAL_E2EE: "1" } : {}), ...extra };
+  if (contacts) fs.writeFileSync(path.join(dir, "contacts.json"), JSON.stringify(contacts(w)), { mode: 0o600 });
   if (enroll) {
-    const store = await storeFor({ home: dir, profile: profileKey(w.url, null), env });
+    // Enrollment writes the own baseline into the home's contacts (A1).
+    const store = await storeFor({ home: dir, profile: profileKey(w.url, null), env, contacts: await openContacts(dir, { notify: false }) });
     await store.enroll(await w.client(member));
   }
-  if (contacts) fs.writeFileSync(path.join(dir, "contacts.json"), JSON.stringify(contacts(w)), { mode: 0o600 });
   const engine = createEngine(readSettings({ env, homedir: os.tmpdir(), pid: process.pid, hostname: "testhost" }), { findHost: () => null, keepAlive: true });
   t.after(() => engine.stop());
   await engine.start();
@@ -168,11 +169,11 @@ test("an agent session: required sends encrypted end to end; the peer's session 
   await until(() => alice.engine.session.state === "bound");
   await new Promise((r) => setTimeout(r, 300)); // both attached their devices
   const r = await alice.engine.call("send_message", { to: "bob", message: "secret plan" });
-  assert.match(textOf(r), /end-to-end encrypted/);
+  assert.match(textOf(r), /encrypted \(experimental, unreviewed\)/);
   let got = "";
   assert.ok(await until(async () => /secret plan/.test((got += textOf(await bob.engine.call("read_inbox"))))), got);
   assert.equal(w.relay.stats().queueItems, 0, "nothing went through the plaintext queue");
-  const rows = w.db.all("SELECT frame FROM e2ee_queue").map((x) => x.frame).join("");
+  const rows = [...w.db.all("SELECT frame FROM e2ee_queue").map((x) => x.frame), ...w.db.all("SELECT body FROM e2ee_payloads").map((x) => x.body)].join("");
   assert.ok(!rows.includes("secret plan"));
 });
 
@@ -256,10 +257,10 @@ test("an agent session: @role under an encryption policy is an encrypted fan-out
   const alice = await homeOf(t, w, "alice", { contacts: policy("bob", [{ mode: "required" }]) });
   await new Promise((r) => setTimeout(r, 300));
   // The first message to bob is a deliberate direct send (it pins bob's devices); carol has none.
-  assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /end-to-end encrypted/);
+  assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /encrypted \(experimental, unreviewed\)/);
   const r = await alice.engine.call("send_message", { to: "@reviewer", message: "fan-out secret" });
   assert.ok(!r.isError, textOf(r));
-  assert.equal(textOf(r), "Encrypted fan-out (EXPERIMENTAL) to @reviewer: sent to 1 of 1 copy. Not included: 1 session needs a first direct message (first-contact). 2 sessions matched @reviewer.");
+  assert.equal(textOf(r), "Fan-out to @reviewer, encrypted (experimental, unreviewed): sent to 1 of 1 copy. Not included: 1 session needs a first direct message (first-contact). 2 sessions matched @reviewer.");
   let got = "";
   let ack;
   const read = async () => {
@@ -269,7 +270,7 @@ test("an agent session: @role under an encryption policy is an encrypted fan-out
   };
   assert.ok(await until(async () => /fan-out secret/.test((got += await read()))), got);
   assert.equal(w.relay.stats().queueItems, 0, "nothing went through the plaintext queue");
-  assert.ok(!w.db.all("SELECT frame FROM e2ee_queue").map((x) => x.frame).join("").includes("fan-out secret"));
+  assert.ok(![...w.db.all("SELECT frame FROM e2ee_queue").map((x) => x.frame), ...w.db.all("SELECT body FROM e2ee_payloads").map((x) => x.body)].join("").includes("fan-out secret"));
 });
 
 test("an encrypted fan-out copy meets gate 3 at the recipient: bob's contacts do not admit alice, so it waits in quarantine, never in the inbox", async (t) => {
@@ -277,7 +278,7 @@ test("an encrypted fan-out copy meets gate 3 at the recipient: bob's contacts do
   const bob = await homeOf(t, w, "bob", { contacts: policy("carol"), roles: "reviewer" });
   const alice = await homeOf(t, w, "alice", { contacts: policy("bob", [{ mode: "required" }]) });
   await new Promise((r) => setTimeout(r, 300));
-  assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /end-to-end encrypted/);
+  assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /encrypted \(experimental, unreviewed\)/);
   const r = await alice.engine.call("send_message", { to: "@reviewer", message: "fan-out to quarantine" });
   assert.match(textOf(r), /sent to 1 of 1 copy/);
   const c = await openContacts(bob.dir, { notify: false });

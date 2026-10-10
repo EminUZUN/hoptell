@@ -17,7 +17,9 @@ import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { E2EE_MIGRATIONS, createDeliveryService } from "../lib/mls/relayds.js";
 import { DEVICE_MIGRATIONS } from "../lib/mls/relaydir.js";
 import { RELAY_MIGRATIONS } from "../lib/relaystore.js";
-import { fakeDevice, memoryContacts, newOp } from "./mls-helpers.js";
+import { createTransferStore } from "../lib/mls/relaytransfers.js";
+import { TAG_BYTES, rootOf } from "../lib/transferwire.js";
+import { fakeDevice, memoryContacts, newOp, ownFor } from "./mls-helpers.js";
 import { deviceStore } from "../lib/mls/device.js";
 import { createE2ee } from "../lib/mls/e2ee.js";
 import { evaluate, pinFirstUse } from "../lib/mls/trust.js";
@@ -60,7 +62,7 @@ function fakeBroker() {
   };
 }
 
-async function setup(t, { policy = null, token = null, stateDir = null, fault = null, revocationDelay = 300, devices = false, e2ee = false } = {}) {
+async function setup(t, { policy = null, token = null, stateDir = null, fault = null, revocationDelay = 300, devices = false, e2ee = false, transfers = false } = {}) {
   stateDir ??= fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-"));
   t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
   const clock = { t: Date.now() };
@@ -75,7 +77,9 @@ async function setup(t, { policy = null, token = null, stateDir = null, fault = 
   const openStore = (migrations) => {
     db = openRelayDb({ dir: ddir, migrations, fullfsync: false });
     const directory = createDeviceDirectory({ db, realm: "e".repeat(32) });
-    deviceOpt = { directory, ...(e2ee ? { ds: createDeliveryService({ db, directory, realm: "e".repeat(32), now: () => clock.t }) } : {}) };
+    // Larger transfers (design 6) on the same store, with `transfers`.
+    const xfer = e2ee && transfers ? createTransferStore({ db, now: () => clock.t }) : null;
+    deviceOpt = { directory, ...(e2ee ? { ds: createDeliveryService({ db, directory, realm: "e".repeat(32), now: () => clock.t, transfers: xfer }) } : {}), ...(xfer ? { transfers: xfer } : {}) };
   };
   if (devices || e2ee) {
     ddir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-devices-"));
@@ -905,10 +909,17 @@ test("device lists and KeyPackages follow the caller's signed-in reach: group de
   const s = await setup(t, { policy: POLICY({ groups: { suspended: { members: [], oidcGroups: [{ issuer: IDP, group: "suspended" }] }, team: { members: [], oidcGroups: [{ issuer: IDP, group: "team" }] } }, rules: [{ from: "group:suspended", to: "*", action: "deny" }] }), devices: true });
   const bob = await s.connect("bob");
   const bd = await fakeDevice("e".repeat(32), ID.bob);
-  await bob.rpc(bd.register());
+  await bd.registerOn(bob); // A9: register and attach with proofs before KeyPackage work
+  await bd.attachOn(bob);
   await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(3, Date.now() + 86_400_000) });
   const listed = async (c) => (await c.rpc({ type: "device_list", member: ID.bob })).devices.length;
-  const take = (c, request) => c.rpc({ type: "kp_take", request, device: "aaaaaaaaaaaaaaaaaaaaaaaaaa", target: { member: ID.bob, device: bd.device } }).then(() => "kp", (e) => e.code);
+  // The caller's own device, attached on its connection (A9), takes: the reach rule then decides.
+  const take = async (c, request, who = "alice") => {
+    const d = await fakeDevice("e".repeat(32), ID[who]);
+    await d.registerOn(c);
+    await d.attachOn(c);
+    return c.rpc({ type: "kp_take", request, device: d.device, target: { member: ID.bob, device: bd.device } }).then(() => "kp", (e) => e.code);
+  };
   // bob is hidden and grants member alice and group team.
   await publish(await s.connect("bob", "send"), { default: "deny", visible: "grantees", entries: [{ selector: `member:${ID.alice}`, action: "allow" }, { selector: "group:team", action: "allow" }] });
   // 1. alice signed in with a suspended group: her admin deny applies to devices too.
@@ -1043,16 +1054,24 @@ async function encryptedToBob(s) {
   const blob = () => crypto.randomBytes(48).toString("base64");
   const bob = await s.connect("bob", "send");
   const bd = await fakeDevice(realm, ID.bob);
-  await bob.rpc(bd.register());
+  await bd.registerOn(bob); // A9: register and attach with proofs before KeyPackage work
+  await bd.attachOn(bob);
   await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(4, Date.now() + 86_400_000) });
   const conversation = async (c, who) => {
     const d = await fakeDevice(realm, ID[who]);
-    await c.rpc(d.register());
+    await d.registerOn(c);
+    await d.attachOn(c);
     const { reservation } = await c.rpc({ type: "kp_take", request: `req-${crypto.randomBytes(6).toString("hex")}`, device: d.device, target: { member: ID.bob, device: bd.device } });
     const group = crypto.randomBytes(16).toString("hex");
     await c.rpc({ type: "group_create", op: newOp(), device: d.device, peer: ID.bob, group, epoch: 1, welcome: { recipients: [bd.device], mls: blob() }, kp_reservations: [reservation] });
     const sent = [];
+    const proven = new WeakSet([c]);
     const send = async (via = c) => {
+      // A9: a new connection proves the device before it sends for it.
+      if (!proven.has(via)) {
+        await d.attachOn(via);
+        proven.add(via);
+      }
       const mls = blob();
       sent.push(mls);
       return (await via.rpc({ type: "send_e2ee", kind: "app", op: newOp(), device: d.device, group, mls, target: "bob" })).state;
@@ -1069,7 +1088,7 @@ async function encryptedToBob(s) {
     }
     peer = await s.connect("bob");
     peer.on("message_e2ee", (m, ack) => (got.push(m), ack()));
-    await peer.rpc({ type: "e2ee_attach", device: bd.device });
+    await bd.attachOn(peer);
     return got;
   };
   return { bob, bd, conversation, receive };
@@ -1148,7 +1167,8 @@ async function storeBeforeSenders(t, { policy = null, from = ["alice"], self = f
   for (const who of from) {
     const c = await s.connect(who, "send");
     const d = await fakeDevice("e".repeat(32), ID[who]);
-    await c.rpc(d.register());
+    await d.registerOn(c);
+    await d.attachOn(c);
     const group = crypto.randomBytes(16).toString("hex");
     const g = await c.rpc({ type: "group_create", op: newOp(), device: d.device, peer: ID.bob, group, epoch: 1, welcome: null, kp_reservations: [] });
     assert.equal(g.group, group);
@@ -1222,7 +1242,7 @@ test("a message queued before senders were recorded is refused also on a relay w
   const got = [];
   peer.on("message_e2ee", (m, ack) => (got.push(m), ack()));
   await peer.start().ready(5000);
-  await peer.rpc({ type: "e2ee_attach", device: e.bd.device });
+  await e.bd.attachOn(peer);
   assert.ok(await until(() => got.filter((m) => m.kind !== "app").length === 4 && apps(got).length >= 1));
   await sleep(200);
   assert.deepEqual(apps(got), [ID.bob], "only bob's own message; alice's and carol's are refused");
@@ -1312,12 +1332,12 @@ test("held encrypted messages: a new message passes them, and a hold that become
  * An enrolled device (fake driver) of `who` with an e2ee engine on `client` (its session), on the
  * relay of setup `s`; `contacts` keeps pins (memoryContacts). Deliveries are collected in `got`.
  */
-async function e2eeHome(t, s, who, client, { contacts = null } = {}) {
+async function e2eeHome(t, s, who, client, { contacts = memoryContacts() } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-home-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const now = () => s.clock.t;
   const driver = createFakeDriver({ seed: `${who}-${dir}`, now });
-  const store = deviceStore({ home: dir, profile: "access-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now });
+  const store = deviceStore({ home: dir, profile: "access-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now, own: ownFor(contacts, dir, "access-test") });
   await store.enroll(client);
   const got = [];
   const e2ee = createE2ee({ store, driver, client, session: client.name, home: dir, profile: "access-test", contacts, deliver: async (m) => void got.push(m), now });
@@ -1372,7 +1392,7 @@ test("encrypted fan-out (4.3): a sender's sign-in that ended after acceptance st
   const back = await s.connect("bob");
   const got = [];
   back.on("message_e2ee", (m, ack) => (got.push(m), ack()));
-  await back.rpc({ type: "e2ee_attach", device: bob.device });
+  await bob.store.attach(back); // A9: the device proves its key on the new connection
   await sleep(400);
   assert.equal(got.filter((m) => m.kind === "app").length, 0, "the queued copy is not dispatched");
   assert.equal(s.ds.usage({ member: ID.bob, device: bob.device }).messages, 0, "dropped, not held");
@@ -1392,4 +1412,181 @@ test("the access manifest: written before a file is first created; a listed file
   assert.deepEqual(manifest(), ["grants.json"]);
   fs.rmSync(path.join(dir, "access", "grants.json"));
   assert.throws(() => createAccess({ stateDir: dir }), /grants\.json cannot be read/, "a lost deny is not an empty grants file");
+});
+
+// ---- larger transfers (design 6) and claim views ---------------------------------------------------
+
+const SUSPENDED = { suspended: { members: [], oidcGroups: [{ issuer: IDP, group: "suspended" }] } };
+/** A one-chunk transfer (random ciphertext of the expected length) and its frames. */
+function smallTransfer(total = 10) {
+  const data = crypto.randomBytes(total + TAG_BYTES);
+  const id = crypto.randomBytes(16).toString("hex");
+  return {
+    id,
+    begin: { type: "upload_begin", transfer_id: id, total_bytes: total, chunk_count: 1, header_digest: crypto.randomBytes(32).toString("hex") },
+    chunk: { type: "upload_chunk", transfer_id: id, index: 0, data: data.toString("base64") },
+    commit: { type: "upload_commit", transfer_id: id, root: rootOf([data]).toString("hex") },
+  };
+}
+/** A device of `who`, registered on `c`; attach(conn) attaches a connection to it. */
+async function deviceOf(c, who) {
+  const d = await fakeDevice("e".repeat(32), ID[who]);
+  await d.registerOn(c);
+  d.attach = (conn) => d.attachOn(conn);
+  return d;
+}
+const code = (p) => p.then(() => "ok", (e) => e.code);
+
+test("transfers: gate 1's transfers rules see the uploader's provider groups through its current claim view (a deny by a provider group, changed and stale claims)", async (t) => {
+  const s = await setup(t, { policy: POLICY({ groups: SUSPENDED, transfers: [{ from: "group:suspended", action: "deny" }] }), e2ee: true, transfers: true });
+  const t0 = s.clock.t;
+  // alice signs in with the provider group suspended: her uploads are refused (default allow
+  // would otherwise let them through), whatever her member id.
+  const a1 = await s.signIn("alice", { groups: ["suspended"], iat: t0 }, "send");
+  const ad = await deviceOf(a1, "alice");
+  await ad.attach(a1);
+  assert.equal(await code(a1.rpc(smallTransfer().begin)), "not_allowed");
+  // carol, signed in without it, uploads.
+  const c1 = await s.signIn("carol", { groups: [], iat: t0 }, "send");
+  await (await deviceOf(c1, "carol")).attach(c1);
+  assert.equal((await c1.rpc(smallTransfer().begin)).state, "open");
+  // A newer sign-in without the group changes alice's view: allowed.
+  a1.close();
+  const a2 = await s.signIn("alice", { groups: [], iat: t0 + 1 }, "send");
+  await ad.attach(a2);
+  assert.equal((await a2.rpc(smallTransfer().begin)).state, "open");
+  // A newer one with the group again: refused, also on the connection signed in before it.
+  const a3 = await s.signIn("alice", { groups: ["suspended"], iat: t0 + 2 }, "send");
+  await ad.attach(a3);
+  assert.equal(await code(a3.rpc(smallTransfer().begin)), "not_allowed");
+  assert.equal(await code(a2.rpc(smallTransfer().begin)), "not_allowed", "the identity's one view decides, not the connection's own sign-in");
+  // An older sign-in (an older token presented later) never restores the dropped claim.
+  a2.close();
+  const a4 = await s.signIn("alice", { groups: [], iat: t0 + 1 }, "send");
+  await ad.attach(a4);
+  assert.equal(await code(a4.rpc(smallTransfer().begin)), "not_allowed");
+  // A view past its freshness bound is never read as an empty claim set: retry, not allowed.
+  s.clock.t = t0 + 400_000;
+  assert.equal(await code(c1.rpc(smallTransfer().begin)), "unavailable");
+  s.clock.t = t0;
+  assert.equal((await c1.rpc(smallTransfer().begin)).state, "open", "fresh again");
+  // A closed view (a sign-out) refuses.
+  s.access.invalidate(`${IDP}|carol`, "sign-out");
+  assert.equal(await code(c1.rpc(smallTransfer().begin)), "not_allowed");
+});
+
+test("transfers: with an active policy and no transfers rules, a signed-out or stale sign-in still cannot upload", async (t) => {
+  const s = await setup(t, { policy: POLICY({ transfers: [] }), e2ee: true, transfers: true });
+  const t0 = s.clock.t;
+  const c1 = await s.signIn("carol", { groups: [], iat: t0 }, "send");
+  await (await deviceOf(c1, "carol")).attach(c1);
+  assert.equal((await c1.rpc(smallTransfer().begin)).state, "open");
+  // A view past its freshness bound: retry, not the empty-rules default.
+  s.clock.t = t0 + 400_000;
+  assert.equal(await code(c1.rpc(smallTransfer().begin)), "unavailable");
+  s.clock.t = t0;
+  // A closed view (a sign-out): refused.
+  s.access.invalidate(`${IDP}|carol`, "sign-out");
+  assert.equal(await code(c1.rpc(smallTransfer().begin)), "not_allowed");
+});
+
+test("transfers: without transfers rules every attached member uploads; a member-listed group deny still refuses a member token", async (t) => {
+  const s = await setup(t, { policy: POLICY({ groups: { blocked: { members: [ID.dave] } }, transfers: [{ from: "group:blocked", action: "deny" }] }), e2ee: true, transfers: true });
+  const dave = await s.connect("dave", "send");
+  await (await deviceOf(dave, "dave")).attach(dave);
+  assert.equal(await code(dave.rpc(smallTransfer().begin)), "not_allowed");
+  const alice = await s.connect("alice", "send");
+  await (await deviceOf(alice, "alice")).attach(alice);
+  assert.equal((await alice.rpc(smallTransfer().begin)).state, "open");
+  s.access.setPolicy(POLICY());
+  assert.equal((await dave.rpc(smallTransfer().begin)).state, "open");
+});
+
+/**
+ * A transfer from `who` (signed in on `c`, its device `d`) published to bob: alice's conversation
+ * with bob's device, the upload, and an application message carrying the reference. Returns the
+ * download frame bob's device sends.
+ */
+async function publishedToBob(s, c, d, bd, bob) {
+  const { reservation } = await c.rpc({ type: "kp_take", request: `req-${crypto.randomBytes(6).toString("hex")}`, device: d.device, target: { member: ID.bob, device: bd.device } });
+  const group = crypto.randomBytes(16).toString("hex");
+  await c.rpc({ type: "group_create", op: newOp(), device: d.device, peer: ID.bob, group, epoch: 1, welcome: { recipients: [bd.device], mls: crypto.randomBytes(48).toString("base64") }, kp_reservations: [reservation] });
+  const x = smallTransfer();
+  await c.rpc(x.begin);
+  await c.rpc(x.chunk);
+  await c.rpc(x.commit);
+  const r = await c.rpc({ type: "send_e2ee", kind: "app", op: newOp(), device: d.device, group, mls: crypto.randomBytes(48).toString("base64"), target: "bob", blobs: [{ uploader_device: d.device, transfer_id: x.id }] });
+  assert.equal(r.state, "accepted");
+  return () => code(bob.rpc({ type: "download", uploader_device: d.device, transfer_id: x.id, from_index: 0 }));
+}
+async function bobsDevice(s) {
+  const bob = await s.connect("bob", "send");
+  const bd = await fakeDevice("e".repeat(32), ID.bob);
+  await bd.registerOn(bob); // A9: register and attach with proofs before KeyPackage work
+  await bd.attachOn(bob);
+  await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(4, Date.now() + 86_400_000) });
+  return { bob, bd };
+}
+
+test("transfers: downloads are rechecked for the uploader's sign-in as it is now: a provider-group allow or deny changed after publication, a newer claim, a stale view and a sign-out", async (t) => {
+  const groups = { ...SUSPENDED, team: { members: [], oidcGroups: [{ issuer: IDP, group: "team" }] } };
+  const s = await setup(t, { policy: POLICY({ groups }), e2ee: true, transfers: true });
+  const t0 = s.clock.t;
+  const { bob, bd } = await bobsDevice(s);
+  const a1 = await s.signIn("alice", { groups: ["team"], iat: t0 }, "send");
+  const ad = await deviceOf(a1, "alice");
+  await ad.attach(a1);
+  const download = await publishedToBob(s, a1, ad, bd, bob);
+  assert.equal(await download(), "ok", "published under allow");
+  // The admin denies alice's provider group after publication: no further chunk.
+  s.access.setPolicy(POLICY({ groups, rules: [{ from: "group:team", to: "*", action: "deny" }] }));
+  assert.equal(await download(), "gone", "a provider-group deny stops the download, like an unknown transfer");
+  // Back to allow: it continues.
+  s.access.setPolicy(POLICY({ groups }));
+  assert.equal(await download(), "ok");
+  // bob's gate 2 admits only the provider group team (default deny): allowed while alice is in it.
+  await publish(bob, { default: "deny", visible: "all", entries: [{ selector: "group:team", action: "allow" }] });
+  assert.equal(await download(), "ok", "a provider-group allow in gate 2");
+  // A newer sign-in of alice without team changes her view: the allow no longer matches.
+  a1.close();
+  await s.signIn("alice", { groups: [], iat: t0 + 1 }, "send");
+  assert.equal(await download(), "gone", "the claim changed after publication");
+  // With team again (newer still): allowed; an older token without it does not restore the drop.
+  const a3 = await s.signIn("alice", { groups: ["team"], iat: t0 + 2 }, "send");
+  assert.equal(await download(), "ok");
+  // A stale view: held (try again later), never read as an empty claim set.
+  s.clock.t = t0 + 400_000;
+  assert.equal(await download(), "unavailable");
+  s.clock.t = t0;
+  assert.equal(await download(), "ok", "fresh again");
+  // A sign-out closes the view: gone.
+  s.access.invalidate(`${IDP}|alice`, "sign-out");
+  assert.equal(await download(), "gone");
+  a3.close();
+});
+
+test("transfers: a download is refused once the uploader's broker sign-in has ended, and the relation keeps the publishing principal", async (t) => {
+  const s = await setup(t, { e2ee: true, transfers: true });
+  const { bob, bd } = await bobsDevice(s);
+  const a = await s.signIn("alice", { family: "fa", at: s.clock.t }, "send", "broker");
+  const ad = await deviceOf(a, "alice");
+  await ad.attach(a);
+  const download = await publishedToBob(s, a, ad, bd, bob);
+  assert.equal(await download(), "ok");
+  const sender = JSON.parse(s.db.get("SELECT sender FROM transfer_relations").sender);
+  assert.deepEqual(sender, { memberId: ID.alice, identity: `${IDP}|alice`, family: "fa" });
+  s.broker.ended.add("fa");
+  assert.equal(await download(), "gone", "the broker family ended");
+});
+
+test("transfers: a relation kept without a publishing principal serves no other member", async (t) => {
+  const s = await setup(t, { e2ee: true, transfers: true });
+  const { bob, bd } = await bobsDevice(s);
+  const alice = await s.connect("alice", "send");
+  const ad = await deviceOf(alice, "alice");
+  await ad.attach(alice);
+  const download = await publishedToBob(s, alice, ad, bd, bob);
+  assert.equal(await download(), "ok", "a member token's principal is kept too");
+  s.db.tx((h) => h.run("UPDATE transfer_relations SET sender = NULL"));
+  assert.equal(await download(), "gone");
 });

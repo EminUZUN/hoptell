@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { lockStateDir } from "../lib/realm.js";
 import { openRelayDb } from "../lib/relaydb.js";
 import { E2EE_CAP, DEVICE_CAP } from "../lib/relay.js";
-import { MAX_FRAME_BYTES, LOG_KEEP_EPOCHS } from "../lib/mls/relayds.js";
+import { APP_QUEUE_MS, E2EE_PAYLOAD_MIGRATION, MAX_FRAME_BYTES, LOG_KEEP_EPOCHS, createDeliveryService } from "../lib/mls/relayds.js";
+import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { DAY, KP_LIFETIME_MS } from "../lib/mls/policy.js";
 import { RELAY_MIGRATIONS } from "../lib/relaystore.js";
 import { deviceRelay, fakeDevice, newOp, refusal, tmpDir } from "./mls-helpers.js";
@@ -27,9 +28,9 @@ const reqId = () => `req-${process.pid}-${++reqN}-${crypto.randomBytes(3).toStri
 /** alice (one device) and bob (two devices, `n` packages each), clients for each. */
 async function setup(t, { n = 4, limits = {}, access = null } = {}) {
   const w = await deviceRelay(t, { e2ee: true, limits, access });
-  const alice = await w.client("alice");
-  const bob = await w.client("bob");
-  const carol = await w.client("carol");
+  const alice = await w.member("alice");
+  const bob = await w.member("bob");
+  const carol = await w.member("carol");
   const ad = await fakeDevice(w.realm, w.members.alice.id);
   const ad2 = await fakeDevice(w.realm, w.members.alice.id);
   const bd = await fakeDevice(w.realm, w.members.bob.id);
@@ -73,7 +74,7 @@ function inbox(client) {
   return {
     got,
     async attach(device) {
-      return client.rpc({ type: "e2ee_attach", device: device.device });
+      return device.attachOn(client); // A9: with a proof by the device's key
     },
     async wait(n, ms = 3000) {
       const end = Date.now() + ms;
@@ -147,7 +148,8 @@ test("conversations: concurrent creates give one group; a delayed contender chan
   assert.equal(again.created, ra.created);
   assert.equal((await refusal(s.alice.rpc({ ...fa, group: groupId() }))).code, "op_reused");
   // A delayed contender after the Welcome was delivered: still the same group, nothing queued.
-  const box = inbox(ra.created ? s.bob : s.alice);
+  // (A9: deliveries go to an agent session's attached connection)
+  const box = inbox(await s.w.client(ra.created ? "bob" : "alice", { session: ra.created ? "bob" : "alice" }));
   await box.attach(ra.created ? s.bd : s.ad);
   const [{ ack }] = await box.wait(1);
   ack();
@@ -494,8 +496,8 @@ test("MII3 reconciliation is reconcile-or-cancel: an unknown op id is cancelled 
 test("MII8 per-device control bound: replacements drop the control frames of superseded generations, one queued Welcome per conversation (the newest)", async (t) => {
   // The reviewer's repro: 25 generations, each a fresh KeyPackage, a Welcome and a commit, for one offline device.
   const w = await deviceRelay(t, { e2ee: true, limits: { messages: 1, bytes: 1024 } });
-  const alice = await w.client("alice");
-  const bob = await w.client("bob");
+  const alice = await w.member("alice");
+  const bob = await w.member("bob");
   const A = w.members.alice.id;
   const B = w.members.bob.id;
   const ad = await fakeDevice(w.realm, A);
@@ -689,8 +691,8 @@ test("a restored conversation (replace_required) refuses commits until group_rep
   assert.equal(r.generation, 2);
   assert.equal((await s.commit(s.bob, s.bd, r.group, 1)).state, "accepted", "the new group accepts commits");
   // commit_invalid reaches the relay's audit hook.
-  const a = await w2.client("alice");
-  const b = await w2.client("bob");
+  const a = await w2.member("alice");
+  const b = await w2.member("bob");
   const ad = await fakeDevice(w2.realm, w2.members.alice.id);
   const bd = await fakeDevice(w2.realm, w2.members.bob.id);
   await a.rpc(ad.register());
@@ -723,4 +725,123 @@ test("replace_required is in the conversation and catch-up answers; new messages
   const r = await s.bob.rpc({ type: "group_replace", op: newOp(), device: s.bd.device, peer: s.A, expected_generation: 1, group: groupId(), epoch: 1, welcome: { recipients: [s.ad.device], mls: blob() }, kp_reservations: res });
   const now = await s.alice.rpc({ type: "conversation", peer: s.B });
   assert.deepEqual([now.group, now.replace_required], [r.group, false]);
+});
+
+// ---- shared payloads (design 6 review: an acceptance writes a message's bytes once) ----------------
+
+/** Every payload row is referenced, and every reference has its row. */
+function payloadsConsistent(db) {
+  const orphans = db.get("SELECT count(*) AS n FROM e2ee_payloads p WHERE NOT EXISTS (SELECT 1 FROM e2ee_queue q WHERE q.payload = p.pid)").n;
+  const dangling = db.get("SELECT count(*) AS n FROM e2ee_queue q WHERE q.payload IS NOT NULL AND NOT EXISTS (SELECT 1 FROM e2ee_payloads p WHERE p.pid = q.payload)").n;
+  return { orphans, dangling };
+}
+const payloadCount = (db) => db.get("SELECT count(*) AS n FROM e2ee_payloads").n;
+
+test("shared payloads: a message's bytes are stored once for all its recipient devices and removed with their last reference, on every path that removes queue entries", async (t) => {
+  const s = await setup(t);
+  const db = s.w.db;
+  const ok = () => assert.deepEqual(payloadsConsistent(db), { orphans: 0, dangling: 0 });
+  const g = (await s.create()).answer;
+  assert.equal(payloadCount(db), 1, "one Welcome payload for bob's two devices");
+  ok();
+  // Acknowledgements: the payload stays until its last reference goes.
+  const welcomeOf = (d) => s.w.ds.pending({ member: s.B, device: d.device }).find((f) => f.kind === "welcome");
+  const w1 = welcomeOf(s.bd);
+  const w2 = welcomeOf(s.bd2);
+  assert.equal(w1.mls, w2.mls, "both deliveries carry the Welcome's bytes");
+  assert.ok(w1.ratchet_tree && w1.ratchet_tree === w2.ratchet_tree);
+  assert.notEqual(w1.delivery, w2.delivery);
+  s.w.ds.ack({ member: s.B, device: s.bd.device, delivery: w1.delivery });
+  assert.equal(payloadCount(db), 1);
+  s.w.ds.ack({ member: s.B, device: s.bd2.device, delivery: w2.delivery });
+  assert.equal(payloadCount(db), 0, "the last acknowledgement removes it");
+  ok();
+  // A commit and an application message: one payload each for two devices.
+  assert.equal((await s.commit(s.alice, s.ad, g.group, 1)).state, "accepted");
+  const app = await s.alice.rpc({ type: "send_e2ee", kind: "app", op: newOp(), device: s.ad.device, group: g.group, mls: blob(), target: "bob" });
+  assert.equal(app.recipients, 2);
+  assert.equal(payloadCount(db), 2);
+  assert.equal(db.get("SELECT count(*) AS n FROM e2ee_queue WHERE payload IS NOT NULL").n, 4);
+  ok();
+  // Expiry (the sweep): the application message's entries and their payload go together.
+  s.w.clock.advance(APP_QUEUE_MS + 1000);
+  assert.equal(s.w.ds.sweep().queue, 2);
+  assert.equal(payloadCount(db), 1, "only the commit's payload is left");
+  ok();
+  // A newer Welcome replaces a device's queued one (MII8): its payload goes with it.
+  const r1 = await s.take(s.alice, s.ad, s.A, s.ad2);
+  assert.equal((await s.commit(s.alice, s.ad, g.group, 2, { roster_delta: { add: [s.ad2.device], remove: [] }, welcome: { recipients: [s.ad2.device], mls: blob() }, kp_reservations: [r1] })).state, "accepted");
+  ok();
+  // A replacement drops the control frames of the superseded generation, and their payloads.
+  const res = [await s.take(s.alice, s.ad, s.B, s.bd)];
+  const rep = await s.alice.rpc({ type: "group_replace", op: newOp(), device: s.ad.device, peer: s.B, expected_generation: 1, group: groupId(), epoch: 1, welcome: { recipients: [s.bd.device], mls: blob() }, kp_reservations: res });
+  assert.equal(rep.generation, 2);
+  assert.equal(db.get("SELECT count(*) AS n FROM e2ee_queue WHERE group_id = ?", g.group).n, 0);
+  ok();
+  assert.equal(payloadCount(db), 1, "only the new Welcome's payload is left");
+});
+
+test("shared payloads: when a device's queue is full, its queued commits of the group are coalesced and their payloads go when nothing else references them", async (t) => {
+  const s = await setup(t, { limits: { messages: 2 } });
+  const db = s.w.db;
+  const g = (await s.create()).answer;
+  for (const d of [s.bd, s.bd2]) {
+    const w = s.w.ds.pending({ member: s.B, device: d.device }).find((f) => f.kind === "welcome");
+    s.w.ds.ack({ member: s.B, device: d.device, delivery: w.delivery });
+  }
+  for (let e = 1; e <= 4; e++) assert.equal((await s.commit(s.alice, s.ad, g.group, e)).state, "accepted");
+  // Each device keeps at most its newest commits; the older payloads were removed with them.
+  assert.ok(db.get("SELECT count(*) AS n FROM e2ee_queue WHERE device_id = ?", s.bd.device).n <= 2);
+  assert.deepEqual(payloadsConsistent(db), { orphans: 0, dangling: 0 });
+  assert.equal(payloadCount(db), db.get("SELECT count(DISTINCT payload) AS n FROM e2ee_queue").n);
+});
+
+test("migration 7 keeps queued frames deliverable: entries stored whole before it are delivered unchanged, later ones share their payload", async (t) => {
+  const dir = tmpDir(t);
+  const release = lockStateDir(dir);
+  t.after(() => release());
+  const realm = crypto.randomBytes(16).toString("hex");
+  const [A, B] = ["m_aaaaaaaaaaaaaaaaaaaaaaaaaa", "m_bbbbbbbbbbbbbbbbbbbbbbbbbb"];
+  const ad = await fakeDevice(realm, A);
+  const bd = await fakeDevice(realm, B);
+  const open = (migrations) => {
+    const db = openRelayDb({ dir, migrations, fullfsync: false });
+    const directory = createDeviceDirectory({ db, realm });
+    return { db, directory, ds: createDeliveryService({ db, directory, realm }) };
+  };
+  // A store at migration 6 (before shared payloads), with a Welcome, a commit and a message queued.
+  const v6 = RELAY_MIGRATIONS.slice(0, RELAY_MIGRATIONS.indexOf(E2EE_PAYLOAD_MIGRATION));
+  assert.equal(v6.length, 6);
+  const old = open(v6);
+  for (const [m, d] of [[A, ad], [B, bd]]) {
+    const r = d.register();
+    old.directory.register({ member: m, device: d.device, key: Buffer.from(r.key, "base64"), pin: Buffer.from(r.pin, "base64") });
+    old.directory.upload({ member: m, device: d.device, packages: (await d.packages(2, Date.now() + KP_LIFETIME_MS)).map((p) => ({ kp: Buffer.from(p.kp, "base64"), notAfter: p.not_after })) });
+  }
+  const requester = { member: A, device: ad.device };
+  const { reservation } = old.directory.take({ requester, request: reqId(), target: { member: B, device: bd.device } });
+  const group = groupId();
+  old.ds.groupCreate({ requester, op: newOp(), peer: B, group, epoch: 1, welcome: { recipients: [bd.device], mls: blob() }, reservations: [reservation] });
+  old.ds.sendCommit({ requester, op: newOp(), group, expectedEpoch: 1, mls: blob(), delta: { add: [], remove: [] } });
+  old.ds.sendApp({ requester, op: newOp(), group, mls: blob(), target: "bob", sender: memberSender(A) });
+  const before = old.ds.pending({ member: B, device: bd.device, limit: 10, withSender: true });
+  assert.deepEqual(before.map((x) => x.frame.kind), ["welcome", "commit", "app"]);
+  assert.ok(before.every((x) => typeof x.frame.mls === "string"));
+  old.db.close();
+  // The upgrade: nothing is rewritten; the entries are read as they were stored.
+  const cur = open(RELAY_MIGRATIONS);
+  assert.equal(cur.db.version, RELAY_MIGRATIONS.length);
+  assert.equal(cur.db.get("SELECT count(*) AS n FROM e2ee_queue WHERE payload IS NULL").n, 3);
+  assert.deepEqual(cur.ds.pending({ member: B, device: bd.device, limit: 10, withSender: true }), before, "delivered unchanged, with their senders and places in the queue");
+  // A new message after them shares a payload; the paging by seq still reaches it after them.
+  cur.ds.sendApp({ requester, op: newOp(), group, mls: blob(), target: "bob", sender: memberSender(A) });
+  const apps = cur.ds.pending({ member: B, device: bd.device, limit: 10, targets: ["bob"], control: false, appsAfter: before[2].seq, withSender: true });
+  assert.equal(apps.length, 1);
+  assert.equal(cur.db.get("SELECT count(*) AS n FROM e2ee_queue WHERE payload IS NOT NULL").n, 1);
+  assert.equal(typeof apps[0].frame.mls, "string");
+  // The old entries are acknowledged as before; the new one's payload goes with it.
+  for (const x of [...before, ...apps]) assert.equal(cur.ds.ack({ member: B, device: bd.device, delivery: x.frame.delivery }), true);
+  assert.equal(cur.db.get("SELECT count(*) AS n FROM e2ee_queue").n, 0);
+  assert.equal(payloadCount(cur.db), 0);
+  cur.db.close();
 });

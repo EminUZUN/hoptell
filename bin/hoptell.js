@@ -49,7 +49,7 @@ const USAGE = `hoptell - messaging between AI coding agents over your own LAN/VP
 
 Usage:
   hoptell relay --host <ip> [--port 7777] [--members file.json] [--policy policy.json] [--trusted-proxies <ip/cidr,...>]
-                [--log-format text|json] [--metrics-port <port>]
+                [--log-format text|json] [--metrics-port <port>] [--wal-soft-limit <size>] [--wal-hard-limit <size>]
                                             run the relay (one machine per team)
   hoptell relay broker-reset --yes [--state-dir <dir>]
                                             with the relay stopped: a new broker refresh key; every broker
@@ -84,6 +84,9 @@ Usage:
   hoptell mcp                               MCP server for an agent session (stdio)
   hoptell mcp-http [--port 7790]            the same over HTTP on 127.0.0.1, for clients that only speak HTTP
   hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>
+  hoptell mcp-hosted --experimental --config <file> --state-dir <dir>
+                                            EXPERIMENTAL hosted MCP endpoint behind an HTTPS proxy: the host
+                                            reads its tenants' messages; link|unlink|list manage its links
                                             tokens for those clients (shown once, stored hashed)
   hoptell tmux <name> [--roles a,b] -- <agent command>
                                             run an agent in tmux; attempt an inbox notice when its prompt appears idle
@@ -112,8 +115,13 @@ Usage:
                                             acknowledges after printing, or prints a receipt with --no-ack
   hoptell ack <receipt> (<name> | --session <folder>)
                                             acknowledge messages printed with --no-ack
-  hoptell doctor [--relay-check]            check settings, relay, login, inbox and tmux on this machine;
-                                            --relay-check: also send a test message through the relay
+  hoptell doctor [--relay-check] [--fix]    check settings, relay, login, inbox and tmux on this machine;
+                                            --relay-check: also send a test message through the relay;
+                                            --fix: remove transfer leftovers (staging, outbox)
+  hoptell transfers [cancel <t_id>]         EXPERIMENTAL: file transfers staged for you (or being fetched)
+  hoptell save <t_id> <path> [--overwrite] [--yes] | --forget <t_id>
+                                            EXPERIMENTAL: save a staged transfer to a path you choose
+                                            (never replaces a file without --overwrite)
   hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
 
 Settings: environment variables, else the first file found of
@@ -129,6 +137,15 @@ Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (member
         HOPTELL_OIDC (sign-in configuration file)
 
 Send to a peer name, to @<role> (every online peer with the role) or to @all.`;
+
+/** A byte size: a whole number of bytes, or with a unit (KiB, MiB, GiB; K, M, G mean the same). */
+function parseSize(v) {
+  const m = /^\s*(\d{1,15})\s*(B|K|KB|KIB|M|MB|MIB|G|GB|GIB)?\s*$/i.exec(String(v));
+  if (!m) return null;
+  const unit = { "": 1, B: 1, K: 1024, KB: 1024, KIB: 1024, M: 1024 ** 2, MB: 1024 ** 2, MIB: 1024 ** 2, G: 1024 ** 3, GB: 1024 ** 3, GIB: 1024 ** 3 }[(m[2] ?? "").toUpperCase()];
+  const n = Number(m[1]) * unit;
+  return Number.isSafeInteger(n) ? n : null;
+}
 
 const fail = (msg, code = 1) => {
   console.error(`hoptell: ${msg}`);
@@ -464,7 +481,7 @@ try {
           const session = s ? (s.startsWith("legacy/") ? { realm: null, name: s.slice(7) } : { realm: s.split("/")[0], name: s.split("/")[1] }) : null;
           const p = c.currentPolicy();
           console.log(p.legacy ? "allow (not managed yet)" : decide(p.doc, key, session));
-        } else if (sub === "verify" || sub === "accept-device") {
+        } else if (sub === "verify" || sub === "accept-device" || sub === "forget-device") {
           // Device pins (design 3.2): EXPERIMENTAL, only with HOPTELL_EXPERIMENTAL_E2EE=1.
           if (!experimentalE2ee()) fail(`hoptell contacts ${sub} is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it`, 2);
           const { verifyCommand, conversationCommand } = await import("../lib/mls/cli.js");
@@ -588,7 +605,7 @@ try {
       break;
     }
     case "members": {
-      const [sub, name, third] = args.filter((a, i) => !a.startsWith("--") && !["--members", "--state-dir"].includes(args[i - 1]));
+      const [sub, name, third] = args.filter((a, i) => !a.startsWith("--") && !["--members", "--state-dir", "--host", "--issuer", "--subject"].includes(args[i - 1]));
       const file = opt("--members", process.env.HOPTELL_MEMBERS);
       if (!file) fail("set HOPTELL_MEMBERS or pass --members <file> (the relay's members file)", 2);
       const m = await import("../lib/members.js");
@@ -603,7 +620,7 @@ try {
       if (sub === "list") {
         const rows = m.listMembers(file);
         if (!rows.length) console.log("No members.");
-        for (const r of rows) console.log(`${r.name}\t${r.id ?? "(no id: run hoptell members migrate)"}\t${r.token} token`);
+        for (const r of rows) console.log(`${r.name}\t${r.id ?? "(no id: run hoptell members migrate)"}\t${r.custody === "hosted" ? `hosted by ${r.host}` : `${r.token} token`}`);
       } else if (sub === "add" && name) {
         const c = await changeOf("members.add", name, () => m.addMember(file, name));
         const r = c.value;
@@ -621,6 +638,20 @@ try {
         if (!experimentalE2ee()) fail("hoptell members device-revoke is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
         const c = await changeOf("members.device-revoke", `${name}/${third}`, () => m.revokeMemberDevice(file, name, third));
         console.log(c.value.already ? `Device ${third} of "${name}" is already revoked.` : `Revoked device ${third} of "${name}": once the relay applies it, it no longer serves that device's KeyPackages or directory entry. ${appliedNote(c)}`);
+      } else if (sub === "add-hosted" && name) {
+        // Hosted custody (design 4.5, experimental): a new member held by a host; never an existing one.
+        const c = await changeOf("members.add-hosted", name, () => m.addHostedMember(file, name, opt("--host")));
+        console.log(`Added hosted member "${name}" (${c.value.id}) held by host "${c.value.host}". It has no token: only that host signs in for it, and peers see it labeled hosted (the host can read its messages).\n${appliedNote(c)}`);
+      } else if (sub === "host" && name === "list") {
+        const rows = m.listHosts(file);
+        if (!rows.length) console.log("No hosts.");
+        for (const r of rows) console.log(`${r.id}\t${r.token} token`);
+      } else if (sub === "host" && name === "add" && third) {
+        const c = await changeOf("members.host-add", third, () => m.addHost(file, third));
+        console.log(`Added host "${third}". Its token, shown only now:\n\n  ${c.value.token}\n\nConfigure it on that host privately; ${file} keeps only its SHA-256. It may open only members hosted by "${third}".\n${appliedNote(c)}`);
+      } else if (sub === "host" && name === "remove" && third) {
+        const c = await changeOf("members.host-remove", third, () => m.removeHost(file, third));
+        console.log(`Removed host "${third}". ${appliedNote(c)}`);
       } else if (sub === "migrate") {
         const pending = m.migrateMembers(file, { apply: false });
         const p = (await pending).pending;
@@ -631,7 +662,7 @@ try {
           const c = await changeOf("members.migrate", null, () => m.migrateMembers(file, { apply: true }));
           console.log(`Gave ids to: ${c.value.pending.join(", ")}. ${appliedNote(c)}`);
         }
-      } else fail("usage: hoptell members list|add <name>|revoke <name>|link|unlink <name> --issuer <URL> --subject <subject>|signout <name>|migrate [--yes] [--members <file>] [--state-dir <dir>]", 2);
+      } else fail("usage: hoptell members list|add <name>|revoke <name>|link|unlink <name> --issuer <URL> --subject <subject>|signout <name>|migrate [--yes]|add-hosted <name> --host <id>|host add|remove <id>|host list [--members <file>] [--state-dir <dir>]", 2);
       break;
     }
     case "relay": {
@@ -658,8 +689,14 @@ try {
       const port = Number(opt("--port", process.env.HOPTELL_PORT || 7777));
       if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
       const membersFile = opt("--members", process.env.HOPTELL_MEMBERS);
-      const { loadMembersFile } = await import("../lib/members.js");
-      const readMembers = () => loadMembersFile(membersFile);
+      const { loadMembersAndHosts } = await import("../lib/members.js");
+      // The members list and the host credentials (design 4.5) come from one read of the file.
+      let hostsRead = null;
+      const readMembers = () => {
+        const d = loadMembersAndHosts(membersFile);
+        hostsRead = d.hosts;
+        return d.members;
+      };
       // Opt-in keyed fingerprints in the log: loaded once, before listening; no silent fallback.
       const fpModule = await import("../lib/fingerprint.js");
       const fingerprint = fpModule.fingerprintsEnabled(process.env.HOPTELL_LOG_FINGERPRINTS) ? fpModule.loadFingerprintKey(process.env.HOPTELL_LOG_FINGERPRINT_KEY_FILE) : null;
@@ -682,7 +719,22 @@ try {
       // The store opens on every start (design 4.4: the audit log, the store's instance id and the
       // restore marker live there); the device service stays behind the experimental flag.
       const { openRelayStore } = await import("../lib/relaystore.js");
-      const db = openRelayStore({ dir: stateDirectory });
+      // WAL admission (design 6): every write of the store is admitted against the log's size.
+      const size = (flag, env) => {
+        const v = opt(flag, process.env[env]);
+        if (v === undefined || v === null || v === "") return undefined;
+        const n = parseSize(v);
+        if (n === null) fail(`invalid ${flag}: a size such as 256MiB, 1GiB or a number of bytes`);
+        return n;
+      };
+      const admission = Object.fromEntries(Object.entries({ soft: size("--wal-soft-limit", "HOPTELL_WAL_SOFT_LIMIT"), hard: size("--wal-hard-limit", "HOPTELL_WAL_HARD_LIMIT") }).filter(([, v]) => v !== undefined));
+      if (admission.soft !== undefined && admission.hard === undefined && admission.soft > 512 * 1024 * 1024) fail("--wal-soft-limit must not be above --wal-hard-limit (512MiB unless set)");
+      let db;
+      try {
+        db = openRelayStore({ dir: stateDirectory, admission });
+      } catch (e) {
+        fail(e.message);
+      }
       // Security events go to the admin audit log once it exists (the relay acts on them regardless).
       let admin = null;
       const pendingEvents = [];
@@ -718,12 +770,31 @@ try {
       if (e2ee) {
         const { createDeviceDirectory } = await import("../lib/mls/relaydir.js");
         const { createDeliveryService } = await import("../lib/mls/relayds.js");
+        const { createTransferStore } = await import("../lib/mls/relaytransfers.js");
         const directory = createDeviceDirectory({ db, realm: realm.id });
-        devices = { directory, ds: createDeliveryService({ db, directory, realm: realm.id }) };
-        log("EXPERIMENTAL: device keys and encrypted messages (designs 3.2, 3.3) are enabled; not for production use");
+        // Larger transfers (design 6) on the same store; the quotas are relay options.
+        const quota = Object.fromEntries(Object.entries({ totalQuota: size("--transfer-quota", "HOPTELL_TRANSFER_QUOTA"), memberQuota: size("--transfer-member-quota", "HOPTELL_TRANSFER_MEMBER_QUOTA") }).filter(([, v]) => v !== undefined));
+        let transfers;
+        try {
+          transfers = createTransferStore({ db, limits: quota, log });
+        } catch (e) {
+          fail(e.message);
+        }
+        devices = { directory, ds: createDeliveryService({ db, directory, realm: realm.id, transfers }), transfers };
+        log("EXPERIMENTAL: device keys, encrypted messages and larger transfers (designs 3.2, 3.3, 6) are enabled; not for production use");
       }
       let dropped = () => 0;
-      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, audit, extraStats: () => ({ auditDropped: dropped() }), log });
+      // The store's sizes, checkpoints and admission (design 6), and the transfers' charged total.
+      const storeStats = () => {
+        try {
+          const st = db.stat();
+          const adm = db.admission();
+          return { storeFileBytes: st.file, storeWalBytes: st.wal, storeCheckpointBusy: adm.checkpoints.busy, storeWritesRefused: adm.refusals.bulk + adm.refusals.progress + adm.refusals.maintenance, ...(devices?.transfers ? { transferChargedBytes: devices.transfers.stats().charged } : {}) };
+        } catch {
+          return {};
+        }
+      };
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
       // The relay admin (design 4.4): its operations over this store, served on the admin socket.
       const { createAdmin, startAdminSocket, COUNTS_EVERY_MS } = await import("../lib/admin.js");
       admin = createAdmin({
@@ -734,7 +805,7 @@ try {
         access,
         config: { members: membersFile || null, policy: policyFile || null, oidc: oidcFile || null },
         flags: { e2ee },
-        apply: { readMembers, members: (list) => relay.reload(list), policy: (p) => access.setPolicy(p) },
+        apply: { readMembers, members: (list) => relay.reload(list, hostsRead), policy: (p) => access.setPolicy(p) },
         log,
       });
       dropped = admin.auditDropped;
@@ -776,9 +847,19 @@ try {
     }
     case "device": {
       // Device keys and enrollment (design 3.2): EXPERIMENTAL, only with HOPTELL_EXPERIMENTAL_E2EE=1.
-      if (!experimentalE2ee()) fail("hoptell device is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it; nothing is encrypted yet", 2);
+      if (!experimentalE2ee()) fail("hoptell device is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it (encrypted messages are experimental and not independently reviewed)", 2);
       const { deviceCommand } = await import("../lib/mls/cli.js");
       await deviceCommand({ args, home: home(), profile: await profileOfRelay(), env: process.env, connect: () => connect("send", null), contacts: await contactsOf() });
+      break;
+    }
+    case "mcp-hosted": {
+      // Hosted HTTP MCP mode (design 4.5): EXPERIMENTAL, only with --experimental.
+      const { hostedCommand } = await import("../lib/hostedcli.js");
+      try {
+        await hostedCommand({ args, opt });
+      } catch (e) {
+        fail(e.message, e.exitCode ?? 1);
+      }
       break;
     }
     case "mcp-http": {
@@ -1064,7 +1145,29 @@ try {
     }
     case "doctor": {
       const { doctor } = await import("../lib/doctor.js");
-      process.exitCode = (await doctor(process.env, console.log, { relayCheck: args.includes("--relay-check"), homedir: os.homedir() })) ? 1 : 0;
+      process.exitCode = (await doctor(process.env, console.log, { relayCheck: args.includes("--relay-check"), fix: args.includes("--fix"), homedir: os.homedir() })) ? 1 : 0;
+      break;
+    }
+    case "transfers": {
+      // EXPERIMENTAL (design 6): transfers [cancel <t_id>]
+      const { transfersCommand } = await import("../lib/transfercli.js");
+      process.exitCode = await transfersCommand({ args, home: home() });
+      break;
+    }
+    case "save": {
+      // EXPERIMENTAL (design 6): save <t_id> <path> [--overwrite] [--yes] | save --forget <t_id>
+      const { saveCommand } = await import("../lib/transfercli.js");
+      const confirm = process.stdin.isTTY
+        ? async (question) => {
+            const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+            try {
+              return (await rl.question(question)).trim() === "yes";
+            } finally {
+              rl.close();
+            }
+          }
+        : null;
+      process.exitCode = await saveCommand({ args, home: home(), confirm });
       break;
     }
     case "listen": {

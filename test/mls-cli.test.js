@@ -13,7 +13,8 @@ import { DEVICE_CAP } from "../lib/relay.js";
 import { verifyCommand } from "../lib/mls/cli.js";
 import { deviceStore } from "../lib/mls/device.js";
 import { createFakeDriver } from "./fake-mls-driver.js";
-import { deviceRelay, fakeDevice, tmpDir } from "./mls-helpers.js";
+import { deviceRelay, fakeDevice, memoryContacts as testMemory, tmpDir } from "./mls-helpers.js";
+import { ownKeeper, writeBaseline } from "../lib/mls/own.js";
 
 const FAKE = fileURLToPath(new URL("./fake-mls-driver.js", import.meta.url));
 
@@ -121,6 +122,7 @@ test("doctor states the same-machine raw-rollback limit; a relay without the fla
   const alice = envOf(t, w, "alice");
   await run(alice, ["device", "enroll"]);
   const d = await run(alice, ["doctor"]);
+  assert.match(d.stdout, /encrypted messaging: experimental, not independently reviewed/);
   assert.match(d.stdout, /device keys: experimental; profile \S+: device [a-z2-7]{26} is active/);
   assert.match(d.stdout, /older raw copy of this home on the same machine .* not detected; there is no freshness anchor yet/);
   const plain = await deviceRelay(t, { devices: false });
@@ -171,12 +173,12 @@ test("verify pins only the set that was shown: a device replaced between the dis
   const homes = {};
   for (const name of ["alice", "bob"]) {
     const dir = tmpDir(t);
-    const store = deviceStore({ home: dir, profile: "p", driver: createFakeDriver({ seed: dir, now: w.clock.now }), store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now: w.clock.now });
+    const store = deviceStore({ home: dir, profile: "p", driver: createFakeDriver({ seed: dir, now: w.clock.now }), store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now: w.clock.now, own: ownKeeper({ contacts: testMemory(), home: dir, profile: "p" }) });
     const client = await w.client(name);
     await store.enroll(client);
     homes[name] = { dir, store, client };
   }
-  const doc = { version: 1, default: "ask", grants: [], blocks: [] };
+  const doc = withOwn({ version: 1, default: "ask", grants: [], blocks: [] }, homes.alice.store.record());
   const opts = { sub: "verify", member: w.members.bob.id, home: homes.alice.dir, profile: "p", connect: () => w.client("alice"), contacts: memoryContacts(doc) };
   const shown = [];
   await verifyCommand({ ...opts, say: (x) => shown.push(x) });
@@ -185,7 +187,7 @@ test("verify pins only the set that was shown: a device replaced between the dis
   const original = homes.bob.store.record();
   w.directory.revoke({ member: original.member, device: original.device, by: { kind: "admin" } });
   const replacement = await fakeDevice(w.realm, w.members.bob.id);
-  await homes.bob.client.rpc(replacement.register());
+  await replacement.registerOn(homes.bob.client); // A9: with a register proof
   const confirmed = [];
   let refused;
   await assert.rejects(verifyCommand({ ...opts, yes: true, how: "out-of-band", set: code, say: (x) => confirmed.push(x) }), (e) => (refused = e.message) && /changed since that code was shown/.test(e.message));
@@ -197,6 +199,13 @@ test("verify pins only the set that was shown: a device replaced between the dis
   assert.deepEqual(doc.pins[0].devices.map((d) => d.device), [replacement.device]);
   assert.equal(doc.pins[0].how, "out-of-band");
 });
+
+/** This home's own baseline (A1) for local device record `rec` in `doc` (profile "p"). */
+function withOwn(doc, rec) {
+  writeBaseline(doc, { rec, profile: "p", now: 0 });
+  return doc;
+}
+const recOf = (realm, member, d) => ({ realm, member, device: d.device, key: d.key.toString("base64"), seq: 0, retiredKeys: [] });
 
 /** A relay client over device lists the test changes (realm REALM, the caller ME). */
 function listClient(realm, me, lists) {
@@ -211,7 +220,7 @@ test("a confirmation is refused when a device is added, or the pins are edited, 
   const mine = await fakeDevice(realm, me);
   const b1 = await fakeDevice(realm, bob);
   const lists = { [me]: [served(mine)], [bob]: [served(b1)] };
-  const doc = { version: 1, default: "ask", grants: [], blocks: [], revision: 3 };
+  const doc = withOwn({ version: 1, default: "ask", grants: [], blocks: [], revision: 3 }, recOf(realm, me, mine));
   const base = { sub: "verify", member: bob, home: tmpDir(t), profile: "p", connect: await listClient(realm, me, lists), say: () => {} };
   const codeOf = async (contacts) => {
     const out = [];
@@ -245,7 +254,7 @@ test("accept-device for a replaced key is bound to the key that was shown", asyn
   const mine = await fakeDevice(realm, me);
   const b1 = await fakeDevice(realm, bob);
   const lists = { [me]: [served(mine)], [bob]: [served(b1)] };
-  const doc = { version: 1, default: "ask", grants: [], blocks: [] };
+  const doc = withOwn({ version: 1, default: "ask", grants: [], blocks: [] }, recOf(realm, me, mine));
   const base = { member: bob, home: tmpDir(t), profile: "p", connect: await listClient(realm, me, lists), contacts: memoryContacts(doc), say: () => {} };
   await verifyCommand({ ...base, sub: "verify", yes: true, how: "in-person", set: await (async () => {
     const out = [];

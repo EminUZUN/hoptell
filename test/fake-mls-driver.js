@@ -22,6 +22,7 @@ const PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
 const MAGIC = Buffer.from("FKP1");
 const COMMIT = Buffer.from("FCM1");
 const APP = Buffer.from("FAP1");
+const PROPOSAL = Buffer.from("FPR1");
 const PAST_KEPT = 3;
 const sha = (...parts) => crypto.createHash("sha256").update(parts.map((p) => (typeof p === "string" ? p : Buffer.from(p).toString("hex"))).join("|")).digest();
 const ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
@@ -57,7 +58,15 @@ const keyOf = (seed) => {
   return { priv, pub: Uint8Array.from(pub) };
 };
 
-export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now(), faults = new Set() } = {}) {
+export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now(), faults = new Set(), signing = true, prune = true, skip = { perSenderEpoch: 10, forward: 200 } } = {}) {
+  // A10: every pruneKeyPackages call, {nowSeconds, graceSeconds, refs} (tests read when it ran).
+  const pruneCalls = [];
+  // The skipped-key bounds (A6) this "binding" applies to the groups it creates and joins; a test
+  // may change the object (or set skip.unknown) to model an earlier binding. Each group keeps the
+  // bounds it was made with (or null: unknown, as a binding without the export reports).
+  const driverSkip = () => (skip.unknown ? null : { perSenderEpoch: skip.perSenderEpoch, forward: skip.forward });
+  // skip.groups: what new groups actually get, when a test makes it differ from what the driver reports.
+  const groupSkip = () => (skip.groups !== undefined ? skip.groups : driverSkip());
   let counter = 0;
   const derive = (label) => crypto.createHash("sha256").update(`${seed}|${label}|${counter++}`).digest();
   const fail = (point) => {
@@ -112,6 +121,8 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
         isActive: () => G().active,
         members: () => G().members.map(memberOut),
         epochAuthenticator: () => sha("fake-epoch-authenticator", G().history),
+        /** A6: the bounds this group was made with; a state from before them reports the defaults. */
+        skipLimits: () => (G().skip === undefined ? { perSenderEpoch: 10, forward: 200 } : G().skip),
         async commit({ add = [], remove = [], update = false } = {}) {
           fail("commit");
           const cur = G();
@@ -127,6 +138,16 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
           const welcome = add.length ? Buffer.from(JSON.stringify({ t: "fake-welcome", group: g, inits: add.map((kp) => inspect(kp).init), snapshot: { epoch: next.epoch, members: next.members, history: next.history } })) : null;
           cur.pending = { next };
           return { commit: Uint8Array.from(commit), welcome: welcome && Uint8Array.from(welcome), ratchetTree: Uint8Array.from(Buffer.from(JSON.stringify(next.members))) };
+        },
+        /**
+         * Test-only: a standalone proposal of this member (amendments-3.5-prep A7), as a member
+         * would send it; this device's own state does not change.
+         */
+        proposeForTest(kind = "remove", leaf = 0) {
+          const cur = G();
+          const body = { t: "fake-proposal", group: g, epoch: cur.epoch, sender: cur.own, kind, leaf };
+          const signed = frame(PROPOSAL, body, crypto.createHmac("sha256", secretOf(cur.history)).update(JSON.stringify(body)).digest());
+          return Uint8Array.from(Buffer.concat([signed, signRaw(signed)]));
         },
         async mergePending() {
           fail("mergePending");
@@ -178,6 +199,15 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
               }
               return { kind: "application", epoch: body.epoch, sender: memberOut(sender), plaintext: Uint8Array.from(plaintext), aad: Uint8Array.from(Buffer.from(body.aad, "base64")) };
             }
+            if (b.subarray(0, 4).equals(PROPOSAL)) {
+              // As the bake-off binding did before A7: the proposal is processed successfully (its
+              // handshake generation consumed, recorded here as `proposals`), so no rollback runs,
+              // and it is returned for the application to refuse.
+              const { body } = unframe(PROPOSAL, b.subarray(0, b.length - 64));
+              if (body.group !== g || body.epoch !== cur.epoch) throw new DriverError("ValidationError(WrongEpoch)", "library");
+              cur.proposals = (cur.proposals ?? 0) + 1;
+              return { kind: "proposal", epoch: cur.epoch, sender: memberOut(cur.members.find((m) => m.index === body.sender)) };
+            }
             if (!b.subarray(0, 4).equals(COMMIT) || b.length < 8 + 32 + 64) throw new DriverError("malformed message", "library");
             const signed = b.subarray(0, b.length - 64);
             const { body, json, trailer } = unframe(COMMIT, signed);
@@ -228,7 +258,16 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
         const signed = Buffer.concat([MAGIC, len, body]);
         return Uint8Array.from(Buffer.concat([signed, signRaw(signed)]));
       },
+      // A10: the bundles whose not_after is earlier than now - grace are deleted; their refs returned.
+      _prune(nowSeconds, graceSeconds) {
+        fail("prune");
+        const cut = (nowSeconds - graceSeconds) * 1000;
+        const gone = Object.keys(state.kps).filter((init) => state.kps[init] < cut);
+        for (const init of gone) delete state.kps[init];
+        return gone.map(refOf);
+      },
       async sign(label, content) {
+        if (!signing) throw new DriverError("this driver offers no SignWithLabel", "adapter", { code: "unsupported" });
         fail("sign");
         return Uint8Array.from(signRaw(signContent(label, content)));
       },
@@ -257,7 +296,7 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
             if (w.snapshot) {
               const own = w.snapshot.members.find((m) => m.identity === state.identity && m.key === b64(pub));
               if (!own) throw new DriverError("this device is not in the Welcome's group", "library");
-              state.mls[w.group] = { ...w.snapshot, own: own.index, active: true, gen: 0, consumed: {}, past: {}, pending: null };
+              state.mls[w.group] = { ...w.snapshot, own: own.index, active: true, gen: 0, consumed: {}, past: {}, pending: null, skip: groupSkip() };
             }
             return Buffer.from(w.group, "hex");
           },
@@ -274,7 +313,7 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
         fail("createGroup");
         const g = Buffer.from(groupId).toString("hex");
         if (state.mls[g]) throw new DriverError("a group with this id exists", "library");
-        state.mls[g] = { epoch: 0, members: [{ index: 0, identity: state.identity, key: b64(pub) }], own: 0, history: sha("fake-group", g).toString("hex"), active: true, gen: 0, consumed: {}, past: {}, pending: null };
+        state.mls[g] = { epoch: 0, members: [{ index: 0, identity: state.identity, key: b64(pub) }], own: 0, history: sha("fake-group", g).toString("hex"), active: true, gen: 0, consumed: {}, past: {}, pending: null, skip: groupSkip() };
         return groupApi(g);
       },
       group(groupId) {
@@ -290,6 +329,22 @@ export function createFakeDriver({ seed = "hoptell-fake", now = () => Date.now()
     name: "fake",
     version: "0",
     suite: 1,
+    // The driver capability of amendment A3: SignWithLabel for hoptell's statements. `signing:
+    // false` models a binding without it (sign() then refuses with code "unsupported").
+    signing,
+    /** A6: the skipped-key bounds this "binding" applies to new groups (null: unknown). */
+    skipLimits: () => driverSkip(),
+    // A10: `prune: false` models a binding without prune_key_packages (no pruneKeyPackages).
+    ...(prune
+      ? {
+          async pruneKeyPackages(device, { nowSeconds, graceSeconds }) {
+            const refs = device._prune(nowSeconds, graceSeconds);
+            pruneCalls.push({ nowSeconds, graceSeconds, refs: refs.length });
+            return refs;
+          },
+        }
+      : {}),
+    pruneCalls,
     async createDevice(identity) {
       fail("createDevice");
       return makeDevice({ v: 1, seed: b64(derive("device")), identity: b64(identity), kps: {}, groups: [], mls: {} });

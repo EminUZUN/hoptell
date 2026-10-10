@@ -16,7 +16,7 @@ import { openBound } from "../lib/session.js";
 import { openStore, processConsumer } from "../lib/store.js";
 import { openContacts } from "../lib/quarantine.js";
 import { ensureWakeDir, filesFor, writeRecord } from "../lib/wake.js";
-import { fakeDevice } from "./mls-helpers.js";
+import { fakeDevice, seedOwn } from "./mls-helpers.js";
 
 const R = "a".repeat(32);
 const ALICE = "m_aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -183,6 +183,7 @@ test("no deadlock: every decide path runs the real native operation with its loc
   const bob = `m_${"b".repeat(26)}`;
   const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
   const mine = await fakeDevice(R, me);
+  await seedOwn(c, R, me, mine);
   const lists = { [me]: [served(mine)], [bob]: [served(await fakeDevice(R, bob))] };
   let inside = null;
   const sources = {
@@ -222,7 +223,9 @@ test("device: a --set mismatch after a new device or a pins change is stale; a k
   const bob = `m_${"b".repeat(26)}`;
   const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
   const b1 = await fakeDevice(R, bob);
-  const lists = { [me]: [served(await fakeDevice(R, me))], [bob]: [served(b1)] };
+  const m1 = await fakeDevice(R, me);
+  await seedOwn(c, R, me, m1);
+  const lists = { [me]: [served(m1)], [bob]: [served(b1)] };
   const sources = { contacts: c, devices: { fetch: async (m) => ({ theirs: { realm: R, member: m, devices: lists[m] }, mine: { realm: R, member: me, devices: lists[me] } }) } };
   const id = `device-verify:${bob}`;
   const v1 = await decisions.show({ home, id, sources });
