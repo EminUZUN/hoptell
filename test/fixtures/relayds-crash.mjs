@@ -6,7 +6,7 @@ import { openRelayDb } from "../../lib/relaydb.js";
 import { createDeviceDirectory } from "../../lib/mls/relaydir.js";
 import { createDeliveryService } from "../../lib/mls/relayds.js";
 import { RELAY_MIGRATIONS } from "../../lib/relaystore.js";
-import { pinIdentity } from "../../lib/mls/identity.js";
+import { displayFingerprint, pinIdentity } from "../../lib/mls/identity.js";
 
 const [dir, point] = process.argv.slice(2);
 lockStateDir(dir);
@@ -19,6 +19,11 @@ const directory = createDeviceDirectory({ db, realm });
 const ds = createDeliveryService({ db, directory, realm });
 for (const [member, device, k] of [[a, da, 1], [b, db1, 2], [b, db2, 3]]) {
   const key = Buffer.alloc(32, k);
+  // A12: b's second device is approved (here by the admin) after its pending request.
+  if (device === db2) {
+    directory.request({ member, device, key });
+    directory.adminApprove({ member, device, fingerprint: displayFingerprint({ realm, member, device, key }) });
+  }
   directory.register({ member, device, key, pin: pinIdentity({ realm, member, device, key }) });
   directory.upload({ member, device, packages: [{ kp: Buffer.from(`a key package of ${device}`), notAfter: Date.now() + 86_400_000 }] });
 }

@@ -56,6 +56,16 @@ rely on, and their known limits:
   kept in `contacts.json`; the relay's list of your devices is never taken as is. A safety
   number's own half comes from them, and verify refuses while the relay lists a device of yours
   you have not accepted.
+- If a member has a registered device that remains unrevoked, the relay registers another only
+  with an approval signed by an active device of that member (`hoptell device accept`) or given by
+  the relay owner (`hoptell members device-approve`). If a member has no registered device that
+  remains unrevoked, a member token alone can register a new device. The token can also make up to
+  four pending requests and send plaintext messages as the member. An active member device can
+  cancel requests or use `hoptell device expect` to reserve a fifth request slot for a specific
+  device and key; this does not approve registration. Devices registered before this rule remain
+  active. After upgrading, review them with `hoptell device list` and revoke any you do not
+  recognize; `hoptell doctor` also warns about devices you have not accepted that hoptell last saw
+  at the relay.
 - A contact you have not verified is trusted on first use (relay-tofu): the relay's list of their
   devices is taken at the first encrypted message, so a relay can add a device to it. Verify
   your contacts (`hoptell contacts verify`) or set `requireVerified`; later changes of a verified

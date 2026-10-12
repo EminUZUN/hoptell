@@ -16,7 +16,7 @@ import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { createDeliveryService } from "../lib/mls/relayds.js";
 import { createTransferStore } from "../lib/mls/relaytransfers.js";
 import { rootOf } from "../lib/transferwire.js";
-import { pinIdentity } from "../lib/mls/identity.js";
+import { displayFingerprint, pinIdentity } from "../lib/mls/identity.js";
 
 export const ID = { alice: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", bob: "m_bbbbbbbbbbbbbbbbbbbbbbbbbb", carol: "m_cccccccccccccccccccccccccc" };
 export const DEV = { a1: `${"a".repeat(25)}a`, a2: `${"b".repeat(25)}a`, b1: `${"c".repeat(25)}a` };
@@ -44,9 +44,10 @@ export function membersFile(dir) {
   return file;
 }
 
-/** Register a device with a fixed key (fill byte `k`). */
+/** Register a device with a fixed key (fill byte `k`); a member's second one approved by the admin first (A12). */
 export function enroll(directory, realm, member, device, k) {
   const key = Buffer.alloc(32, k);
+  if (directory.request({ member, device, key }).state === "pending") directory.adminApprove({ member, device, fingerprint: displayFingerprint({ realm, member, device, key }) });
   directory.register({ member, device, key, pin: pinIdentity({ realm, member, device, key }) });
 }
 

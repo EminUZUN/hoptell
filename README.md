@@ -842,9 +842,36 @@ independently reviewed.
   `hoptell device enroll --new-baseline`. Retiring a duplicate profile (a second one in the same
   realm) leaves the other profile's device as it is.
 - **Your other devices** are trusted only when you accept them, never because the relay lists
-  them. Compare the fingerprint `hoptell device status` shows on the new device, then run
-  `hoptell device accept <device>` on a device you already accepted, and the same in the other
-  direction on the new one. `hoptell device list` shows your accepted devices, devices the relay
+  them. On an existing device, run `hoptell device accept <device>`, compare its fingerprint with
+  `hoptell device status` on the new device, and run the printed `--set <code>` command. Once the
+  new device registers, repeat those steps on it to accept the existing device, comparing against
+  that device's status.
+- **A new device needs your approval at the relay.** While you have a registered device in a realm
+  that remains unrevoked, the relay registers another only after approval from an active device of
+  yours or the relay admin. `hoptell device enroll` on the new device asks the relay, prints its
+  fingerprint and waits ("waiting for approval from one of your devices: run hoptell device accept
+  <device> there"). On an existing device, run `hoptell device accept <device>` and compare the
+  fingerprint with the new device. It prints a command containing `--set <code>`; run that command
+  to accept the device and send its signed approval. If the approval cannot be sent at once, it is
+  kept and sent again whenever that device connects. `hoptell device enroll` waits for up to 15
+  minutes per run, while the relay keeps the request for up to 24 hours. If the command stops
+  before the approval arrives, run it again on the new device. If the request expires, enroll and
+  accept again (a different key for an accepted device is refused as a key change). `hoptell
+  device pending` lists the requests waiting for your devices and `hoptell device pending --cancel
+  <device>` cancels one; the same device and key must then wait 24 hours before requesting again.
+  Someone with only your member token can occupy the four regular pending-request slots, but
+  cannot register an additional device while one of yours remains unrevoked. If the slots are
+  full, first try `hoptell device enroll` on the new device; this creates its device id and key
+  even if the request is refused. Run `hoptell device status` there to get the id and the value
+  labeled `Pin identity` (a 64-character hexadecimal identifier for that device and key). On an
+  active existing device, run `hoptell device expect <device> <pin identity>`, then retry
+  enrollment on the new device. This reserves an extra request slot; you must still approve the
+  request. When none of your devices can approve (all suspended after a relay restore, or all
+  lost), the relay admin approves the request with `hoptell members device-approve <member>
+  <device> <fingerprint>` (audited). If a member has no registered device that remains unrevoked,
+  a new device can register without approval. A member token can register a device in that case.
+  It can send and read plaintext messages for the member regardless of device registration.
+- **Review your devices.** `hoptell device list` shows your accepted devices, devices the relay
   lists that you have not accepted, and devices no longer listed. A conversation that holds a
   device of yours you have not accepted stops (nothing is sent or committed there) until you
   accept it or revoke it. `hoptell device enroll --new-baseline` starts again with a new device

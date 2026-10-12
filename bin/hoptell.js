@@ -638,6 +638,15 @@ try {
         if (!experimentalE2ee()) fail("hoptell members device-revoke is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
         const c = await changeOf("members.device-revoke", `${name}/${third}`, () => m.revokeMemberDevice(file, name, third));
         console.log(c.value.already ? `Device ${third} of "${name}" is already revoked.` : `Revoked device ${third} of "${name}": once the relay applies it, it no longer serves that device's KeyPackages or directory entry. ${appliedNote(c)}`);
+      } else if (sub === "device-approve" && name && third) {
+        // A12: the relay admin approves a new device's pending request when none of the member's
+        // devices can (all suspended, or all lost); over the admin channel, audited.
+        if (!experimentalE2ee()) fail("hoptell members device-approve is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
+        const words = args.filter((a, i) => !a.startsWith("--") && !["--members", "--state-dir"].includes(args[i - 1]));
+        const fingerprint = words.slice(3).join(" ");
+        if (!fingerprint) fail("usage: hoptell members device-approve <member> <device> <fingerprint> (the fingerprint the new device shows)", 2);
+        const { adminCommand } = await import("../lib/admincli.js");
+        process.exitCode = await adminCommand({ args: ["devices", "approve", name, third, fingerprint, ...(args.includes("--json") ? ["--json"] : [])], stateDir: opt("--state-dir", process.env.HOPTELL_STATE_DIR) || defaultStateDir(), config: { members: file, policy: process.env.HOPTELL_POLICY || null, oidc: process.env.HOPTELL_OIDC || null }, e2ee: true });
       } else if (sub === "add-hosted" && name) {
         // Hosted custody (design 4.5, experimental): a new member held by a host; never an existing one.
         const c = await changeOf("members.add-hosted", name, () => m.addHostedMember(file, name, opt("--host")));
@@ -662,7 +671,7 @@ try {
           const c = await changeOf("members.migrate", null, () => m.migrateMembers(file, { apply: true }));
           console.log(`Gave ids to: ${c.value.pending.join(", ")}. ${appliedNote(c)}`);
         }
-      } else fail("usage: hoptell members list|add <name>|revoke <name>|link|unlink <name> --issuer <URL> --subject <subject>|signout <name>|migrate [--yes]|add-hosted <name> --host <id>|host add|remove <id>|host list [--members <file>] [--state-dir <dir>]", 2);
+      } else fail("usage: hoptell members list|add <name>|revoke <name>|link|unlink <name> --issuer <URL> --subject <subject>|signout <name>|migrate [--yes]|add-hosted <name> --host <id>|host add|remove <id>|host list|device-revoke <name> <device>|device-approve <name> <device> <fingerprint> [--members <file>] [--state-dir <dir>]", 2);
       break;
     }
     case "relay": {

@@ -16,8 +16,8 @@
 //   node scripts/reviewed-manifest.mjs --print                              write it to stdout
 //   --repo DIR                                            another checkout (default: this one)
 //
-// The binding root defaults to the bake-off's openmls-wasm in the sibling worktree
-// (HOPTELL_BINDING_ROOT overrides). The manifest goes to release-gate/reviewed-inputs.json, which is
+// The binding root defaults to native/openmls-wasm in this repository (--binding-root or
+// HOPTELL_BINDING_ROOT overrides). The manifest goes to release-gate/reviewed-inputs.json, which is
 // committed at the commit to be reviewed (entry criterion 5), not before.
 import fs from "node:fs";
 import path from "node:path";

@@ -483,3 +483,117 @@ test("requireVerified per contact: the realm's requirement is shown with the con
   assert.match(p2, /In force: <strong>true<\/strong>, required by this contact&#39;s flag/);
   assert.match(formsOf(p2)[0].html, /widens access/);
 });
+
+test("A12: an own-device accept form shown for a pending request is stale once the request is renewed with the same key; the renewed one is confirmed again", async (t) => {
+  const { makeApproval, APPROVAL_MAX_S } = await import("../lib/mls/identity.js");
+  const { writeBaseline } = await import("../lib/mls/own.js");
+  const home = tmpHome(t);
+  const c = await openContacts(home, { notify: false });
+  const me = `m_${"m".repeat(26)}`;
+  const [mine, fresh] = [await fakeDevice(R, me), await fakeDevice(R, me)];
+  await c.updatePins((doc) => void writeBaseline(doc, { rec: { realm: R, member: me, device: mine.device, key: mine.key.toString("base64"), seq: 0, retiredKeys: [] }, profile: "p", now: 1 }));
+  const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
+  const list = { realm: R, member: me, devices: [served(mine)] };
+  const now = Date.now();
+  let pending = { member: me, realm: R, requests: [{ device: fresh.device, key: fresh.key.toString("base64"), requested: now - 60_000, expires: now + 60_000, approved: false }] };
+  const sign = ({ device, key }) => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+    return makeApproval({ realm: R, member: me, approver: mine.device, device, key, issuedAt, expiry: issuedAt + APPROVAL_MAX_S }, (l, x) => mine.dev.sign(l, x));
+  };
+  const devices = { fetch: async () => ({ theirs: list, mine: list }), own: async () => ({ list, pending, thisDevice: mine.device, sign }) };
+  const ui = await startOwnerUi({ home, sources: { contacts: c, devices }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(home, "s.env"), relaysFile: path.join(home, "none.json") }) });
+  t.after(() => ui.close());
+  const cookie = await launch(ui);
+  const id = `device-own:${fresh.device}`;
+  const form = await formFor(ui, cookie, id, "accept");
+  assert.ok(form, "an accept form for the pending request");
+  // The form stays open; the request expires and the device asks again with the same key.
+  pending = { ...pending, requests: [{ ...pending.requests[0], requested: now + 1_000, expires: now + 86_400_000 }] };
+  const r = await post(ui, cookie, "/decide", form.fields);
+  assert.equal(r.status, 409);
+  assert.match(r.body, /changed since you looked/);
+  assert.equal(c.currentPolicy().doc.own[R].approvals, undefined, "nothing signed or written");
+  assert.deepEqual(c.currentPolicy().doc.own[R].devices.map((d) => d.device), [mine.device]);
+  // The renewed request is shown with a new form, which works.
+  const again = formsOf(r.body).find((x) => x.fields.action === "accept");
+  assert.equal((await post(ui, cookie, "/decide", again.fields)).status, 200);
+  assert.equal(c.currentPolicy().doc.own[R].approvals[0].requested, now + 1_000, "approved for the renewed request");
+});
+
+/** A12 fixtures: this home's own baseline `mine`, an accepted own device `known` that rotated at the relay. */
+async function rotatedOwn(t, { peerDevices = true } = {}) {
+  const { makeRotation, displayFingerprint } = await import("../lib/mls/identity.js");
+  const { acceptOwn, writeBaseline } = await import("../lib/mls/own.js");
+  const home = tmpHome(t);
+  const c = await openContacts(home, { notify: false });
+  const me = `m_${"m".repeat(26)}`;
+  const [mine, known, peer] = [await fakeDevice(R, me), await fakeDevice(R, me), await fakeDevice(R, ALICE)];
+  await c.updatePins((doc) => {
+    writeBaseline(doc, { rec: { realm: R, member: me, device: mine.device, key: mine.key.toString("base64"), seq: 0, retiredKeys: [] }, profile: "p", now: 1 });
+    acceptOwn(doc, R, { device: known.device, key: known.key, pin: Buffer.from(known.register().pin, "base64"), seq: 0 }, { by: mine.device, now: 2 });
+  });
+  const next = await known.driver.createDevice(known.dev.identity);
+  const newKey = Buffer.from(next.signaturePublicKey());
+  const rotation = await makeRotation({ realm: R, member: me, device: known.device, oldKey: known.key, newKey, sequence: 1 }, (l, x) => known.dev.sign(l, x), (l, x) => next.sign(l, x));
+  const { pinIdentity } = await import("../lib/mls/identity.js");
+  const served = (d) => ({ device: d.device, key: d.key.toString("base64"), pin: d.register().pin, seq: 0, rotations: [] });
+  const list = { realm: R, member: me, devices: [served(mine), { device: known.device, key: newKey.toString("base64"), pin: pinIdentity({ realm: R, member: me, device: known.device, key: newKey }).toString("base64"), seq: 1, rotations: [rotation] }] };
+  const theirs = { realm: R, member: ALICE, devices: peerDevices ? [served(peer)] : [] };
+  const devices = { fetch: async (m) => ({ theirs: m === me ? list : theirs, mine: list }), own: async () => ({ list, pending: { member: me, realm: R, requests: [] }, thisDevice: mine.device }) };
+  const ui = await startOwnerUi({ home, sources: { contacts: c, devices }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(home, "s.env"), relaysFile: path.join(home, "none.json") }) });
+  t.after(() => ui.close());
+  const fp = (key) => displayFingerprint({ realm: R, member: me, device: known.device, key });
+  return { c, ui, me, mine, known, newKey, fp };
+}
+
+test("A12: /devices records a validated rotation of an already registered own device before it shows it", async (t) => {
+  const { c, ui, known, newKey, fp } = await rotatedOwn(t);
+  const page = (await get(ui, await launch(ui), "/devices")).body;
+  const pin = c.currentPolicy().doc.own[R].devices.find((d) => d.device === known.device);
+  assert.equal(pin.key, newKey.toString("base64"), "the rotated key is recorded");
+  assert.equal(pin.seq, 1);
+  assert.match(page, new RegExp(`<tr><td><code>${known.device}</code></td><td class="fp">${fp(newKey)}</td><td>accepted</td></tr>`));
+  assert.doesNotMatch(page, new RegExp(fp(known.key)), "the old fingerprint is not shown");
+});
+
+test("A12: a failed recording of the own list is shown on the decision page; no safety number is offered and nothing can be confirmed", async (t) => {
+  const { c, ui, known } = await rotatedOwn(t);
+  c.updatePins = async () => {
+    throw Object.assign(new Error("another hoptell process holds the contacts lock"), { code: "busy" });
+  };
+  const cookie = await launch(ui);
+  const page = (await get(ui, cookie, `/decision?id=${encodeURIComponent(`device-verify:${ALICE}`)}`)).body;
+  assert.match(page, /<p class="warn"><strong>Not recorded:<\/strong> what the relay lists of your own devices could not be recorded in your contacts \(another hoptell process holds the contacts lock\)/);
+  assert.doesNotMatch(page, /Safety number:/);
+  assert.match(page, /No safety number to compare until your devices are recorded/);
+  assert.equal(formsOf(page).filter((f) => f.action === "/decide").length, 0, "nothing to confirm");
+  // The own-device page says it too.
+  const own = (await get(ui, cookie, `/decision?id=${encodeURIComponent(`device-own:${known.device}`)}`)).body;
+  assert.match(own, /<strong>Not recorded:<\/strong>/);
+  // And /devices notes it and still shows the list.
+  const devs = (await get(ui, cookie, "/devices")).body;
+  assert.match(devs, /could not be recorded in your contacts/);
+  assert.match(devs, new RegExp(known.device));
+});
+
+test("A12: /devices with a failed recording of a rotation: the warning first, the stale pinned fingerprint marked, never \"accepted\"", async (t) => {
+  const { c, ui, known, fp } = await rotatedOwn(t);
+  c.updatePins = async () => {
+    throw Object.assign(new Error("another hoptell process holds the contacts lock"), { code: "busy" });
+  };
+  const page = (await get(ui, await launch(ui), "/devices")).body;
+  assert.match(page, /<h2>Your devices<\/h2><p class="warn"><strong>Not recorded:<\/strong> your devices could not be recorded in your contacts \(another hoptell process holds the contacts lock\)/);
+  const row = new RegExp(`<tr><td><code>${known.device}</code></td><td class="fp">${fp(known.key)}</td><td>([^]*?)</td></tr>`).exec(page)?.[1];
+  assert.equal(row, `<span class="warn">not recorded: the relay serves a rotated key</span>`);
+});
+
+test("A12: a verify page for a member with no visible devices still says a failed recording of the own list", async (t) => {
+  const { c, ui } = await rotatedOwn(t, { peerDevices: false });
+  c.updatePins = async () => {
+    throw Object.assign(new Error("another hoptell process holds the contacts lock"), { code: "busy" });
+  };
+  const page = (await get(ui, await launch(ui), `/decision?id=${encodeURIComponent(`device-verify:${ALICE}`)}`)).body;
+  assert.match(page, /has no enrolled devices you can see/);
+  assert.match(page, /<p class="warn"><strong>Not recorded:<\/strong> what the relay lists of your own devices could not be recorded/);
+  assert.equal(formsOf(page).filter((f) => f.action === "/decide").length, 0);
+});

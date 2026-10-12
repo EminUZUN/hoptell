@@ -37,10 +37,10 @@ function bundle(t, { glue = glueOf("A"), wasm = wasmOf(1) } = {}) {
 }
 const REVIEWED = { glue: sha256(glueOf("A")), wasm: sha256(wasmOf(1)) };
 
-test("today: no reviewed digests and no shipped bundle, so the label always stays", async () => {
+test("today: no reviewed digests, so the label always stays; the shipped bundle (A11) is never loaded without an owner-given path", async () => {
   assert.deepEqual({ ...REVIEWED_BINDING }, { glue: null, wasm: null });
   assert.ok(Object.isFrozen(REVIEWED_BINDING));
-  assert.equal(fs.existsSync(BINDING_DIR), false, "the package ships no binding before the gate");
+  assert.equal(fs.existsSync(BINDING_DIR), true, "the package ships the binding bundle before the gate (amendment A11), unreviewed");
   await assert.rejects(loadDriver({}), /no MLS library is configured/);
 });
 

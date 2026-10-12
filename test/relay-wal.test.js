@@ -320,6 +320,7 @@ test("an acceptance to a full two-member conversation (40 devices) near the fram
     for (let i = 0; i < n; i++) {
       const d = await fakeDevice(realm, member);
       const reg = d.register();
+      s.w.directory.request({ member, device: d.device, key: d.key }); // A12: approved (autoApprove)
       s.w.directory.register({ member, device: d.device, key: Buffer.from(reg.key, "base64"), pin: Buffer.from(reg.pin, "base64") });
       s.w.directory.upload({ member, device: d.device, packages: (await d.packages(1, s.w.clock.now() + KP_LIFETIME_MS)).map((p) => ({ kp: Buffer.from(p.kp, "base64"), notAfter: p.not_after })) });
       extra.push({ member, device: d.device });

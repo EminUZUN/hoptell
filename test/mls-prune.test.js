@@ -208,7 +208,7 @@ test("A10 crash windows (SIGKILL): before the transaction's save neither the lib
 test("A10: doctor says whether pruning is available (a binding without prune_key_packages: unavailable)", async (t) => {
   const w = await deviceRelay(t, { e2ee: true });
   for (const [driverFile, re, level] of [
-    ["fake-mls-driver.js", /deleted a day after expiry \(0 pruned\)/, "info"],
+    ["fake-mls-driver.js", /deleted once a day past expiry, at the next prune \(start, attach, replenishment or every 6 hours\) \(0 pruned\)/, "info"],
     ["fixtures/fake-mls-driver-noprune.mjs", /KeyPackage pruning is unavailable with this MLS binding/, "warn"],
   ]) {
     const dir = tmpDir(t);

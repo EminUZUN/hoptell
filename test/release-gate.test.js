@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CLOSURE_EXCLUDED, DYNAMIC_LOADS, GROUPS, buildMapping, canonical, declaredReviewedDigests, hoptellClosure, lockedCrates, releaseCheck, reviewedInputs, runtimeArtifacts } from "../scripts/gate-lib.mjs";
+import { CLOSURE_EXCLUDED, DYNAMIC_LOADS, GROUPS, SHIPPED_EXCLUDED, buildMapping, canonical, declaredReviewedDigests, dockerfilePins, hoptellClosure, lockedCrates, recordsCheck, releaseCheck, reviewedInputs, runtimeArtifacts, shippedUnlisted, verifyBuildMapping } from "../scripts/gate-lib.mjs";
 
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const tmp = (t) => {
@@ -55,6 +55,16 @@ const treeDigest = (files) => sha256(files.map(([p, c]) => [p, sha256(c)]).sort(
 const DECL = (g, w) => `export const REVIEWED_BINDING = Object.freeze({ glue: ${g ? JSON.stringify(g) : "null"}, wasm: ${w ? JSON.stringify(w) : "null"} });\n`;
 const GLUE = Buffer.from("exports.initSync = () => {};\n");
 const WASM = Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
+// The reproducible build's inputs (amendment A11): a Dockerfile pinning its images by digest, the
+// toolchain pin, the image-build script and the glue wrapper.
+const DOCKERFILE = `FROM --platform=linux/amd64 node:22.22.1-bookworm-slim@sha256:${"1".repeat(64)} AS node
+FROM --platform=linux/amd64 rust:1.99.0-bookworm@sha256:${"2".repeat(64)}
+RUN cargo install wasm-bindgen-cli --version 0.2.129 --locked --root /opt/wasm-bindgen
+`;
+const TOOLCHAIN = '[toolchain]\nchannel = "1.99.0"\n';
+const IMAGE = `sha256:${"3".repeat(64)}`;
+const OUTPUTS = { glue: sha256(GLUE), glueUnwrapped: sha256(Buffer.from("let wasm_bindgen;\n")), wasm: sha256(WASM) };
+const attestation = (i, over = {}) => ({ image: IMAGE, started: `2026-10-11T0${i}:00:00Z`, finished: `2026-10-11T0${i}:05:00Z`, outputs: { ...OUTPUTS }, ...over });
 
 /** A repository, a binding root and an unpacked package of a fixture reviewed build (files written in `order`). */
 function fixture(t, { order = (xs) => xs, declared = [sha256(GLUE), sha256(WASM)] } = {}) {
@@ -73,25 +83,34 @@ function fixture(t, { order = (xs) => xs, declared = [sha256(GLUE), sha256(WASM)
     ["Cargo.lock", lockOf()],
     ["Cargo.toml", '[package]\nname = "openmls-wasm"\n'],
     ["build.sh", "#!/bin/sh\n"],
-    ["rust-toolchain.toml", "[toolchain]\n"],
+    ["rust-toolchain.toml", TOOLCHAIN],
     ["src/lib.rs", "// binding\n"],
     ["src/b/mod.rs", "// more\n"],
-    ["pkg/openmls_wasm.js", GLUE],
-    ["pkg/openmls_wasm_bg.wasm", WASM],
+    ["Dockerfile", DOCKERFILE],
+    ["build-image.sh", "#!/bin/sh\n# image and build\n"],
+    ["wrap-glue.mjs", "// the wrapper\n"],
     ["vendor/PATCHES.md", PATCHES()],
     ...VENDORED,
   ]))
     put(binding, p, c);
   for (const [p, c] of repoFiles) if (p !== "package-lock.json") put(pkg, p, c);
-  put(pkg, "lib/other.js", "// not on the encrypted path\n");
+  put(pkg, "README.md", "not on the encrypted path (not under bin/ or lib/)\n");
   put(pkg, "lib/mls/binding/openmls_wasm.js", GLUE);
   put(pkg, "lib/mls/binding/openmls_wasm_bg.wasm", WASM);
   const records = { inputs: path.join(base, "rec", "reviewed-inputs.json"), runtime: path.join(base, "rec", "runtime-artifacts.json"), mapping: path.join(base, "rec", "build-mapping.json") };
   const inputsText = canonical(reviewedInputs({ repo, bindingRoot: binding }));
   put(base, "rec/reviewed-inputs.json", inputsText);
   put(base, "rec/runtime-artifacts.json", canonical(runtimeArtifacts(pkg)));
-  put(base, "rec/build-mapping.json", canonical(buildMapping({ inputsBytes: Buffer.from(inputsText), glue: GLUE, wasm: WASM, rust: "1.99.0", wasmBindgen: "0.2.129" })));
-  return { base, repo, binding, pkg, records, check: () => releaseCheck({ pkgDir: pkg, repo, bindingRoot: binding, records }) };
+  put(base, "rec/build-mapping.json", canonical(buildMapping({ inputsBytes: Buffer.from(inputsText), dockerfile: DOCKERFILE, cargoLock: lockOf(), toolchainToml: TOOLCHAIN, imageId: IMAGE, glue: GLUE, wasm: WASM, attestations: [attestation(1), attestation(2)] })));
+  return {
+    base,
+    repo,
+    binding,
+    pkg,
+    records,
+    check: () => releaseCheck({ pkgDir: pkg, repo, bindingRoot: binding, records }),
+    strict: () => recordsCheck({ pkgDir: pkg, repo, bindingRoot: binding, records }).problems,
+  };
 }
 
 test("reviewed-input manifest: the three groups, sorted and byte-identical whatever the order files were made in", (t) => {
@@ -105,8 +124,8 @@ test("reviewed-input manifest: the three groups, sorted and byte-identical whate
   assert.deepEqual(m.library.crates, { openmls: { version: "0.9.1", checksum: "a".repeat(64) }, openmls_libcrux_crypto: { version: "0.4.0", checksum: "b".repeat(64) } });
   assert.deepEqual(Object.keys(m.library.files), ["openmls-wasm/Cargo.lock", "openmls-wasm/vendor/PATCHES.md", ...VENDORED.map(([p]) => `openmls-wasm/${p}`)]);
   assert.equal(m.format, "hoptell-reviewed-inputs-2");
-  assert.deepEqual(Object.keys(m.binding.files), ["openmls-wasm/Cargo.toml", "openmls-wasm/build.sh", "openmls-wasm/pkg/openmls_wasm.js", "openmls-wasm/pkg/openmls_wasm_bg.wasm", "openmls-wasm/rust-toolchain.toml", "openmls-wasm/src/b/mod.rs", "openmls-wasm/src/lib.rs"]);
-  assert.equal(m.binding.files["openmls-wasm/pkg/openmls_wasm_bg.wasm"], sha256(WASM));
+  assert.deepEqual(Object.keys(m.binding.files), ["openmls-wasm/Cargo.toml", "openmls-wasm/Dockerfile", "openmls-wasm/build-image.sh", "openmls-wasm/build.sh", "openmls-wasm/rust-toolchain.toml", "openmls-wasm/src/b/mod.rs", "openmls-wasm/src/lib.rs", "openmls-wasm/wrap-glue.mjs"]);
+  assert.equal(m.binding.files["openmls-wasm/Dockerfile"], sha256(DOCKERFILE));
   const keys = Object.keys(m.hoptell.files);
   assert.deepEqual(keys, [...keys].sort());
   for (const p of ["lib/mls/sub/deep.js", "lib/relaystore.js", "package-lock.json", "package.json"]) assert.ok(keys.includes(p), p);
@@ -117,11 +136,15 @@ test("reviewed-input manifest: a new file under a listed directory is in scope; 
   const f = fixture(t);
   put(f.repo, "lib/mls/new.js", "// new\n");
   assert.ok(reviewedInputs({ repo: f.repo, bindingRoot: f.binding }).hoptell.files["lib/mls/new.js"]);
-  fs.rmSync(path.join(f.binding, "pkg", "openmls_wasm_bg.wasm"));
-  assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), /a listed path is missing: pkg\/openmls_wasm_bg\.wasm \(under the binding root /);
+  // A11: the Dockerfile, the image-build script and the wrapper are listed by name.
+  for (const name of ["Dockerfile", "build-image.sh", "wrap-glue.mjs"]) {
+    const c = fs.readFileSync(path.join(f.binding, name));
+    fs.rmSync(path.join(f.binding, name));
+    assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), new RegExp(`a listed path is missing: ${name.replace(".", "\\.")} \\(under the binding root `));
+    put(f.binding, name, c);
+  }
   assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: path.join(f.base, "nowhere") }), /a listed path is missing: Cargo\.lock/);
   fs.rmSync(path.join(f.repo, "lib", "inbox.js"));
-  put(f.binding, "pkg/openmls_wasm_bg.wasm", WASM);
   assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), /a listed path is missing: lib\/inbox\.js \(under the repository\)/);
   put(f.repo, "lib/inbox.js", "//\n");
   fs.symlinkSync(path.join(f.repo, "lib", "inbox.js"), path.join(f.repo, "lib", "mls", "link.js"));
@@ -166,6 +189,68 @@ test("group 3's closure in a fixture: a new unlisted import, a non-literal load 
   assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), /non-literal loads the closure cannot follow: lib\/engine\.js: import\(path\.join\(dir,name\)\)/);
   put(f.repo, "lib/engine.js", 'import "./gone.js";\n');
   assert.throws(() => hoptellClosure(f.repo), /lib\/engine\.js: loads \.\/gone\.js, which is no file of the repository/);
+});
+
+test("group 3 covers every file shipped under bin/ and lib/, run by path or imported (lib/read-helper.mjs, a spawn target)", () => {
+  assert.deepEqual(shippedUnlisted(), [], "add these to GROUPS.hoptell.paths, or to SHIPPED_EXCLUDED with a reason");
+  assert.ok(GROUPS.hoptell.paths.includes("lib/read-helper.mjs"));
+  // lib/files.js runs the helper by path; the import closure cannot see it.
+  assert.match(fs.readFileSync("lib/files.js", "utf8"), /spawn\(process\.execPath, \[HELPER\]/);
+  for (const [f, why] of Object.entries(SHIPPED_EXCLUDED)) {
+    assert.ok(fs.existsSync(f), `${f} is excluded but no longer shipped`);
+    assert.ok(typeof why === "string" && why.length > 10, `${f} needs a reason`);
+  }
+});
+
+test("a file shipped under bin/ or lib/ that is not in group 3 fails the records: generation of both manifests and --records", (t) => {
+  const f = fixture(t);
+  assert.deepEqual(f.strict(), []);
+  // In the package only (a spawn target the closure cannot see, in no listed directory).
+  put(f.pkg, "lib/runner.mjs", "// started by path\n");
+  assert.deepEqual(shippedUnlisted(f.pkg, { packed: true }), ["lib/runner.mjs"]);
+  assert.throws(() => runtimeArtifacts(f.pkg), /the package ships files under bin\/ or lib\/ that are neither in group 3 nor excluded: lib\/runner\.mjs/);
+  assert.ok(f.strict().some((p) => /the package ships files .* lib\/runner\.mjs/.test(p)));
+  // In the repository too: the reviewed-input manifest is not generated, and --records fails.
+  put(f.repo, "lib/runner.mjs", "// started by path\n");
+  assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), /the repository ships files under bin\/ or lib\/ that are neither in group 3 nor excluded: lib\/runner\.mjs/);
+  assert.ok(f.strict().some((p) => /the repository ships files .* lib\/runner\.mjs/.test(p)));
+  // Under bin/ as well; names npm never packs are not shipped files.
+  fs.rmSync(path.join(f.pkg, "lib", "runner.mjs"));
+  fs.rmSync(path.join(f.repo, "lib", "runner.mjs"));
+  put(f.pkg, "bin/extra.js", "//\n");
+  assert.deepEqual(shippedUnlisted(f.pkg, { packed: true }), ["bin/extra.js"]);
+  fs.rmSync(path.join(f.pkg, "bin", "extra.js"));
+  put(f.repo, "lib/.DS_Store", "x");
+  put(f.repo, "lib/.engine.js.swp", "x");
+  assert.deepEqual(shippedUnlisted(f.repo), []);
+  assert.deepEqual(f.strict(), []);
+});
+
+test("npm's ignore rules apply only on the repository side, and root-only rules only at the root: lib/config.gypi counts, lib/.DS_Store does not", (t) => {
+  const f = fixture(t);
+  // An unpacked package holds only packed files: every name counts, also ones npm drops elsewhere.
+  for (const name of ["lib/config.gypi", "lib/.lock-wscript", "lib/.wafpickle-7", "lib/node_modules/x.js", "lib/.DS_Store"]) {
+    put(f.pkg, name, "x");
+    assert.deepEqual(shippedUnlisted(f.pkg, { packed: true }), [name], name);
+    assert.throws(() => runtimeArtifacts(f.pkg), new RegExp(`the package ships files .*: ${name.replace(/\./g, "\\.")}`));
+    assert.ok(f.strict().some((p) => p.startsWith("the package ships files") && p.endsWith(name)), name);
+    fs.rmSync(path.join(f.pkg, name));
+  }
+  assert.deepEqual(f.strict(), []);
+  // The repository: npm-packlist's root-only rules (/build/config.gypi, /.lock-wscript,
+  // /.wafpickle-*, /node_modules) do not reach bin/ or lib/, so those files are shipped and count.
+  for (const name of ["lib/config.gypi", "lib/build/config.gypi", "lib/.lock-wscript", "bin/.wafpickle-1", "lib/node_modules/x.js"]) {
+    put(f.repo, name, "x");
+    assert.deepEqual(shippedUnlisted(f.repo), [name], name);
+    assert.throws(() => reviewedInputs({ repo: f.repo, bindingRoot: f.binding }), /the repository ships files under bin\/ or lib\/ that are neither in group 3 nor excluded/);
+    assert.ok(f.strict().some((p) => p.startsWith("the repository ships files") && p.endsWith(name)), name);
+    fs.rmSync(path.join(f.repo, name));
+  }
+  // Rules without a leading "/" apply at any depth, also to a directory's contents. (Inside a listed
+  // directory such as lib/mls/** every file is recorded anyway, so these stay outside it.)
+  for (const name of ["lib/.DS_Store", "lib/sub/._x.js", "bin/.hoptell.js.swp", "lib/a.js.orig", "lib/.npmrc", "lib/npm-debug.log", "lib/.git/HEAD", "lib/CVS/Entries", "lib/.gitignore", "lib/.npmignore"]) put(f.repo, name, "x");
+  assert.deepEqual(shippedUnlisted(f.repo), []);
+  assert.deepEqual(f.strict(), []);
 });
 
 test("reviewed-input manifest: the crate entries come from the lock, once each, with a checksum", () => {
@@ -218,9 +303,8 @@ test("N6: a vendored provider (a path entry) is recorded with PATCHES.md's regis
   assert.throws(() => lockedCrates(vendoredLock().replace(/checksum = "a+"\n/, ""), ["openmls"]), /openmls has no checksum/);
 });
 
-const QUALIFIED = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "mls-bakeoff", "spike", "mls-bakeoff", "openmls-wasm");
-test("N6: node scripts/reviewed-manifest.mjs --print succeeds against the qualified binding root (the bake-off's vendored provider)", { skip: fs.existsSync(path.join(QUALIFIED, "Cargo.lock")) ? false : `no binding root at ${QUALIFIED}` }, () => {
-  const r = spawnSync(process.execPath, ["scripts/reviewed-manifest.mjs", "--print", "--binding-root", QUALIFIED], { encoding: "utf8" });
+test("N6 / A11: node scripts/reviewed-manifest.mjs --print succeeds against the binding source in the repository (native/openmls-wasm, the vendored provider)", () => {
+  const r = spawnSync(process.execPath, ["scripts/reviewed-manifest.mjs", "--print"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   const m = JSON.parse(r.stdout);
   assert.equal(m.library.crates.openmls_libcrux_crypto.source, "path");
@@ -229,6 +313,8 @@ test("N6: node scripts/reviewed-manifest.mjs --print succeeds against the qualif
   assert.match(m.library.crates.openmls.checksum, /^[0-9a-f]{64}$/);
   assert.ok(m.library.files["openmls-wasm/vendor/PATCHES.md"]);
   assert.ok(Object.keys(m.library.files).some((k) => k.startsWith("openmls-wasm/vendor/openmls_rust_crypto/")));
+  for (const k of ["Dockerfile", "build-image.sh", "wrap-glue.mjs", "build.sh", "src/lib.rs"]) assert.match(m.binding.files[`openmls-wasm/${k}`], /^[0-9a-f]{64}$/, k);
+  for (const k of ["lib/mls/binding/openmls_wasm.js", "lib/mls/binding/openmls_wasm_bg.wasm"]) assert.match(m.hoptell.files[k], /^[0-9a-f]{64}$/, `${k} (the shipped bundle, group 3)`);
 });
 
 test("reviewed-input manifest CLI: write, --check passes on the same tree and names the changed file after an edit", (t) => {
@@ -252,7 +338,7 @@ test("runtime-artifact manifest: the shipped group-3 files and the binding bundl
   assert.ok(m.files["lib/mls/binding/openmls_wasm.js"] && m.files["lib/mls/binding/openmls_wasm_bg.wasm"]);
   assert.ok(m.files["package.json"] && m.files["lib/engine.js"] && m.files["lib/mls/sub/deep.js"]);
   assert.equal(m.files["package-lock.json"], undefined);
-  assert.equal(m.files["lib/other.js"], undefined);
+  assert.equal(m.files["README.md"], undefined);
   fs.rmSync(path.join(f.pkg, "lib", "mls", "binding"), { recursive: true });
   assert.equal(runtimeArtifacts(f.pkg).files["lib/mls/binding/openmls_wasm.js"], undefined, "a package without a bundle (today) still has a manifest");
   fs.rmSync(path.join(f.pkg, "lib", "relay.js"));
@@ -288,6 +374,10 @@ test("release check: a reviewed build passes only when the package, the mapping 
     const m = JSON.parse(fs.readFileSync(f.records.mapping));
     m.binding["lib/mls/binding/openmls_wasm.js"] = "0".repeat(64);
     fs.writeFileSync(f.records.mapping, canonical(m));
+  }, /the build mapping places other outputs in the package than it records/);
+  refused((f) => {
+    put(f.pkg, "lib/mls/binding/openmls_wasm.js", "exports.initSync = () => { /* other */ };\n");
+    put(path.dirname(f.records.runtime), "runtime-artifacts.json", canonical(runtimeArtifacts(f.pkg)));
   }, /the build mapping does not produce the package's lib\/mls\/binding\/openmls_wasm\.js/);
   refused((f) => {
     put(f.pkg, "lib/engine.js", "// changed after review\n");
@@ -313,4 +403,90 @@ test("release check: a declaration it cannot parse is a claim, checked in full (
   assert.ok(r.problems.length > 0);
   // The package's real lib/mls/openmls.js declares nothing today.
   assert.equal(declaredReviewedDigests(fs.readFileSync("lib/mls/openmls.js", "utf8")), null);
+});
+
+// ---- A11: the build mapping (format 2) and the strict records check -----------------------------
+
+test("A11 release-check --records: the committed records pass for their package, whatever REVIEWED_BINDING says", (t) => {
+  assert.deepEqual(fixture(t).strict(), []);
+  const open = fixture(t, { declared: [null, null] });
+  assert.deepEqual(open.strict(), [], "the strict check does not depend on the declaration");
+  assert.deepEqual(open.check(), { reviewedBuild: false, problems: [] }, "the ordinary check keeps the experimental label with REVIEWED_BINDING null");
+  // Altered bytes: the strict check refuses, the ordinary one still only keeps the label.
+  put(open.pkg, "lib/mls/binding/openmls_wasm_bg.wasm", Buffer.concat([WASM, Buffer.from([1])]));
+  assert.ok(open.strict().length > 0);
+  assert.deepEqual(open.check(), { reviewedBuild: false, problems: [] });
+});
+
+test("A11 release-check --records refuses a changed glue, WASM, wrapper, Dockerfile or input, and mappings whose attestations disagree or name another image", (t) => {
+  const refused = (mutate, re) => {
+    const f = fixture(t, { declared: [null, null] });
+    mutate(f);
+    const problems = f.strict();
+    assert.ok(problems.some((p) => re.test(p)), `${re} not in ${JSON.stringify(problems)}`);
+  };
+  const editMapping = (f, fn) => {
+    const m = JSON.parse(fs.readFileSync(f.records.mapping));
+    fn(m);
+    fs.writeFileSync(f.records.mapping, canonical(m));
+  };
+  // The bundle's bytes, against the runtime record and the mapping (even with the runtime record redone).
+  refused((f) => put(f.pkg, "lib/mls/binding/openmls_wasm.js", "exports.initSync = () => 1;\n"), /differs from the recorded runtime-artifact manifest: lib\/mls\/binding\/openmls_wasm\.js/);
+  refused((f) => {
+    put(f.pkg, "lib/mls/binding/openmls_wasm_bg.wasm", Buffer.concat([WASM, Buffer.from([0])]));
+    put(path.dirname(f.records.runtime), "runtime-artifacts.json", canonical(runtimeArtifacts(f.pkg)));
+  }, /the build mapping does not produce the package's lib\/mls\/binding\/openmls_wasm_bg\.wasm/);
+  // Build inputs: the wrapper, the Dockerfile, the image-build script, a hoptell input.
+  refused((f) => put(f.binding, "wrap-glue.mjs", "// another wrapper\n"), /the reviewed-input manifest regenerated now differs from the recorded one/);
+  refused((f) => put(f.binding, "build-image.sh", "#!/bin/sh\n# changed\n"), /regenerated now differs/);
+  refused((f) => put(f.binding, "Dockerfile", DOCKERFILE + "RUN true\n"), /the build mapping names another Dockerfile/);
+  refused((f) => put(f.binding, "Dockerfile", DOCKERFILE.replace("2".repeat(64), "4".repeat(64))), /the build mapping names another base image/);
+  refused((f) => put(f.repo, "lib/mls/driver.js", "// changed after the records\n"), /regenerated now differs/);
+  refused((f) => put(f.binding, "rust-toolchain.toml", '[toolchain]\nchannel = "1.98.0"\n'), /the build mapping names Rust 1\.99\.0, rust-toolchain\.toml 1\.98\.0/);
+  refused((f) => put(f.binding, "Cargo.lock", lockOf("\n")), /the build mapping names another Cargo\.lock/);
+  // The attestations.
+  refused((f) => editMapping(f, (m) => (m.attestations[1].outputs.wasm = "5".repeat(64))), /build attestation 2's outputs differ from the recorded outputs/);
+  refused((f) => editMapping(f, (m) => (m.attestations[1].outputs.wasm = "5".repeat(64))), /the two builds' outputs differ \(not byte-identical\)/);
+  refused((f) => editMapping(f, (m) => (m.attestations[0].image = `sha256:${"6".repeat(64)}`)), /build attestation 1 names another image/);
+  refused((f) => editMapping(f, (m) => (m.image.id = `sha256:${"6".repeat(64)}`)), /build attestation 1 names another image .* than the recorded sha256:6+/);
+  refused((f) => editMapping(f, (m) => m.attestations.pop()), /1 build attestations \(expected two\)/);
+  refused((f) => editMapping(f, (m) => (m.attestations[1] = m.attestations[0])), /the same build/);
+  refused((f) => editMapping(f, (m) => (m.attestations[0].finished = "yesterday")), /build attestation 1 has no valid start and end time/);
+  refused((f) => editMapping(f, (m) => (m.format = "hoptell-build-mapping-1")), /format hoptell-build-mapping-1 \(expected hoptell-build-mapping-2\)/);
+  refused((f) => editMapping(f, (m) => (m.outputs.glueUnwrapped = "7".repeat(64))), /outputs differ from the recorded outputs/);
+});
+
+test("A11 build mapping 2: written only from two agreeing builds of the recorded image; the Dockerfile must pin its images by digest", (t) => {
+  const f = fixture(t);
+  const m = JSON.parse(fs.readFileSync(f.records.mapping));
+  assert.equal(m.format, "hoptell-build-mapping-2");
+  assert.deepEqual(m.image, { id: IMAGE, dockerfile: sha256(DOCKERFILE), base: `rust:1.99.0-bookworm@sha256:${"2".repeat(64)}`, node: `node:22.22.1-bookworm-slim@sha256:${"1".repeat(64)}` });
+  assert.deepEqual(m.toolchain, { rust: "1.99.0", wasmBindgen: "0.2.129" });
+  assert.deepEqual(m.outputs, OUTPUTS);
+  assert.equal(m.attestations.length, 2);
+  const inputsBytes = fs.readFileSync(f.records.inputs);
+  const args = { inputsBytes, dockerfile: DOCKERFILE, cargoLock: lockOf(), toolchainToml: TOOLCHAIN, imageId: IMAGE, glue: GLUE, wasm: WASM };
+  assert.throws(() => buildMapping({ ...args, attestations: [attestation(1), attestation(2, { outputs: { ...OUTPUTS, wasm: "8".repeat(64) } })] }), /not byte-identical/);
+  assert.throws(() => buildMapping({ ...args, attestations: [attestation(1), attestation(2, { image: `sha256:${"9".repeat(64)}` })] }), /names another image/);
+  assert.throws(() => buildMapping({ ...args, attestations: [attestation(1)] }), /two builds/);
+  assert.throws(() => buildMapping({ ...args, glue: Buffer.from("other\n"), attestations: [attestation(1), attestation(2)] }), /does not produce the package's lib\/mls\/binding\/openmls_wasm\.js/);
+  assert.throws(() => dockerfilePins(DOCKERFILE.replace(`@sha256:${"2".repeat(64)}`, "")), /rust image is not pinned by digest/);
+  assert.throws(() => dockerfilePins(DOCKERFILE.replace(/^RUN .*$/m, "")), /wasm-bindgen-cli/);
+  assert.deepEqual(verifyBuildMapping(m, { ...args }), []);
+});
+
+test("A11 release-check --records CLI: passes on the fixture's records, fails with the reason after an altered byte", (t) => {
+  const f = fixture(t, { declared: [null, null] });
+  const cli = () => spawnSync(process.execPath, ["scripts/release-check.mjs", "--records", "--package", f.pkg, "--repo", f.repo, "--records-dir", path.dirname(f.records.inputs), "--binding-root", f.binding], { encoding: "utf8" });
+  const ok = cli();
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /release gate --records: the package equals the recorded runtime artifacts/);
+  // The ordinary check on the same package: not a reviewed build, label kept.
+  const plain = spawnSync(process.execPath, ["scripts/release-check.mjs", "--package", f.pkg, "--repo", f.repo, "--records-dir", path.dirname(f.records.inputs), "--binding-root", f.binding], { encoding: "utf8" });
+  assert.equal(plain.status, 0);
+  assert.match(plain.stdout, /not a reviewed build/);
+  put(f.pkg, "lib/mls/binding/openmls_wasm.js", "exports.initSync = () => 2;\n");
+  const bad = cli();
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /the committed records do not describe this package:\n {2}the package differs from the recorded runtime-artifact manifest: lib\/mls\/binding\/openmls_wasm\.js/);
 });

@@ -117,6 +117,20 @@ process. None of this is sent to the relay.
     key to the realm, member and device, and the time of enrollment; for a revoked device, the
     time and the revocation statement, if any. These have no age-based expiry. The statements
     of its key changes are kept, with their times, for its latest 10 key changes;
+  - while a member's new device waits for approval: the request (the member id, the device id,
+    its public signing key, a hash binding that key to the realm, member and device, whether it
+    used the reserved slot, and its creation and expiry times). If one of the member's devices
+    approves it, the relay also keeps that device's id and public key, the signed approval
+    (including when it was issued and expires), and the expiry separately. If the relay owner
+    approves it, the relay keeps that it was an owner approval and its expiry, without a signed
+    approval or an approving-device key.
+    The request and its approval are removed when the device registers, the request is
+    cancelled, or 24 hours after it was made. A cancelled request leaves a record of the member
+    id, device id and key for 24 hours, so the same request cannot be made again sooner. When one
+    of a member's devices reserves a request slot for a new device (`hoptell device expect`), the
+    relay keeps the member id, the expected device id, a hash binding its key to the realm,
+    member and device, and the reserving device, for up to 24 hours (or until it is replaced or
+    that device registers). The relay owner's approvals and cancellations are also recorded in the audit log;
   - the KeyPackages devices upload (public keys that let another device start a conversation
     with them), until they expire (at most 14 days and 5 minutes after upload), and a record of
     each one taken (the requesting member and device, and the device it belongs to). The

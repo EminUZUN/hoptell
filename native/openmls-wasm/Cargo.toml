@@ -1,0 +1,50 @@
+[package]
+name = "openmls-wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The bake-off binding (3.1): a small WASM API over OpenMLS for the common harness"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openmls = { version = "=0.9.1", features = ["draft-ietf-mls-pq-ciphersuites", "js"] }
+openmls_libcrux_crypto = { version = "=0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_traits = { version = "=0.6.0" }
+openmls_basic_credential = { version = "=0.6.0" }
+openmls_memory_storage = { version = "=0.6.0" }
+wasm-bindgen = { version = "=0.2.129" }
+# Reads the stored MessageSecretsStore (trace, retention evidence); the version already in the tree.
+serde_json = { version = "=1.0.151", features = ["raw_value"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+
+[features]
+# Test-only (gate 5, HV2-4): a crypto provider wrapper that records non-secret fingerprints of the
+# actual AEAD key and nonce of every seal (and can inject a key/nonce reuse for the negative
+# control). Built separately into pkg-trace/ by build.sh; the production pkg/ never has it.
+aead-trace = []
+# Test-only (amendment A7): Device::propose_for_test, a member sending a standalone proposal, so
+# the harness can show a receiver refuses it. Built into pkg-trace only, never into pkg/.
+test-proposals = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# Randomness on wasm32-unknown-unknown comes from crypto.getRandomValues (both getrandom lines in
+# the dependency tree).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "=0.4.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "=0.2.17", features = ["js"] }
+
+# RUSTSEC-2026-0329/0330/0331: the latest releases, openmls_libcrux_crypto 0.4.0 and
+# openmls_rust_crypto 0.6.0, require hpke-rs 0.7 and libcrux-hmac-drbg 0.0.1, which lock
+# libcrux-kem 0.0.9 and libcrux-hmac-drbg 0.0.1. vendor/ holds those two published crates with
+# only upstream's fix applied (openmls commit e0b21a70a5: the libcrux and hpke-rs requirement
+# bumps, and the hmac call for libcrux-hmac 0.0.9). openmls_rust_crypto is not built here (an
+# optional openmls dependency), but Cargo.lock records it, and the advisory check reads the lock.
+# Remove this patch when releases carrying that commit are pinned.
+[patch.crates-io]
+openmls_libcrux_crypto = { path = "vendor/openmls_libcrux_crypto" }
+openmls_rust_crypto = { path = "vendor/openmls_rust_crypto" }

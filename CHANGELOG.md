@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Encrypted messages (experimental): when a member has a registered device that remains unrevoked,
+  a new device needs approval from an active device of the member or from the relay owner. Run
+  `hoptell device enroll` on the new device. On an existing device, run `hoptell device accept
+  <device>`, compare the fingerprint, then run the `--set <code>` command it prints to accept the
+  device and send a signed approval. If the new device has stopped waiting, run `hoptell device
+  enroll` again to finish registration. An approval that could not be sent is kept and retried
+  when the approving device next connects. While any registered device remains unrevoked, a member
+  token alone cannot register another one, so a token holder cannot use a new device to revoke the
+  member's existing devices. New commands: `hoptell device pending [--cancel <device>]` and
+  `hoptell device expect <device> <pin identity>` (`hoptell device status` prints the pin
+  identity). Relay owners can list requests with `hoptell relay admin devices pending [--member
+  <name>]`, approve one with `hoptell relay admin devices approve <member> <device> <fingerprint>`
+  or `hoptell members device-approve <member> <device> <fingerprint>`, and cancel one with
+  `hoptell relay admin devices pending-cancel <member> <device>`. If a member has no registered
+  device that remains unrevoked, a new device can register without approval. Upgrading a relay:
+  devices registered before the upgrade remain active; the relay cannot tell which were added
+  using only a member token. After upgrading, each member's owner should review those devices with
+  `hoptell device list` and revoke any they do not recognize. `hoptell doctor` also warns about
+  devices you have not accepted that hoptell last saw at the relay, but it is not a full device
+  list. Upgrade clients too: an older hoptell cannot attach as a device or enroll a new device on
+  the upgraded relay.
 - Encrypted messages (experimental): a connection acts for a device only after it signs a fresh
   relay challenge with the device key; a member token alone no longer receives a device's
   messages or touches its KeyPackages. An older hoptell needs an update to attach to such a

@@ -515,6 +515,10 @@
                 "type": "string",
                 "pattern": "^[a-z2-7]{25}[aeimquy4]$",
                 "description": "The own device that accepted it (accepted devices only)."
+              },
+              "awaiting": {
+                "const": true,
+                "description": "EXPERIMENTAL (A12): accepted from its pending request; its registration at the relay is not confirmed yet. Left out of safety numbers until the relay lists it; cleared then."
               }
             }
           }
@@ -584,6 +588,37 @@
             "type": "object"
           },
           "description": "Earlier baselines of the realm replaced by --new-baseline, kept for review (never authority)."
+        },
+        "approvals": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["device", "key", "approval", "at"],
+            "properties": {
+              "device": { "type": "string", "pattern": "^[a-z2-7]{25}[aeimquy4]$" },
+              "key": { "type": "string", "description": "The new device's signature key (32 bytes, base64)." },
+              "approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["realm", "member", "approver", "device", "key", "issued_at", "expiry", "sig"],
+                "properties": {
+                  "realm": { "type": "string" },
+                  "member": { "type": "string" },
+                  "approver": { "type": "string" },
+                  "device": { "type": "string" },
+                  "key": { "type": "string" },
+                  "issued_at": { "type": "integer", "minimum": 0 },
+                  "expiry": { "type": "integer", "minimum": 0 },
+                  "sig": { "type": "string" }
+                }
+              },
+              "at": { "type": "integer", "minimum": 0 },
+              "requested": { "type": "integer", "minimum": 0, "description": "The relay's creation time (ms) of the pending request this approval was signed for, as device_pending reported it. An entry is signed again (after its approver rotated) only for a live request with exactly this value." }
+            }
+          },
+          "description": "EXPERIMENTAL (amendments 3.5 part 3, A12): the approval outbox. Approvals an own device signed for a new own device, written with its pin in one write and sent to the relay at every attach until the relay confirms them or reports the request consumed, expired or gone."
         }
       }
     }

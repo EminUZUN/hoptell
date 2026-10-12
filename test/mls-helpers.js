@@ -12,7 +12,7 @@ import { createDeviceDirectory } from "../lib/mls/relaydir.js";
 import { createDeliveryService } from "../lib/mls/relayds.js";
 import { createTransferStore } from "../lib/mls/relaytransfers.js";
 import { RELAY_MIGRATIONS } from "../lib/relaystore.js";
-import { PROOF_LABELS, b64, credentialIdentity, newDeviceId, pinIdentity, proofContent, unb64url } from "../lib/mls/identity.js";
+import { PROOF_LABELS, b64, credentialIdentity, displayFingerprint, newDeviceId, pinIdentity, proofContent, unb64url } from "../lib/mls/identity.js";
 import { newMemberId } from "../lib/relay.js";
 import { createFakeDriver } from "./fake-mls-driver.js";
 import { validateContacts } from "../lib/contacts.js";
@@ -37,7 +37,7 @@ export const tokenOf = () => crypto.randomBytes(16).toString("hex");
  * A relay with the device directory (unless `devices: false`), members alice, bob and carol.
  * Returns {relay, url, realm, members, directory, db, clock, fault, client(name), restart(), dir}.
  */
-export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}, visible = null, access = null, members: extra = [], hosted = [], shared = null, sweepMs = 3_600_000, audit = () => {}, transfers: xfer = null, admission = {}, dsCompat = {} } = {}) {
+export async function deviceRelay(t, { autoApprove = true, devices = true, e2ee = false, limits = {}, visible = null, access = null, members: extra = [], hosted = [], shared = null, sweepMs = 3_600_000, audit = () => {}, transfers: xfer = null, admission = {}, dsCompat = {} } = {}) {
   const dir = tmpDir(t, "hoptell-mls-relay-");
   const release = lockStateDir(dir);
   t.after(() => release());
@@ -58,7 +58,21 @@ export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}
     }
   } });
   let db = devices ? open() : null;
-  let directory = db ? createDeviceDirectory({ db, realm, now: c.now }) : null;
+  // A12: with `autoApprove` (tests of other things), the relay admin approves every new pending
+  // request at once, as an owner would; the approval tests turn it off and use the frames.
+  const makeDirectory = () => {
+    const d = createDeviceDirectory({ db, realm, now: c.now });
+    if (!autoApprove) return d;
+    const request = d.request;
+    d.request = (x) => {
+      const r = request(x);
+      if (r.state !== "pending") return r;
+      d.adminApprove({ member: x.member, device: x.device, fingerprint: displayFingerprint({ realm, member: x.member, device: x.device, key: Buffer.from(x.key) }) });
+      return { ...r, state: "approved" };
+    };
+    return d;
+  };
+  let directory = db ? makeDirectory() : null;
   // Larger transfers (design 6): `transfers` is true or {limits, chunkSize} for the transfer store.
   const makeTransfers = () => (db && e2ee && xfer ? createTransferStore({ db, now: c.now, ...(xfer === true ? {} : xfer) }) : null);
   let transfers = makeTransfers();
@@ -67,6 +81,19 @@ export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}
   let relay = await start();
   const clients = [];
   const w = {
+    autoApprove,
+    /**
+     * A12: the relay admin's approval of fake device `d`'s pending request (made here with its
+     * register proof on `client` when it has none), as tests of other things register a member's
+     * second device; the approval tests themselves use the frames.
+     */
+    /** A12: the relay admin approves the waiting device `x` ({device, fingerprint}) of member `name`. */
+    adminApprove: (name, x) => directory.adminApprove({ member: members[name].id, device: x.device, fingerprint: x.fingerprint }),
+    async approve(client, d) {
+      const r = await client.rpc({ type: "device_request", device: d.device, key: b64(d.key), proof: await d.proof(client, "register") });
+      if (r.state === "pending") directory.adminApprove({ member: client.member.id, device: d.device, fingerprint: displayFingerprint({ realm, member: client.member.id, device: d.device, key: d.key }) });
+      return r;
+    },
     dir,
     realm,
     members,
@@ -159,7 +186,7 @@ export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}
             const sub = await subOf(frame.device);
             const d = FAKES.get(frame.device);
             if (frame.proof !== undefined || !d || frame.rotation) return sub.c.rpc(frame);
-            return sub.c.rpc({ ...frame, proof: await d.proof(sub.c, "register") });
+            return registerApproved(sub.c, d, frame);
           }
           if (frame.type === "e2ee_attach") {
             const sub = await subOf(frame.device);
@@ -202,7 +229,7 @@ export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}
       if (db) {
         db.close();
         db = open();
-        directory = createDeviceDirectory({ db, realm, now: c.now });
+        directory = makeDirectory();
         transfers = makeTransfers();
         if (e2ee) ds = createDeliveryService({ db, directory, realm, now: c.now, limits, transfers, compat: dsCompat });
       }
@@ -210,15 +237,34 @@ export async function deviceRelay(t, { devices = true, e2ee = false, limits = {}
     },
   };
   t.after(async () => {
+    RELAYS.delete(realm);
     for (const rc of clients) rc.close();
     await relay.close();
     db?.close();
   });
+  RELAYS.set(realm, w);
   return w;
 }
 
 /** Fake devices by device id, for w.member's proofs (A9). */
 const FAKES = new Map();
+/** The test relays by realm id, for a fake device's approval (A12). */
+const RELAYS = new Map();
+
+/**
+ * Register fake device `d` on `client` with `frame` (A9's register proof added); a member's second
+ * device is approved by the relay admin first (A12) and registered again.
+ */
+async function registerApproved(client, d, frame) {
+  try {
+    return await client.rpc({ ...frame, proof: await d.proof(client, "register") });
+  } catch (e) {
+    const w = RELAYS.get(client.realm?.id);
+    if (e.code !== "approval_required" || !w?.autoApprove) throw e;
+    await w.approve(client, d);
+    return client.rpc({ ...frame, proof: await d.proof(client, "register") });
+  }
+}
 
 /**
  * A9: the proof field for `purpose` ("attach", or "register" with `key`) by device `dev` of
@@ -246,7 +292,7 @@ export async function fakeDevice(realm, member, { driver = createFakeDriver({ se
     key,
     register,
     proof,
-    registerOn: async (client, extra = {}) => client.rpc({ ...register(), proof: await proof(client, "register"), ...extra }),
+    registerOn: async (client, extra = {}) => (extra.proof !== undefined || extra.rotation ? client.rpc({ ...register(), proof: await proof(client, "register"), ...extra }) : registerApproved(client, fake, { ...register(), ...extra })),
     attachOn: async (client) => client.rpc({ type: "e2ee_attach", device, proof: await proof(client, "attach") }),
     async packages(n, notAfter) {
       const out = [];
@@ -326,12 +372,13 @@ export async function acceptOwnDevices(...devs) {
  * An enrolled test device of `member` (its own home, contacts and own baseline, fake driver), with
  * e2ee engines on sessions: open(session, opts) attaches one and records its deliveries in `got`.
  */
-export async function e2eeDevice(t, w, member, { sessions = [member], dir = tmpDir(t), contacts = memoryContacts(undefined, { file: path.join(dir, "contacts.json") }), profile = "relay-test", driver = createFakeDriver({ seed: `${member}-${dir}`, now: w.clock.now }), fault = null } = {}) {
+export async function e2eeDevice(t, w, member, { sessions = [member], dir = tmpDir(t), contacts = memoryContacts(undefined, { file: path.join(dir, "contacts.json") }), profile = "relay-test", driver = createFakeDriver({ seed: `${member}-${dir}`, now: w.clock.now }), fault = null, onWaiting = null, machine = "m", now = w.clock.now } = {}) {
   const { deviceStore } = await import("../lib/mls/device.js");
   const { createE2ee } = await import("../lib/mls/e2ee.js");
   contacts.doc.encryption ??= [{ realm: w.realm, mode: "preferred" }];
-  const store = deviceStore({ home: dir, profile, driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(contacts, dir, profile), fault });
-  await store.enroll(await w.client(member));
+  const store = deviceStore({ home: dir, profile, driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine, now, own: ownFor(contacts, dir, profile), fault, approvalPollMs: 100 });
+  // A12: a member's second device is approved while it waits (autoApprove, or the test's own onWaiting).
+  await store.enroll(await w.client(member), { onWaiting });
   const d = { dir, store, driver, member, profile, id: w.members[member].id, device: store.record().device, contacts, s: {} };
   d.engine = (client, session, opts = {}) => {
     const got = [];

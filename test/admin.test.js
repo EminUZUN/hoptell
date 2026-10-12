@@ -20,6 +20,7 @@ import { loadRealm, lockStateDir } from "../lib/realm.js";
 import { newMemberId, startRelay } from "../lib/relay.js";
 import { RELAY_MIGRATIONS, openRelayStore } from "../lib/relaystore.js";
 import { createDeviceDirectory } from "../lib/mls/relaydir.js";
+import { displayFingerprint, pinIdentity } from "../lib/mls/identity.js";
 import { RelayClient } from "../lib/client.js";
 import { sleep } from "./helpers.js";
 import { DEV, ID, cli, enroll, membersFile, tmp } from "./restore-helpers.js";
@@ -366,6 +367,38 @@ test("devices view and reinstate: suspended devices listed; reinstate is recorde
   assert.match(r.stdout, /in service again/);
   assert.deepEqual(rows(w.db).at(-1), { ...rows(w.db).at(-1), action: "devices.reinstate", target: `alice/${DEV.a1}`, result: "reinstated" });
   assert.equal(Number(w.db.get("SELECT suspended FROM devices").suspended), 0);
+});
+
+test("A12: hoptell members device-approve approves a pending device request over the admin channel, audited; the pending view and cancel too", async (t) => {
+  const w = await adminRelay(t);
+  const directory = createDeviceDirectory({ db: w.db, realm: w.realm });
+  enroll(directory, w.realm, ID.alice, DEV.a1, 1);
+  const key = Buffer.alloc(32, 2);
+  assert.equal(directory.request({ member: ID.alice, device: DEV.a2, key }).state, "pending");
+  const e2ee = { HOPTELL_EXPERIMENTAL_E2EE: "1" };
+  const v = JSON.parse((await w.run(["relay", "admin", "devices", "pending", "--json"])).stdout);
+  assert.deepEqual([v.length, v[0].name, v[0].device, v[0].approved], [1, "alice", DEV.a2, null]);
+  const fp = displayFingerprint({ realm: w.realm, member: ID.alice, device: DEV.a2, key });
+  assert.equal(v[0].fingerprint, fp);
+  // A wrong fingerprint is refused, nothing recorded.
+  const bad = await w.run(["members", "device-approve", "alice", DEV.a2, ..."11111 ".repeat(12).trim().split(" ")], e2ee);
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /fingerprint does not match/);
+  assert.ok(!rows(w.db).some((r) => r.action === "devices.approve"));
+  // The fingerprint as the new device shows it (12 groups, one argument or several).
+  const r = await w.run(["members", "device-approve", "alice", DEV.a2, ...fp.split(" ")], e2ee);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Approved device/);
+  assert.deepEqual(rows(w.db).at(-1), { ...rows(w.db).at(-1), action: "devices.approve", target: `alice/${DEV.a2}`, result: "approved", actor: "socket" });
+  assert.equal(directory.register({ member: ID.alice, device: DEV.a2, key, pin: pinIdentity({ realm: w.realm, member: ID.alice, device: DEV.a2, key }) }).approvedBy, "admin");
+  // Cancel: audited, then the pair is blocked.
+  const k3 = Buffer.alloc(32, 3);
+  const d3 = `${"d".repeat(25)}a`;
+  directory.request({ member: ID.alice, device: d3, key: k3 });
+  const c = await w.run(["relay", "admin", "devices", "pending-cancel", "alice", d3]);
+  assert.match(c.stdout, /Cancelled the pending request/);
+  assert.equal(rows(w.db).at(-1).action, "devices.pending-cancel");
+  assert.throws(() => directory.request({ member: ID.alice, device: d3, key: k3 }), (e) => e.code === "request_blocked");
 });
 
 test("offline: the CLI opens the store under the lock; status works through a restore fence, everything else is refused", async (t) => {

@@ -3,7 +3,8 @@
 // release check over the three. Shared by the scripts next to this file; nothing here is shipped.
 //
 // Every record is canonical JSON (keys sorted at every level, two-space indent, one trailing
-// newline) with no times, hosts or absolute paths, so the same inputs give the same bytes.
+// newline) with no hosts or absolute paths, so the same inputs give the same bytes. The only times
+// are the build attestations' start and end in the build mapping (format 2), which record the builds.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,12 +19,11 @@ export const RECORDS = {
   mapping: path.join(RECORDS_DIR, "build-mapping.json"),
 };
 /**
- * The binding's source tree (groups 1 and 2). It lives in the bake-off today, in the sibling
- * worktree; HOPTELL_BINDING_ROOT or --binding-root names another place (for instance once it
- * moves into this repository). Its files are recorded as "openmls-wasm/<path>", never by where
- * they were found.
+ * The binding's source tree (groups 1 and 2): native/openmls-wasm/ in this repository (amendment
+ * A11; the bake-off keeps its own copy for its gates). HOPTELL_BINDING_ROOT or --binding-root names
+ * another place. Its files are recorded as "openmls-wasm/<path>", never by where they were found.
  */
-export const BINDING_ROOT_DEFAULT = path.join(REPO, "..", "mls-bakeoff", "spike", "mls-bakeoff", "openmls-wasm");
+export const BINDING_ROOT_DEFAULT = path.join(REPO, "native", "openmls-wasm");
 export const BINDING_PREFIX = "openmls-wasm";
 
 // The fixed lists of the design's three groups. "dir/**" is every file under dir (a new file is
@@ -36,10 +36,13 @@ export const GROUPS = {
   //    a path entry in the lock (no source, no checksum): its entry records PATCHES.md's registry
   //    checksum and a digest of its vendored tree instead (vendoredCrates below).
   library: { root: "binding", paths: ["Cargo.lock", "vendor/PATCHES.md", "vendor/**"], crates: ["openmls", "openmls_libcrux_crypto"] },
-  // 2. hoptell's WASM binding: Rust source, Cargo.toml, build script, toolchain pin, and the glue
-  //    and WASM file it produced. (The glue is the bake-off's --target nodejs form until the
-  //    initSync form the package will ship exists.)
-  binding: { root: "binding", paths: ["Cargo.toml", "build.sh", "rust-toolchain.toml", "src/**", "pkg/openmls_wasm.js", "pkg/openmls_wasm_bg.wasm"] },
+  // 2. hoptell's WASM binding: Rust source, Cargo.toml, build script, toolchain pin, and the
+  //    reproducible build (amendment A11): the Dockerfile of the pinned build image, the script that
+  //    builds the image and runs each build, and the deterministic glue wrapper. Each is listed by
+  //    name, so a change to any of them changes this manifest. The glue and WASM the build produced
+  //    are the shipped bundle, lib/mls/binding/, recorded in group 3 (lib/mls/**) and in the build
+  //    mapping.
+  binding: { root: "binding", paths: ["Cargo.toml", "build.sh", "rust-toolchain.toml", "src/**", "Dockerfile", "build-image.sh", "wrap-glue.mjs"] },
   // 3. hoptell's own layer: every file on the encrypted path. The entry points are the design's
   //    list; migrations are in lib/relaystore.js (and the lib/mls/ files it assembles);
   //    lib/decisions.js is where an owner decision reaches the pins and trust (updatePins). 4.3's
@@ -52,7 +55,9 @@ export const GROUPS = {
   //    Then the static import closure of those entry points within the repository: every module
   //    they load, directly or not, runs in the same process and can change what they do, so it is
   //    listed (a file of the closure that is neither listed nor in CLOSURE_EXCLUDED fails the
-  //    generator and test/release-gate.test.js).
+  //    generator and test/release-gate.test.js). A file run by path rather than imported (a
+//    spawn target) is listed by name; every file shipped under bin/ or lib/ must be in this group
+//    or in SHIPPED_EXCLUDED (shippedUnlisted), which catches the ones the closure cannot see.
   hoptell: {
     root: "repo",
     paths: [
@@ -126,6 +131,9 @@ export const GROUPS = {
       "lib/transfersave.js",
       "lib/transferwire.js",
       "lib/wake.js",
+      // not imported but run: lib/files.js starts it as a child process (spawn of process.execPath
+      // with its path) for every guarded read, a transfer's capture included
+      "lib/read-helper.mjs",
       // the Node dependencies loaded on this path
       "package.json",
       "package-lock.json",
@@ -148,6 +156,26 @@ export const DYNAMIC_LOADS = {
     "require(wasmPath)": "HOPTELL_MLS_WASM, an owner-given binding outside the package; always labeled experimental",
   },
 };
+
+/**
+ * Files the package ships under bin/ or lib/ that are deliberately not in group 3, each with the
+ * reason (reviewed like the list). None today. Every other shipped file there must be in group 3
+ * (shippedUnlisted): the import closure cannot see a file run by path (a spawn or fork target, a
+ * worker, a file read and evaluated), so completeness is checked against what is shipped.
+ */
+export const SHIPPED_EXCLUDED = {};
+/** The package directories whose every file runs or can run with hoptell's code. */
+const SHIPPED_DIRS = ["bin", "lib"];
+// What npm never packs from a repository, so a stray Finder or editor file in a checkout is not
+// taken for a shipped file. Mirrors npm-packlist 10.0.4 (npm 11.11.1, lib/index.js `defaults` and
+// the strict rules of processPackage), in gitignore semantics: a rule without a leading "/" matches
+// a file or directory of that name at any depth (and everything under it); a rule with one matches
+// only at the package root. Used on the repository side only; an unpacked package is checked as
+// it is (it holds only packed files). A nested .npmignore or .gitignore that drops further files is
+// not followed: such a file is still required to be listed (fail closed).
+const NPM_IGNORED_ANY_DEPTH = /^(?:\.npmignore|\.gitignore|\.git|\.svn|\.hg|CVS|npm-debug\.log|\.npmrc|\..*\.swp|\.DS_Store|\._.*|.*\.orig)$/;
+const NPM_IGNORED_ROOT_ONLY = [/^\.lock-wscript$/, /^\.wafpickle-[^/]*$/, /^build\/config\.gypi$/, /^archived-packages\//, /^\.git$/, /^node_modules(?:\/|$)/, /^package-lock\.json$/, /^yarn\.lock$/, /^pnpm-lock\.yaml$/, /^bun\.lockb$/];
+const npmIgnored = (rel) => rel.split("/").some((seg) => NPM_IGNORED_ANY_DEPTH.test(seg)) || NPM_IGNORED_ROOT_ONLY.some((re) => re.test(rel));
 
 /** Group-3 files the npm package does not carry (build or install inputs only). */
 const NOT_SHIPPED = new Set(["package-lock.json"]);
@@ -346,11 +374,29 @@ export function hoptellClosure(repo = REPO) {
   return { closure, unlisted: closure.filter((f) => !listedSet.has(f) && !Object.hasOwn(CLOSURE_EXCLUDED, f)), dynamic };
 }
 
+const inGroup3 = (f) => GROUPS.hoptell.paths.some((p) => (p.endsWith("/**") ? f.startsWith(p.slice(0, -2)) : f === p));
+/**
+ * The files under bin/ and lib/ of `root` that are neither in group 3 nor in SHIPPED_EXCLUDED,
+ * sorted. `root` is a repository (what npm would not pack is skipped, npmIgnored) or, with
+ * {packed: true}, an unpacked package (every file counts: it holds only what was packed). A
+ * symlink fails.
+ */
+export function shippedUnlisted(root = REPO, { packed = false } = {}) {
+  const files = [];
+  for (const d of SHIPPED_DIRS) if (fs.existsSync(path.join(root, d))) files.push(...walk(root, d));
+  return files.filter((f) => (packed || !npmIgnored(f)) && !inGroup3(f) && !Object.hasOwn(SHIPPED_EXCLUDED, f));
+}
+const assertShippedListed = (root, label, opts) => {
+  const unlisted = shippedUnlisted(root, opts);
+  if (unlisted.length) throw new Error(`${label} ships files under bin/ or lib/ that are neither in group 3 nor excluded: ${unlisted.join(", ")}`);
+};
+
 /** The reviewed-input manifest of the repository at `repo` and the binding at `bindingRoot`. */
 export function reviewedInputs({ repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT } = {}) {
   const { unlisted, dynamic } = hoptellClosure(repo);
   if (unlisted.length) throw new Error(`group 3's import closure has files neither listed nor excluded: ${unlisted.join(", ")}`);
   if (dynamic.length) throw new Error(`group 3 has non-literal loads the closure cannot follow: ${dynamic.map((d) => `${d.file}: ${d.load}`).join(", ")}`);
+  assertShippedListed(repo, "the repository");
   const lib = GROUPS.library;
   const lockFile = path.join(bindingRoot, "Cargo.lock");
   const lock = hashPaths(bindingRoot, lib.paths, { label: `the binding root ${bindingRoot}` });
@@ -368,29 +414,132 @@ export function reviewedInputs({ repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT
 /**
  * The runtime-artifact manifest of an unpacked package at `pkgDir` (the tarball's package/
  * directory): the group-3 files it carries as shipped, and every file of the binding bundle.
- * A shipped group-3 file missing from the package fails; the bundle may be absent (today).
+ * A shipped group-3 file missing from the package fails, and so does a file the package ships
+ * under bin/ or lib/ that is neither in group 3 nor in SHIPPED_EXCLUDED; the bundle may be absent.
  */
 export function runtimeArtifacts(pkgDir) {
+  assertShippedListed(pkgDir, "the package", { packed: true });
   const shipped = GROUPS.hoptell.paths.filter((p) => !NOT_SHIPPED.has(p));
   const files = hashPaths(pkgDir, shipped, { label: `the package ${pkgDir}` });
   Object.assign(files, hashPaths(pkgDir, [`${BUNDLE_DIR}/**`], { optional: true }));
   return { format: "hoptell-runtime-artifacts-1", files };
 }
 
+export const GLUE_KEY = `${BUNDLE_DIR}/openmls_wasm.js`;
+export const WASM_KEY = `${BUNDLE_DIR}/openmls_wasm_bg.wasm`;
+/** The outputs of one build (build.sh): the wasm-bindgen glue before and after wrap-glue.mjs, and the WASM. */
+const OUTPUT_KEYS = ["glue", "glueUnwrapped", "wasm"];
+const DIGEST = /^[0-9a-f]{64}$/;
+const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
 /**
- * The reviewed build mapping CI records when it builds the binding from the reviewed inputs:
- * the reviewed-input manifest's digest, the toolchain, and the glue and WASM it produced (as
- * placed in the package). The JavaScript files map by identity.
+ * The pins of the build image's Dockerfile: the Rust base and the Node image it copies node from,
+ * each "name:tag@sha256:<digest>" (a FROM line pinned by digest), and the wasm-bindgen-cli version
+ * it installs. Throws when one is missing or not pinned by digest.
  */
-export function buildMapping({ inputsBytes, glue, wasm, rust, wasmBindgen }) {
-  for (const [k, v] of Object.entries({ rust, wasmBindgen })) if (!v || typeof v !== "string") throw new Error(`the build mapping needs the ${k} version`);
-  return {
-    format: "hoptell-build-mapping-1",
+export function dockerfilePins(text) {
+  const froms = [...String(text).matchAll(/^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+\S+)?\s*$/gim)].map((m) => m[1]);
+  const pick = (name) => {
+    const found = froms.filter((f) => f.startsWith(`${name}:`));
+    if (found.length !== 1) throw new Error(`the Dockerfile has ${found.length} FROM ${name}:… lines (expected one)`);
+    if (!/@sha256:[0-9a-f]{64}$/.test(found[0])) throw new Error(`the Dockerfile's ${name} image is not pinned by digest: ${found[0]}`);
+    return found[0];
+  };
+  const bindgen = [...String(text).matchAll(/cargo install wasm-bindgen-cli --version (\S+) --locked/g)].map((m) => m[1]);
+  if (bindgen.length !== 1) throw new Error("the Dockerfile does not install exactly one wasm-bindgen-cli --version <v> --locked");
+  return { base: pick("rust"), node: pick("node"), wasmBindgen: bindgen[0] };
+}
+
+/** The toolchain channel of rust-toolchain.toml. */
+export const toolchainChannel = (text) => /^channel\s*=\s*"([^"]+)"/m.exec(String(text))?.[1] ?? null;
+
+/**
+ * The reviewed build mapping (format 2, amendment A11), written after two clean builds in fresh
+ * containers from one final build image: the reviewed-input manifest's digest; the image (its id as
+ * `docker image inspect` gives it, the Dockerfile's digest, the base and Node images by digest); the
+ * toolchain; the Cargo.lock digest; the outputs (unwrapped glue, wrapped glue, WASM) and where the
+ * package carries them; and both builds' attestations (the image id, the container's start and end
+ * time, each output digest). JavaScript maps by identity.
+ */
+export function buildMapping({ inputsBytes, dockerfile, cargoLock, toolchainToml, imageId, glue, wasm, attestations }) {
+  const pins = dockerfilePins(dockerfile);
+  const rust = toolchainChannel(toolchainToml);
+  if (!rust) throw new Error("rust-toolchain.toml names no channel");
+  if (!IMAGE_ID.test(String(imageId))) throw new Error(`the image id must be sha256:<64 hex>, not ${imageId}`);
+  if (!Array.isArray(attestations) || attestations.length !== 2) throw new Error("the build mapping needs the attestations of two builds");
+  const outputs = { ...attestations[0].outputs };
+  const mapping = {
+    format: "hoptell-build-mapping-2",
     reviewedInputs: sha256(inputsBytes),
-    toolchain: { rust, wasmBindgen },
-    binding: { [`${BUNDLE_DIR}/openmls_wasm.js`]: sha256(glue), [`${BUNDLE_DIR}/openmls_wasm_bg.wasm`]: sha256(wasm) },
+    image: { id: imageId, dockerfile: sha256(dockerfile), base: pins.base, node: pins.node },
+    toolchain: { rust, wasmBindgen: pins.wasmBindgen },
+    cargoLock: sha256(cargoLock),
+    outputs,
+    binding: { [GLUE_KEY]: sha256(glue), [WASM_KEY]: sha256(wasm) },
+    attestations: attestations.map((a) => ({ image: a.image, started: a.started, finished: a.finished, outputs: a.outputs })),
     javascript: "identity",
   };
+  const problems = verifyBuildMapping(mapping, { inputsBytes, dockerfile, cargoLock, toolchainToml, glue, wasm });
+  if (problems.length) throw new Error(`the builds do not make a valid mapping: ${problems.join("; ")}`);
+  return mapping;
+}
+
+/**
+ * The checks of a format-2 build mapping against the bytes it claims: the recorded reviewed-input
+ * manifest (and, through it, the Dockerfile and Cargo.lock digests it lists), the Dockerfile, the
+ * Cargo.lock and rust-toolchain.toml of the binding root, and the glue and WASM a package carries.
+ * Both attestations must name the recorded image id and have the same outputs, equal to the recorded
+ * outputs, whose glue and WASM are the package's. Returns the problems found ([] when it holds).
+ */
+export function verifyBuildMapping(mapping, { inputsBytes, dockerfile, cargoLock, toolchainToml, glue, wasm }) {
+  const problems = [];
+  const m = mapping ?? {};
+  if (m.format !== "hoptell-build-mapping-2") return [`the build mapping has format ${m.format} (expected hoptell-build-mapping-2)`];
+  if (m.javascript !== "identity") problems.push("the build mapping does not map JavaScript by identity");
+  if (inputsBytes && m.reviewedInputs !== sha256(inputsBytes)) problems.push("the build mapping names another reviewed-input manifest");
+  let inputs = null;
+  try {
+    inputs = inputsBytes ? JSON.parse(inputsBytes) : null;
+  } catch {
+    problems.push("the reviewed-input manifest is not JSON");
+  }
+  const img = m.image ?? {};
+  if (!IMAGE_ID.test(String(img.id))) problems.push(`the build mapping's image id is not sha256:<64 hex>: ${img.id}`);
+  if (dockerfile) {
+    if (img.dockerfile !== sha256(dockerfile)) problems.push("the build mapping names another Dockerfile");
+    try {
+      const pins = dockerfilePins(dockerfile);
+      if (img.base !== pins.base) problems.push(`the build mapping names another base image (${img.base}; the Dockerfile pins ${pins.base})`);
+      if (img.node !== pins.node) problems.push(`the build mapping names another Node image (${img.node}; the Dockerfile pins ${pins.node})`);
+      if (m.toolchain?.wasmBindgen !== pins.wasmBindgen) problems.push(`the build mapping names wasm-bindgen ${m.toolchain?.wasmBindgen}, the Dockerfile installs ${pins.wasmBindgen}`);
+    } catch (e) {
+      problems.push(e.message);
+    }
+  }
+  if (toolchainToml && m.toolchain?.rust !== toolchainChannel(toolchainToml)) problems.push(`the build mapping names Rust ${m.toolchain?.rust}, rust-toolchain.toml ${toolchainChannel(toolchainToml)}`);
+  if (cargoLock && m.cargoLock !== sha256(cargoLock)) problems.push("the build mapping names another Cargo.lock");
+  if (inputs) {
+    if (inputs.binding?.files?.[`${BINDING_PREFIX}/Dockerfile`] !== img.dockerfile) problems.push("the reviewed-input manifest records another Dockerfile than the build mapping");
+    if (inputs.library?.files?.[`${BINDING_PREFIX}/Cargo.lock`] !== m.cargoLock) problems.push("the reviewed-input manifest records another Cargo.lock than the build mapping");
+  }
+  const out = m.outputs ?? {};
+  for (const k of OUTPUT_KEYS) if (!DIGEST.test(String(out[k]))) problems.push(`the build mapping's outputs lack the ${k} digest`);
+  if (Object.keys(out).sort().join() !== [...OUTPUT_KEYS].sort().join()) problems.push(`the build mapping's outputs are not exactly ${OUTPUT_KEYS.join(", ")}`);
+  if (m.binding?.[GLUE_KEY] !== out.glue || m.binding?.[WASM_KEY] !== out.wasm) problems.push("the build mapping places other outputs in the package than it records");
+  if (glue && out.glue !== sha256(glue)) problems.push(`the build mapping does not produce the package's ${GLUE_KEY}`);
+  if (wasm && out.wasm !== sha256(wasm)) problems.push(`the build mapping does not produce the package's ${WASM_KEY}`);
+  const att = Array.isArray(m.attestations) ? m.attestations : [];
+  if (att.length !== 2) problems.push(`the build mapping has ${att.length} build attestations (expected two)`);
+  att.forEach((a, i) => {
+    const n = `build attestation ${i + 1}`;
+    if (a?.image !== img.id) problems.push(`${n} names another image (${a?.image}) than the recorded ${img.id}`);
+    if (!ISO.test(String(a?.started)) || !ISO.test(String(a?.finished)) || !(a.started <= a.finished)) problems.push(`${n} has no valid start and end time`);
+    if (canonical(a?.outputs ?? {}) !== canonical(out)) problems.push(`${n}'s outputs differ from the recorded outputs`);
+  });
+  if (att.length === 2 && canonical(att[0]?.outputs ?? {}) !== canonical(att[1]?.outputs ?? {})) problems.push("the two builds' outputs differ (not byte-identical)");
+  if (att.length === 2 && att[0]?.started === att[1]?.started) problems.push("the two build attestations are the same build");
+  return problems;
 }
 
 /**
@@ -416,18 +565,15 @@ const readRecord = (file, what) => {
 };
 
 /**
- * The release check (design 3.5 "Tests"). A package whose openmls.js declares no reviewed digests
- * keeps the experimental label whatever it loads, and passes. Otherwise it claims a reviewed build,
- * and every condition must hold: (1) the runtime-artifact manifest of the unpacked package equals
- * the recorded one, every file; (2) the mapping ties the recorded reviewed-input manifest to the
- * package's glue and WASM, and each shipped JavaScript file is its reviewed input (identity); (3)
- * the reviewed-input manifest regenerated now equals the recorded one; and the declared digests
- * are the mapping's. Returns {reviewedBuild, problems}.
+ * The strict check of the committed records against a package (amendment A11), whatever the
+ * package's REVIEWED_BINDING says: (1) the runtime-artifact manifest of the unpacked package equals
+ * the recorded one, every file, and the bundle is exactly the glue and the WASM; (2) the build
+ * mapping verifies (verifyBuildMapping: both attestations, the image, the Dockerfile, Cargo.lock,
+ * toolchain) against the recorded reviewed inputs and the package's glue and WASM, and each shipped
+ * JavaScript file is its reviewed input (identity); (3) the reviewed-input manifest regenerated now
+ * equals the recorded one. Returns {problems, mapping}.
  */
-export function releaseCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT, records = RECORDS }) {
-  const openmls = path.join(pkgDir, "lib", "mls", "openmls.js");
-  const declared = declaredReviewedDigests(fs.readFileSync(openmls, "utf8"));
-  if (!declared) return { reviewedBuild: false, problems: [] };
+export function recordsCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT, records = RECORDS }) {
   const problems = [];
   const attempt = (fn) => {
     try {
@@ -447,11 +593,9 @@ export function releaseCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_D
   // (1) the package, every file, against the recorded runtime-artifact manifest.
   let runtime = null;
   attempt(() => (runtime = runtimeArtifacts(pkgDir)));
-  const glueKey = `${BUNDLE_DIR}/openmls_wasm.js`;
-  const wasmKey = `${BUNDLE_DIR}/openmls_wasm_bg.wasm`;
   if (runtime) {
-    for (const k of [glueKey, wasmKey]) if (!runtime.files[k]) problems.push(`the package carries no ${k}`);
-    const extra = Object.keys(runtime.files).filter((k) => k.startsWith(`${BUNDLE_DIR}/`) && k !== glueKey && k !== wasmKey);
+    for (const k of [GLUE_KEY, WASM_KEY]) if (!runtime.files[k]) problems.push(`the package carries no ${k}`);
+    const extra = Object.keys(runtime.files).filter((k) => k.startsWith(`${BUNDLE_DIR}/`) && k !== GLUE_KEY && k !== WASM_KEY);
     if (extra.length) problems.push(`the binding bundle has files beyond the glue and the WASM: ${extra.join(", ")}`);
     if (recordedRuntime && canonical(runtime) !== canonical(recordedRuntime)) {
       const keys = new Set([...Object.keys(runtime.files), ...Object.keys(recordedRuntime.files ?? {})]);
@@ -459,24 +603,53 @@ export function releaseCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_D
       problems.push(`the package differs from the recorded runtime-artifact manifest: ${diff.join(", ") || "format"}`);
     }
   }
-  // (2) the mapping: the recorded inputs, the package's glue and WASM, identity for JavaScript.
+  // (2) the mapping against the recorded inputs, the binding root's build inputs and the package's
+  // bundle; JavaScript by identity.
   if (mapping && recordedInputsBytes) {
-    if (mapping.format !== "hoptell-build-mapping-1") problems.push(`the build mapping has format ${mapping.format}`);
-    if (mapping.reviewedInputs !== sha256(recordedInputsBytes)) problems.push("the build mapping names another reviewed-input manifest");
-    if (mapping.javascript !== "identity") problems.push("the build mapping does not map JavaScript by identity");
+    const read = (rel) => {
+      try {
+        return fs.readFileSync(path.join(bindingRoot, rel));
+      } catch (e) {
+        problems.push(`the binding root has no ${rel} (${e.code ?? e.message})`);
+        return null;
+      }
+    };
+    const bundle = (k) => {
+      try {
+        return fs.readFileSync(path.join(pkgDir, k));
+      } catch {
+        return null;
+      }
+    };
+    const glue = bundle(GLUE_KEY);
+    const wasm = bundle(WASM_KEY);
+    problems.push(...verifyBuildMapping(mapping, { inputsBytes: recordedInputsBytes, dockerfile: read("Dockerfile"), cargoLock: read("Cargo.lock"), toolchainToml: read("rust-toolchain.toml"), glue, wasm }));
     if (runtime) {
-      for (const k of [glueKey, wasmKey]) if (!mapping.binding?.[k] || mapping.binding[k] !== runtime.files[k]) problems.push(`the build mapping does not produce the package's ${k}`);
       for (const [k, v] of Object.entries(runtime.files)) {
         if (k.startsWith(`${BUNDLE_DIR}/`)) continue;
         if (recordedInputs?.hoptell?.files?.[k] !== v) problems.push(`${k} in the package is not its reviewed input`);
       }
     }
-    if (declared.glue !== mapping.binding?.[glueKey] || declared.wasm !== mapping.binding?.[wasmKey]) problems.push("REVIEWED_BINDING in the package's lib/mls/openmls.js is not the mapping's glue and WASM");
   }
   // (3) the reviewed inputs, regenerated now, against the recorded ones.
   if (recordedInputsBytes) attempt(() => {
     if (canonical(reviewedInputs({ repo, bindingRoot })) !== recordedInputsBytes.toString("utf8")) problems.push("the reviewed-input manifest regenerated now differs from the recorded one");
   });
+  return { problems, mapping };
+}
+
+/**
+ * The release check (design 3.5 "Tests"). A package whose openmls.js declares no reviewed digests
+ * keeps the experimental label whatever it loads, and passes. Otherwise it claims a reviewed build:
+ * every condition of recordsCheck must hold, and the declared digests must be the mapping's glue
+ * and WASM. Returns {reviewedBuild, problems}.
+ */
+export function releaseCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT, records = RECORDS }) {
+  const openmls = path.join(pkgDir, "lib", "mls", "openmls.js");
+  const declared = declaredReviewedDigests(fs.readFileSync(openmls, "utf8"));
+  if (!declared) return { reviewedBuild: false, problems: [] };
+  const { problems, mapping } = recordsCheck({ pkgDir, repo, bindingRoot, records });
+  if (mapping && (declared.glue !== mapping.binding?.[GLUE_KEY] || declared.wasm !== mapping.binding?.[WASM_KEY])) problems.push("REVIEWED_BINDING in the package's lib/mls/openmls.js is not the mapping's glue and WASM");
   return { reviewedBuild: true, problems };
 }
 
