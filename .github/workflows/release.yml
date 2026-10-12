@@ -39,6 +39,16 @@ jobs:
             [ "$got" = "$v" ] || { echo "::error::$f is $got, tag is $v"; exit 1; }
           done
 
+      # The release gate (design 3.5): the packed package passes while it declares no reviewed
+      # binding (it keeps the experimental label); once it declares one, it must equal the
+      # committed release-gate records, or the release stops here.
+      - name: Release gate (design 3.5)
+        run: |
+          tmp="$(mktemp -d)"
+          npm pack --pack-destination "$tmp"
+          tar xzf "$tmp"/hoptell-*.tgz -C "$tmp"
+          node scripts/release-check.mjs --package "$tmp/package"
+
       # Re-running a failed release skips what is already published (npm version, image
       # version, MCP Registry entry, GitHub Release). If a run fails while the npm version
       # is still staged, approve it on npmjs.com first.

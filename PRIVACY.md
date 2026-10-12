@@ -14,6 +14,11 @@ operator (you or your organization), who controls the relay's configuration and 
 contact the maintainers through GitHub issues or security reports, they receive the
 information you choose to submit.
 
+With hosted MCP endpoints (experimental, `hoptell mcp-hosted --experimental`), a relay operator
+holds some members' sessions for them ("hosted custody"): the host reads and stores those
+members' messages. Messages to a hosted member are never end-to-end encrypted, and its peers see
+it labeled as hosted.
+
 Installation may contact your configured package registry or GitHub's repository and
 container services. Those services handle installation requests under their own policies:
 [npm privacy information](https://docs.npmjs.com/policies/privacy/) and
@@ -42,14 +47,16 @@ process. None of this is sent to the relay.
 - Messages travel to and from the relay over WebSocket. The relay has no built-in TLS, so
   run it on a private network or VPN, or behind a TLS proxy (`wss://`).
 - The relay holds queued messages, deliveries awaiting confirmation and peer metadata in
-  process memory; it does not persist that state to disk. New queue admissions are limited to
-  50 messages per peer and 2,000 overall, with up to 50 additional deliveries awaiting
-  confirmation per peer. Requeueing previously accepted, unconfirmed deliveries can exceed the
+  process memory; it does not persist that state to disk. Experimental encrypted messages are
+  the exception: they are stored as described below. New admissions to this in-memory queue are
+  limited to 50 messages per peer and 2,000 overall, with up to 50 additional deliveries
+  awaiting confirmation per peer. Requeueing previously accepted, unconfirmed deliveries can exceed the
   normal queue limits.
 - The relay's state directory holds a random realm id and, while the relay runs, a lock file
-  with its process id. An optional realm name comes from the relay's configuration and is
-  sent to clients. Apart from the broker and access files described below, it holds no messages,
-  names or tokens.
+  with its process id and the relay owner's admin socket. An optional realm name comes from the
+  relay's configuration and is sent to clients. Apart from the broker and access files, the
+  relay's database (its audit log and the experimental encrypted-message data) and the restore
+  files described below, it holds no messages, names or tokens.
   Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender
@@ -95,9 +102,95 @@ process. None of this is sent to the relay.
 
   The relay removes expired entries in its periodic cleanup (every 15 seconds by default). The
   policy file belongs to the operator.
+- The relay keeps a database, `<state dir>/relay.db` (0600, not encrypted by hoptell). It is
+  created at the relay's first start and opened at every start, and it survives restarts. It
+  always holds a random id of the database and the relay owner's audit log (described under
+  "Relay administration" below).
+- Encrypted direct messages are experimental and disabled by default. Enabling them (the relay's
+  `--experimental-e2ee` option or `HOPTELL_EXPERIMENTAL_E2EE=1`) stores the data below in the
+  same database; disabling the feature does not delete it. While the feature is enabled and the
+  relay is running, periodic cleanup (every 15 seconds by default) removes expired entries and
+  prunes the history described below. Cleanup is paused while the relay is stopped or the
+  feature is disabled, so entries can then stay on disk longer than the times below. The
+  database then also holds:
+  - for each enrolled device: the member id, device id, public signing key, a hash binding that
+    key to the realm, member and device, and the time of enrollment; for a revoked device, the
+    time and the revocation statement, if any. These have no age-based expiry. The statements
+    of its key changes are kept, with their times, for its latest 10 key changes;
+  - while a member's new device waits for approval: the request (the member id, the device id,
+    its public signing key, a hash binding that key to the realm, member and device, whether it
+    used the reserved slot, and its creation and expiry times). If one of the member's devices
+    approves it, the relay also keeps that device's id and public key, the signed approval
+    (including when it was issued and expires), and the expiry separately. If the relay owner
+    approves it, the relay keeps that it was an owner approval and its expiry, without a signed
+    approval or an approving-device key.
+    The request and its approval are removed when the device registers, the request is
+    cancelled, or 24 hours after it was made. A cancelled request leaves a record of the member
+    id, device id and key for 24 hours, so the same request cannot be made again sooner. When one
+    of a member's devices reserves a request slot for a new device (`hoptell device expect`), the
+    relay keeps the member id, the expected device id, a hash binding its key to the realm,
+    member and device, and the reserving device, for up to 24 hours (or until it is replaced or
+    that device registers). The relay owner's approvals and cancellations are also recorded in the audit log;
+  - the KeyPackages devices upload (public keys that let another device start a conversation
+    with them), until they expire (at most 14 days and 5 minutes after upload), and a record of
+    each one taken (the requesting member and device, and the device it belongs to). The
+    record ends when the package is used or expires, or when the reservation is given up (by
+    the requester, after an hour without a group change, or when the device's key changes or it
+    is revoked). It is removed once the package has expired and seven days have passed since the
+    record ended;
+  - for each encrypted conversation: the two member ids, its group ids and the devices in each
+    group; the group changes (MLS commits, with the member and device that made them), which
+    cleanup removes after 30 days and beyond the latest 1,000 of a group; the results of
+    operations, removed after 30 days; and reports from devices that could not accept a change,
+    with a reason of up to 200 characters (the last 1,000 per group);
+  - the messages waiting for each device. The content of an encrypted message is end-to-end
+    encrypted (experimental, unreviewed). The relay records with it the conversation, the
+    sender's member id and device id, the recipient's member id, device id and session name, its
+    size and times. To check access again before delivery, it also records the sender's sign-in
+    at the time the message was accepted: the member id, the issuer and subject of a provider
+    sign-in, and the id of a broker sign-in, when there is one. A waiting message is removed when
+    the recipient's device acknowledges it; otherwise it expires seven days (plus five minutes
+    for clock differences) after it was accepted and is no longer delivered. Group invitations
+    (MLS Welcomes) and group changes waiting for a device expire 30 days after they were queued.
+    Cleanup removes expired messages.
+  - larger file transfers (experimental): each file's encrypted chunks (end-to-end encrypted,
+    experimental, unreviewed; the relay does not have the key), with the uploading member and
+    device, the transfer's id, size, chunk count, digests and times, and for each message that
+    announced it the recipient member, its allowed devices and how the sender was signed in (its
+    member id, its identity-provider issuer and subject, and its broker sign-in, if any), so each
+    download is checked against that sign-in as it is now. A transfer is kept until 7 days
+    after its upload was sealed (24 hours if it was never finished), or until the uploader
+    withdraws it; cleanup then deletes its chunks in batches. A record of its id, uploader and
+    final state (a tombstone) stays 30 days more, so retries are answered consistently.
+- Relay administration (`hoptell relay admin`, run by the relay owner on the relay host):
+  - The audit log, in the relay's database, records each change the owner makes (member
+    changes, device reinstatements, backups, restores, reloads, checkpoints), each read of a
+    member's grants entries, and security events the relay acts on. A row holds the time, who
+    acted (the admin socket, the offline command line or the relay), a fixed action name, a
+    target (a member name, a member name with a device id, or a restore id), the outcome, and
+    fixed codes and counts. It holds no message text, tokens, token digests, key material or
+    grants contents. Each row carries a hash of the one before it. The relay deletes rows older
+    than 365 days, and the oldest rows beyond 100,000, in its maintenance (every five minutes
+    while it runs); the last deleted row's number and hash are kept.
+  - `members` commands and the admin views reach the running relay through a socket in
+    `<state dir>/admin/` (0700), which only the relay's OS user can open. The views show the
+    metadata above; never tokens or token digests.
+  - `backup <dir>` writes a new folder (0700/0600, not encrypted by hoptell) with a copy of the
+    relay's database (the audit log and any retained encrypted-message data), the access
+    files, and copies of the members, policy and identity-provider files with their paths. The
+    members file copy holds each member's token as the file stores it: its SHA-256, or the token
+    itself for a member added to the file by hand with a plain token. The broker's files are not
+    copied. Backups are kept until the owner deletes them.
+  - `restore` keeps, while it runs, `<state dir>/restore/intent.json` (the backup's path, ids
+    and the step reached), and keeps the replaced database and access files in
+    `<state dir>/restore/<id>/before/` until the owner runs `restore --discard-evidence <id>`.
+    When the access state was lost, `access/restore.json` lists the member ids whose messages
+    are held, with their grants revision, until each publishes its grants again.
+    `access/manifest.json` lists which access files have been written.
 - The relay stops retaining a message when the receiving client confirms receipt. This
   confirms local storage or output, not that an agent read or acted on it. Restarting the
-  relay discards its message and peer state. On relays supporting expiry, the sender can set a
+  relay discards its message and peer state, except the experimental encrypted messages
+  described above. On relays supporting expiry, the sender can set a
   time-to-live (TTL). Expired queued messages are removed before forwarding or during periodic
   cleanup (every 15 seconds by default). Messages without a TTL have no scheduled expiry. This does not
   remove copies already delivered to a local inbox. Periodic cleanup removes a peer only when
@@ -162,6 +255,23 @@ process. None of this is sent to the relay.
   or for seven days. Desktop notifications show the sender label and session name, never message
   text. All of these are under `$HOPTELL_HOME` when configured, private (0700/0600), and not
   encrypted by hoptell.
+- Encrypted messages (experimental): `contacts.json` also keeps the device pins of your contacts
+  and this home's own devices per realm (member and device ids, public signing keys, pin hashes,
+  how and when each was accepted). `~/.hoptell/mls/<profile>/` holds this device's record (its
+  public identity and, encrypted with a key kept in the credential store, the MLS state, the
+  messages waiting to be sent and the records of the conversations), retired devices' records,
+  decrypted messages waiting for a key decision (`held/`, not encrypted by hoptell, until you
+  decide or they expire), and what this device last saw of your own devices
+  at the relay (`own-seen.json`: device ids and fingerprints, for `hoptell doctor`). All under
+  `$HOPTELL_HOME` when configured, private (0700/0600).
+- Larger file transfers (experimental). Sending: `~/.hoptell/outgoing/<id>/` holds the read copy
+  of the file until it is encrypted, then its ciphertext and its key, until the announcing message
+  is accepted (at most 24 hours). Receiving: `~/.hoptell/incoming/` holds a ledger of transfers
+  (sender, size, display label, local id, state; removed entries are dropped 7 days after
+  removal) and, per transfer, the key and the decrypted file until you save it, cancel it, or 7
+  days after it was fetched; `~/.hoptell/saves/` holds a save's journal until the save is
+  complete. All under `$HOPTELL_HOME` when configured, private (0700/0600), and not encrypted by
+  hoptell; a saved file is wherever you put it.
 - `hoptell login` signs in with the identity provider named by the relay; the provider handles
   your account and password (in your browser) under its own policies. The stored credential is
   a refresh token (or, for a service account, its client secret) with the relay URL, realm id,
@@ -287,7 +397,9 @@ the policies for any other providers or services you configure.
 ## Deleting data
 
 - Relay: stop or restart it to discard in-memory messages and peer state. Remove retained logs
-  separately according to your setup.
+  separately according to your setup. The relay's database, including its audit log, stays in
+  the state directory until you delete it; delete backup folders yourself, and restore evidence
+  with `hoptell relay admin restore --discard-evidence <id>`.
 - Each machine: stop the relevant hoptell processes, then delete `~/.hoptell` or the
   configured `$HOPTELL_HOME` directory to remove local inbox and session files. Remove stored
   tokens from the settings sources you used.

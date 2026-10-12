@@ -1,0 +1,231 @@
+// The experimental OpenMLS driver (lib/mls/openmls.js) over the bake-off's WASM binding, when it is
+// built: HOPTELL_MLS_WASM, or the spike's build in a sibling worktree. Skipped otherwise; the binding
+// is never a dependency of the package.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { ROOT } from "../lib/config.js";
+import { DriverError } from "../lib/mls/driver.js";
+import { createOpenMlsDriver, heldKeyPackageRefs, openMlsDriverOver } from "../lib/mls/openmls.js";
+import { MAX_PAST_EPOCHS } from "../lib/mls/policy.js";
+import { deviceStore } from "../lib/mls/device.js";
+import { credentialIdentity, newDeviceId, verifyWithLabel } from "../lib/mls/identity.js";
+import { deviceRelay, fakeDevice, memoryContacts, ownFor, tmpDir } from "./mls-helpers.js";
+
+const WASM = process.env.HOPTELL_MLS_WASM || path.join(ROOT, "..", "mls-bakeoff", "spike", "mls-bakeoff", "openmls-wasm", "pkg", "openmls_wasm.js");
+const skip = fs.existsSync(WASM) ? false : `the OpenMLS WASM binding is not built (${WASM})`;
+const T = { realm: "0".repeat(32), member: `m_${"a".repeat(26)}`, device: newDeviceId() };
+
+test("OpenMLS: hoptell's credential identity, KeyPackages decoded and validated, state export and import", { skip }, async () => {
+  const d = createOpenMlsDriver(WASM);
+  const dev = await d.createDevice(credentialIdentity(T));
+  const kp = await dev.keyPackage({ lifetimeSeconds: 14 * 86400 });
+  const info = d.inspectKeyPackage(kp);
+  assert.equal(Buffer.from(info.identity).toString(), credentialIdentity(T).toString());
+  assert.deepEqual(Buffer.from(info.signatureKey), Buffer.from(dev.signaturePublicKey()));
+  assert.equal(info.signatureKey.length, 32);
+  const tampered = Buffer.from(kp);
+  tampered[tampered.length - 5] ^= 1;
+  assert.throws(() => d.inspectKeyPackage(tampered), (e) => e instanceof DriverError);
+  const again = await d.importDevice(await dev.exportState());
+  assert.deepEqual(Buffer.from(again.signaturePublicKey()), Buffer.from(dev.signaturePublicKey()));
+  // SignWithLabel (A3): with the capability, the binding's signature verifies under hoptell's own
+  // encoding (lib/mls/identity.js); without it, sign() is refused as unsupported.
+  if (d.signing) assert.equal(verifyWithLabel(dev.signaturePublicKey(), "hoptell-rotate-v1", Buffer.from("x"), await dev.sign("hoptell-rotate-v1", Buffer.from("x"))), true);
+  else await assert.rejects(dev.sign("hoptell-rotate-v1", Buffer.from("x")), (e) => e.code === "unsupported", "a known binding gap");
+  await assert.rejects(dev.stageWelcome(kp), (e) => e instanceof DriverError, "not a Welcome");
+});
+
+test("OpenMLS: the library refuses an expired KeyPackage (expiry at the device's end)", { skip }, async () => {
+  const d = createOpenMlsDriver(WASM);
+  const dev = await d.createDevice(credentialIdentity(T));
+  // Lifetimes are whole seconds: a 3 s package is still valid when inspected at once, also on a
+  // loaded machine, and expired after 4.2 s.
+  const kp = await dev.keyPackage({ lifetimeSeconds: 3 });
+  d.inspectKeyPackage(kp);
+  await new Promise((r) => setTimeout(r, 4200));
+  assert.throws(() => d.inspectKeyPackage(kp), /Expired/);
+});
+
+test("OpenMLS: a device enrolls end to end through the relay", { skip }, async (t) => {
+  const w = await deviceRelay(t);
+  const home = tmpDir(t);
+  const store = deviceStore({ home, profile: "relay-test", driver: createOpenMlsDriver(WASM), store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", own: ownFor(memoryContacts(), home, "relay-test") });
+  const client = await w.client("alice");
+  const r = await store.enroll(client);
+  assert.equal(r.published, 20);
+  const k = await (await w.client("bob")).rpc({ type: "device_list", member: w.members.alice.id });
+  assert.equal(k.devices[0].device, r.device);
+  const fresh = deviceStore({ home, profile: "relay-test", driver: createOpenMlsDriver(WASM), store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m" });
+  assert.equal(fresh.record().key, store.record().key);
+});
+
+test("OpenMLS: a Welcome is bound to the KeyPackage it names (suite 77); a refused one keeps both packages", { skip }, async (t) => {
+  const wasm = createRequire(import.meta.url)(WASM);
+  const driver = createOpenMlsDriver(WASM, { testOnlySuite: 77 });
+  const w = await deviceRelay(t);
+  const dir = tmpDir(t);
+  const store = deviceStore({ home: dir, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(memoryContacts(), dir, "relay-test") });
+  await store.enroll(await w.client("bob"));
+  const rec = store.record();
+  const alice = await fakeDevice(w.realm, w.members.alice.id);
+  await alice.registerOn(await w.client("alice")); // A9: with a register proof
+  const take = (request) => w.directory.take({ requester: { member: w.members.alice.id, device: alice.device }, request, target: { member: rec.member, device: rec.device } });
+  const x = take("openmls-bind-x");
+  const y = take("openmls-bind-y");
+  const committer = new wasm.Device(77, credentialIdentity({ realm: w.realm, member: w.members.alice.id, device: newDeviceId() }));
+  t.after(() => committer.free());
+  const welcomeFor = (kp, gid) => {
+    committer.create_group(Buffer.from(gid));
+    const out = committer.commit(Buffer.from(gid), [new wasm.Bytes(kp)], new Uint32Array(), false);
+    committer.merge_pending(Buffer.from(gid));
+    return out;
+  };
+  const wy = welcomeFor(y.kp, "group-y");
+  await assert.rejects(store.acceptWelcome(x.ref, wy.welcome, { ratchetTree: wy.ratchet_tree }), (e) => e.code === "key_package_mismatch");
+  assert.equal(store.record().kps[x.ref].state, "open");
+  assert.equal(store.record().kps[y.ref].state, "open");
+  // The ledger holds the library's own KeyPackageRef of each package.
+  assert.equal(store.record().kps[x.ref].libRef, Buffer.from(driver.inspectKeyPackage(x.kp).ref).toString("hex"));
+  // Both private keys are still there: each Welcome joins under its own package.
+  const wx = welcomeFor(x.kp, "group-x");
+  assert.deepEqual(await store.acceptWelcome(x.ref, wx.welcome, { ratchetTree: wx.ratchet_tree }), { group: Buffer.from("group-x").toString("hex") });
+  assert.deepEqual(await store.acceptWelcome(y.ref, wy.welcome, { ratchetTree: wy.ratchet_tree }), { group: Buffer.from("group-y").toString("hex") });
+  assert.equal(store.record().kps[x.ref].state, "used");
+  assert.equal(store.record().kps[y.ref].state, "used");
+});
+
+test("OpenMLS: the KeyPackageRef hoptell computes is the one the library stores (suites 1 and 77)", { skip }, async () => {
+  const wasm = createRequire(import.meta.url)(WASM);
+  for (const suite of [1, 77]) {
+    const driver = createOpenMlsDriver(WASM, { testOnlySuite: suite });
+    const dev = await driver.createDevice(credentialIdentity(T));
+    const kp = await dev.keyPackage({ lifetimeSeconds: 14 * 86400 });
+    const committer = new wasm.Device(suite, Buffer.from("committer"));
+    committer.create_group(Buffer.from("g"));
+    const out = committer.commit(Buffer.from("g"), [new wasm.Bytes(kp)], new Uint32Array(), false);
+    committer.free();
+    const staged = await dev.stageWelcome(out.welcome, out.ratchet_tree);
+    assert.deepEqual(Buffer.from(staged.keyPackageRef), Buffer.from(driver.inspectKeyPackage(kp).ref));
+    await staged.discard();
+  }
+});
+
+test("MII9 OpenMLS: a retained past epoch's sender is the device of that epoch, after its removal, a reuse of its leaf, and an export and import", { skip }, async () => {
+  const d = createOpenMlsDriver(WASM);
+  const realm = "a".repeat(32);
+  const [A, B, C] = ["a", "b", "c"].map((x) => `m_${x.repeat(26)}`);
+  const [aid, bid, cid] = [A, B, C].map((member) => credentialIdentity({ realm, member, device: newDeviceId() }));
+  const [a, b, c] = await Promise.all([aid, bid, cid].map((id) => d.createDevice(id)));
+  const gid = crypto.randomBytes(16);
+  const ga = await a.createGroup(gid);
+  const add = await ga.commit({ add: [await b.keyPackage({ lifetimeSeconds: 86400 })] });
+  await ga.mergePending();
+  await (await b.stageWelcome(add.welcome, add.ratchetTree)).finish();
+  const delayed = await b.group(gid).encrypt(Buffer.from("valid before removal"));
+  const index = ga.members().find((m) => Buffer.from(m.identity).equals(bid)).index;
+  await ga.commit({ remove: [index] });
+  await ga.mergePending();
+  // Another device takes the freed leaf.
+  const add2 = await ga.commit({ add: [await c.keyPackage({ lifetimeSeconds: 86400 })] });
+  await ga.mergePending();
+  assert.ok(Buffer.from(ga.members().find((m) => m.index === index)?.identity ?? []).equals(cid), "the leaf is reused");
+  await (await c.stageWelcome(add2.welcome, add2.ratchetTree)).finish();
+  const again = await d.importDevice(await a.exportState(), { identity: aid });
+  const p = await again.group(gid).process(delayed);
+  assert.equal(Buffer.from(p.plaintext).toString(), "valid before removal");
+  assert.equal(p.epoch, 1);
+  assert.ok(Buffer.from(p.sender.identity).equals(bid), "the sender of epoch 1, not the leaf's current device");
+  assert.ok(Buffer.from(p.sender.signatureKey).equals(Buffer.from(b.signaturePublicKey())));
+  // A current-epoch message resolves in the current roster.
+  const now = await again.group(gid).process(await c.group(gid).encrypt(Buffer.from("now")));
+  assert.ok(Buffer.from(now.sender.identity).equals(cid));
+});
+
+test("OpenMLS retention: at most 16 past epochs inside the 7-day window; a message 17 epochs back is refused as too old, state unchanged", { skip }, async () => {
+  let clock = Date.UTC(2026, 0, 1);
+  const now = () => clock;
+  const d = createOpenMlsDriver(WASM);
+  const realm = "c".repeat(32);
+  const [aid, bid] = ["a", "b"].map((x) => credentialIdentity({ realm, member: `m_${x.repeat(26)}`, device: newDeviceId() }));
+  const a = await d.createDevice(aid, { now });
+  const b = await d.createDevice(bid, { now });
+  const gid = crypto.randomBytes(16);
+  const ga = await a.createGroup(gid);
+  const add = await ga.commit({ add: [await b.keyPackage({ lifetimeSeconds: 86400 })] });
+  await ga.mergePending();
+  await (await b.stageWelcome(add.welcome, add.ratchetTree)).finish();
+  const gb = b.group(gid);
+  // 20 epoch changes a minute apart (all within 7 days); alice writes one message per epoch.
+  const sent = new Map();
+  for (let i = 0; i < 20; i++) {
+    sent.set(ga.epoch(), await ga.encrypt(Buffer.from(`e${ga.epoch()}`)));
+    const c = await ga.commit({ update: true });
+    await ga.mergePending();
+    const p = await gb.process(c.commit);
+    await p.merge();
+    clock += 60_000;
+  }
+  const r = gb.retention();
+  assert.equal(MAX_PAST_EPOCHS, 16);
+  assert.equal(r.limit, 16);
+  assert.ok(r.pastEpochsKept <= 16, JSON.stringify(r));
+  const e = gb.epoch();
+  const before = Buffer.from(await b.exportState());
+  await assert.rejects(gb.process(sent.get(e - 17)), (err) => err instanceof DriverError && err.attribution === "library" && /TooDistantInThePast/.test(err.message));
+  assert.ok(Buffer.from(await b.exportState()).equals(before), "the refusal changed nothing");
+  assert.equal(Buffer.from((await gb.process(sent.get(e - 16))).plaintext).toString(), `e${e - 16}`, "16 back is still readable");
+});
+
+test("OpenMLS: the binding's exported state is read in formats 1 and 2; another version or a malformed state is refused", () => {
+  const u32 = (n) => Buffer.from([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+  const bytes = (b) => Buffer.concat([u32(b.length), Buffer.from(b)]);
+  const ref = [1, 2, 3, 250];
+  const head = (format) => Buffer.concat([Buffer.from([format]), u32(77), bytes("alice"), bytes([9, 9]), u32(1), bytes([7, 7])]);
+  const entries = Buffer.concat([u32(2), bytes(`KeyPackage{"value":{"vec":[${ref}]}}`), bytes("{}"), bytes("Other"), bytes("x")]);
+  const limits = Buffer.concat([u32(1), bytes([7, 7]), u32(16)]);
+  const v1 = Buffer.concat([head(1), entries]);
+  const v2 = Buffer.concat([head(2), entries, limits]);
+  const want = Buffer.from(ref).toString("hex");
+  assert.deepEqual([...heldKeyPackageRefs(v1)], [want]);
+  assert.deepEqual([...heldKeyPackageRefs(v2)], [want]);
+  const refused = (state, why) => assert.throws(() => heldKeyPackageRefs(state), (e) => e instanceof DriverError && e.attribution === "adapter" && why.test(e.message));
+  refused(Buffer.concat([head(3), entries, limits]), /unknown format 3/);
+  refused(Buffer.alloc(0), /unknown format/);
+  refused(Buffer.concat([head(1), entries, limits]), /trailing bytes/); // format 1 has no limits section
+  refused(Buffer.concat([head(2), entries]), /truncated/); // format 2 without its limits section
+  refused(v2.subarray(0, v2.length - 2), /truncated/);
+});
+
+// ---- A5 (N8): the post-quantum suite is required ------------------------------------------------
+
+/** A stand-in binding that advertises `suites` (the factory reads only supported_suites first). */
+const stubBinding = (suites) => ({ supported_suites: () => suites, Device: class {} });
+
+test("A5: a binding advertising only the classical suite 0x0001 is refused; 0x004D is the only default", () => {
+  assert.throws(() => openMlsDriverOver(stubBinding([1])), /lacks the required post-quantum suite/);
+  assert.throws(() => openMlsDriverOver(stubBinding([])), /lacks the required post-quantum suite/);
+  assert.equal(openMlsDriverOver(stubBinding([1, 0x004d])).suite, 0x004d);
+  // The classical suite only through the explicit test-only option, never by default.
+  assert.equal(openMlsDriverOver(stubBinding([1]), { testOnlySuite: 1 }).suite, 1);
+  assert.throws(() => openMlsDriverOver(stubBinding([0x004d]), { testOnlySuite: 1 }), /does not support suite 1/);
+});
+
+test("A5: a device stored under the classical suite refuses to load under the default driver (re-enrollment named); the test option still works", { skip }, async (t) => {
+  const w = await deviceRelay(t);
+  const home = tmpDir(t);
+  const contacts = memoryContacts();
+  const open = (driver) => deviceStore({ home, profile: "relay-test", driver, store: "file", passphrase: "correct horse battery staple", keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(contacts, home, "relay-test") });
+  // A control row: the classical suite, explicitly, for tests.
+  const classical = open(createOpenMlsDriver(WASM, { testOnlySuite: 1 }));
+  await classical.enroll(await w.client("alice"));
+  assert.equal(classical.record().driver.suite, 1);
+  assert.equal(await classical.transact(async (ctx) => ctx.rec.driver.suite), 1, "the test option still loads its own device");
+  const strict = open(createOpenMlsDriver(WASM));
+  assert.equal(strict.driver?.suite ?? createOpenMlsDriver(WASM).suite, 0x004d);
+  await assert.rejects(strict.transact(async () => "loaded"), (e) => e.code === "suite_mismatch" && /0x0001/.test(e.message) && /0x004d/i.test(e.message) && /re-enroll/.test(e.message));
+  await assert.rejects(strict.replenish(await w.client("alice"), { force: 1 }), (e) => e.code === "suite_mismatch");
+});

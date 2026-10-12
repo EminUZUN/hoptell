@@ -55,6 +55,127 @@
           "type": "null"
         }
       }
+    },
+    "pins": {
+      "type": "array",
+      "description": "EXPERIMENTAL (design 3.2): the device pin identities the owner verified, by (realm, member). hoptell contacts verify writes them.",
+      "items": {
+        "$ref": "#/$defs/pin"
+      }
+    },
+    "own": {
+      "type": "object",
+      "description": "EXPERIMENTAL (design 3.2 v2.2): this home's own devices per realm, never taken from the relay's list. Invariants checked by hoptell on every read: exactly one enrolled device per realm, device ids unique across devices and unconfirmed, each pin matching its key, and the own member never in pins.",
+      "propertyNames": {
+        "pattern": "^[0-9a-f]{32}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/ownEntry"
+      }
+    },
+    "requireVerified": {
+      "type": "array",
+      "description": "EXPERIMENTAL (design 3.2): realms where unverified contacts (no pin, or relay-tofu only) hold messages.",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{32}$"
+      }
+    },
+    "encryption": {
+      "type": "array",
+      "maxItems": 1000,
+      "description": "EXPERIMENTAL (design 3.3): the require-encryption policy per contact (realm and member) and per realm (no member: the realm's default). required: never send or accept plaintext with that contact; preferred: encrypted when both sides have devices; off: plaintext. Unset means off.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "realm",
+          "mode"
+        ],
+        "properties": {
+          "realm": {
+            "$ref": "#/$defs/realm"
+          },
+          "member": {
+            "type": "string",
+            "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+          },
+          "mode": {
+            "enum": [
+              "required",
+              "preferred",
+              "off"
+            ]
+          },
+          "custody": {
+            "const": "allow-hosted",
+            "description": "EXPERIMENTAL (design 4.5): for one contact (with a member) whose mode is preferred and who is hosted: a separate direct plaintext send is allowed (its host can read it). Never weakens required; never applies inside a fan-out."
+          }
+        }
+      }
+    },
+    "transfers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "EXPERIMENTAL (design 6): larger file transfers. A contact sends this home transfers only when its entry allows them (the default is not allowed); every staged transfer counts against the home's caps.",
+      "properties": {
+        "contacts": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "realm",
+              "member",
+              "allowed"
+            ],
+            "properties": {
+              "realm": {
+                "$ref": "#/$defs/realm"
+              },
+              "member": {
+                "type": "string",
+                "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+              },
+              "allowed": {
+                "type": "boolean"
+              },
+              "maxBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 209715200,
+                "description": "The largest transfer accepted from this contact (bytes of plaintext, from the authenticated header). Default: 200 MiB."
+              }
+            }
+          }
+        },
+        "stagedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes staged (and reserved for downloads) in all. Default: 2 GiB."
+        },
+        "stagedFiles": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Staged files (and reserved downloads) in all. Default: 20."
+        },
+        "concurrent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16,
+          "description": "Downloads at once. Default: 2."
+        }
+      }
+    },
+    "hosted": {
+      "enum": [
+        "ask",
+        "block",
+        "allow"
+      ],
+      "description": "EXPERIMENTAL (design 4.5): senders in hosted custody (their host can read their messages). ask (default): only with a grant for that member; block: never; allow: as any member."
     }
   },
   "$defs": {
@@ -198,6 +319,308 @@
           }
         }
       ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "realm",
+        "member",
+        "devices",
+        "verifiedAt",
+        "how"
+      ],
+      "properties": {
+        "realm": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "member": {
+          "type": "string",
+          "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$"
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "pin",
+              "key",
+              "seq"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "pin": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The pin identity: SHA-256 of the canonical (domain, realm, member, device, key)."
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The device's signature public key."
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The accepted rotation sequence."
+              },
+              "retired": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "description": "Keys this device rotated away from (never accepted again)."
+              }
+            }
+          }
+        },
+        "verifiedAt": {
+          "type": "string"
+        },
+        "how": {
+          "enum": [
+            "in-person",
+            "out-of-band",
+            "relay-tofu"
+          ],
+          "description": "relay-tofu records first use only and never satisfies requireVerified."
+        },
+        "requireVerified": {
+          "type": "boolean"
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object"
+          },
+          "description": "The owner's key decisions, naming old and new fingerprints."
+        },
+        "revokedOverflow": {
+          "const": true,
+          "description": "More unresolved revocations than can be kept: everything with this contact stops until they are resolved."
+        },
+        "revoked": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "by"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "by": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$",
+                "description": "The pinned device that signed the revocation."
+              },
+              "at": {
+                "type": "integer"
+              }
+            }
+          },
+          "description": "Trusted revocations observed (signed by another pinned device): sending to these devices holds until the device's accepted removal, whatever the relay serves later."
+        }
+      }
+    },
+    "ownEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member",
+        "profile",
+        "devices",
+        "unconfirmed"
+      ],
+      "properties": {
+        "member": {
+          "type": "string",
+          "pattern": "^(m_[a-z2-7]{26}|name:[A-Za-z0-9][A-Za-z0-9_-]{0,63})$",
+          "description": "This home's own member id in the realm."
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "The relay profile whose local device is the enrolled one (one profile per realm in a home)."
+        },
+        "devices": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "key",
+              "pin",
+              "seq",
+              "retired",
+              "how",
+              "at"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The device's signature public key."
+              },
+              "pin": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The pin identity, recomputed from (realm, member, device, key) on every read; a mismatch refuses the document."
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "retired": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "how": {
+                "enum": [
+                  "enrolled",
+                  "accepted"
+                ],
+                "description": "enrolled: this home's local device of the profile (exactly one per realm); accepted: by hoptell device accept on an own device."
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "by": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$",
+                "description": "The own device that accepted it (accepted devices only)."
+              },
+              "awaiting": {
+                "const": true,
+                "description": "EXPERIMENTAL (A12): accepted from its pending request; its registration at the relay is not confirmed yet. Left out of safety numbers until the relay lists it; cleared then."
+              }
+            }
+          }
+        },
+        "unconfirmed": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "device",
+              "key",
+              "pin",
+              "seq",
+              "retired",
+              "seen"
+            ],
+            "properties": {
+              "device": {
+                "type": "string",
+                "pattern": "^[a-z2-7]{25}[aeimquy4]$"
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The device's signature public key."
+              },
+              "pin": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9+/]{43}=$",
+                "description": "The pin identity, recomputed from (realm, member, device, key) on every read; a mismatch refuses the document."
+              },
+              "seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "retired": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "seen": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "description": "Own devices an older hoptell pinned on the relay's word (moved here by the upgrade): never trusted; conversations holding one stop until the owner accepts or revokes it."
+        },
+        "upgradedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retiredAt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Set by hoptell device retire of this entry's profile: the baseline is kept, and a later enrollment in the realm needs hoptell device enroll --new-baseline."
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object"
+          },
+          "description": "Earlier baselines of the realm replaced by --new-baseline, kept for review (never authority)."
+        },
+        "approvals": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["device", "key", "approval", "at"],
+            "properties": {
+              "device": { "type": "string", "pattern": "^[a-z2-7]{25}[aeimquy4]$" },
+              "key": { "type": "string", "description": "The new device's signature key (32 bytes, base64)." },
+              "approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["realm", "member", "approver", "device", "key", "issued_at", "expiry", "sig"],
+                "properties": {
+                  "realm": { "type": "string" },
+                  "member": { "type": "string" },
+                  "approver": { "type": "string" },
+                  "device": { "type": "string" },
+                  "key": { "type": "string" },
+                  "issued_at": { "type": "integer", "minimum": 0 },
+                  "expiry": { "type": "integer", "minimum": 0 },
+                  "sig": { "type": "string" }
+                }
+              },
+              "at": { "type": "integer", "minimum": 0 },
+              "requested": { "type": "integer", "minimum": 0, "description": "The relay's creation time (ms) of the pending request this approval was signed for, as device_pending reported it. An entry is signed again (after its approver rotated) only for a live request with exactly this value." }
+            }
+          },
+          "description": "EXPERIMENTAL (amendments 3.5 part 3, A12): the approval outbox. Approvals an own device signed for a new own device, written with its pin in one write and sent to the relay at every attach until the relay confirms them or reports the request consumed, expired or gone."
+        }
+      }
     }
   }
 }

@@ -2,6 +2,118 @@
 
 ## Unreleased
 
+- Encrypted messages (experimental): when a member has a registered device that remains unrevoked,
+  a new device needs approval from an active device of the member or from the relay owner. Run
+  `hoptell device enroll` on the new device. On an existing device, run `hoptell device accept
+  <device>`, compare the fingerprint, then run the `--set <code>` command it prints to accept the
+  device and send a signed approval. If the new device has stopped waiting, run `hoptell device
+  enroll` again to finish registration. An approval that could not be sent is kept and retried
+  when the approving device next connects. While any registered device remains unrevoked, a member
+  token alone cannot register another one, so a token holder cannot use a new device to revoke the
+  member's existing devices. New commands: `hoptell device pending [--cancel <device>]` and
+  `hoptell device expect <device> <pin identity>` (`hoptell device status` prints the pin
+  identity). Relay owners can list requests with `hoptell relay admin devices pending [--member
+  <name>]`, approve one with `hoptell relay admin devices approve <member> <device> <fingerprint>`
+  or `hoptell members device-approve <member> <device> <fingerprint>`, and cancel one with
+  `hoptell relay admin devices pending-cancel <member> <device>`. If a member has no registered
+  device that remains unrevoked, a new device can register without approval. Upgrading a relay:
+  devices registered before the upgrade remain active; the relay cannot tell which were added
+  using only a member token. After upgrading, each member's owner should review those devices with
+  `hoptell device list` and revoke any they do not recognize. `hoptell doctor` also warns about
+  devices you have not accepted that hoptell last saw at the relay, but it is not a full device
+  list. Upgrade clients too: an older hoptell cannot attach as a device or enroll a new device on
+  the upgraded relay.
+- Encrypted messages (experimental): a connection acts for a device only after it signs a fresh
+  relay challenge with the device key; a member token alone no longer receives a device's
+  messages or touches its KeyPackages. An older hoptell needs an update to attach to such a
+  relay. Device commands such as `hoptell device replenish` receive none of the device's messages.
+  An interrupted key rotation is retried at the next start.
+- With an MLS binding that can prune, the private keys of expired, unused KeyPackages are deleted
+  after a one-day grace period, within six hours while the engine runs; `hoptell doctor` says when
+  the binding cannot.
+- Experimental encrypted messages: your own devices are trusted only when you accept them.
+  Another device of yours is trusted after `hoptell device accept <device>` on a device you
+  already accepted (and the same on it), never because the relay lists it. An existing home is
+  upgraded once: its device becomes the baseline, and other devices of yours that an earlier
+  version pinned from the relay's list become unconfirmed; conversations holding one stop until
+  you accept or revoke it. A home holds one device per relay realm: a second profile in the same
+  realm is refused, and `hoptell device retire` gives one up. Retiring the profile that holds the
+  realm's own device keeps its record, marked retired, and any later enrollment in that realm
+  needs `hoptell device enroll --new-baseline`. That command starts again with a new device id
+  on your explicit confirmation (after such a retire, when every device of yours is lost, or when
+  this device's record cannot be read), and keeps the replaced record for review.
+  Enrolling needs managed contacts (`hoptell contacts init`).
+- `hoptell contacts verify` shows your devices and the contact's, with fingerprints and states;
+  the safety number's own half comes from the devices you accepted. It refuses while the relay
+  lists a device of yours you have not accepted, and it does not pin while a pinned device of the
+  contact is no longer listed. A pinned device the relay stops listing is no longer removed:
+  messages to that contact wait until it is listed again, a trusted revocation arrives, or you run
+  `hoptell contacts forget-device <member id> <device>`. A message that reached no device of the
+  contact is reported as not delivered, and the relay refuses one before accepting it.
+- Encrypted conversations send an update at least every 7 days of activity and after a member is
+  removed (before the next send when a device was idle); `hoptell doctor` lists members without
+  an update for more than 30 days.
+- Encrypted messaging requires the post-quantum MLS suite 0x004D: a binding without it is
+  refused, and a device stored with another suite does not load (enroll a new device).
+  Device-signed rotation, revocation and `hoptell device migrate` check that the binding can
+  sign before changing anything.
+- Larger file transfers: the relay's upload policy is checked whenever it would accept new work
+  (a chunk, the seal, the announcing message), not only when the upload begins. A refused upload
+  ends as denied, and the sender's outbox reports it and cleans up.
+
+- Experimental larger file transfers (with `HOPTELL_EXPERIMENTAL_E2EE=1` and a relay started with
+  `--experimental-e2ee`): `send_transfer` sends one file of any content, up to 200 MiB, to one
+  peer. It is read once, encrypted in 256 KiB chunks with a key used for that transfer only, and
+  stored encrypted at the relay for 7 days; the key travels inside the encrypted message that
+  announces it, and the relay serves the chunks only to the recipient's devices of that message.
+  The recipient fetches it only from contacts allowed under `transfers` in `contacts.json`,
+  within this home's limits, and saves it with `hoptell save <t_id> <path>` (never replacing a
+  file without `--overwrite`); `hoptell transfers` lists what is staged. A review set larger than
+  one frame goes as a transfer (up to 8 MiB) when encrypted messages reach the peer.
+  `hoptell doctor` finishes interrupted saves and, with `--fix`, removes leftovers. A restored
+  relay store never serves a transfer again that the replaced store had ended.
+- Relay store: every write is admitted against the size of the write-ahead log
+  (`--wal-soft-limit`, `--wal-hard-limit`): uploads wait first, then messages and commits, and
+  maintenance last, until a checkpoint succeeds; reads go on. Sweeps work in bounded batches. New
+  stores use 4 KiB pages with incremental vacuum, and a store with another page size is refused.
+  `hoptell relay admin store` shows the limits and the refusals by class.
+- Experimental hosted MCP endpoints (`hoptell mcp-hosted --experimental`): a relay operator
+  serves MCP for people whose clients cannot run hoptell. The host can read their messages, so
+  hosted members are separate members in hosted custody, labeled for their peers, without
+  devices, and never sent to under a `required` encryption policy; an encrypted fan-out leaves
+  them out and counts them in its result. A relay policy with provider groups fences hosted
+  custody. Owners decide held contacts on a hosted owner page. Limits and retention are
+  placeholders, still open.
+- Encrypted messages stay experimental until an independent review: an encrypted send's result
+  says "encrypted (experimental, unreviewed)", and `hoptell doctor` says "encrypted messaging:
+  experimental, not independently reviewed" whenever `HOPTELL_EXPERIMENTAL_E2EE` is set. An MLS
+  binding named by `HOPTELL_MLS_WASM` or `HOPTELL_MLS_DRIVER` always keeps that label.
+- Relay administration (`hoptell relay admin`) for the relay owner, on the relay host: views of
+  members (whether each has a token and how it is stored, never the token), devices, the policy,
+  grants summaries, revocations, metrics and the store's health, and an audit log of every change
+  (a hash chain, without message text, tokens or key material). `members` commands and
+  `relay broker-reset` record what they do there. With the relay running, the commands go through
+  a private admin socket in the state directory; with it stopped, they open the store themselves.
+  Online backups (`backup <dir>`) and an offline, resumable `restore` that never rolls
+  authorization back: grants, denies and used reply allowances stay as they are, and if the
+  access state was lost, messages to each member wait until that member publishes its grants
+  again. With the experimental encrypted messages, a restore makes each conversation replace
+  its group before its next commit, and encrypted messages accepted after the backup are lost.
+  `ui` serves a read-only page on loopback. The relay now opens its store at every start.
+- `hoptell ui`: the owner's pages on 127.0.0.1, without JavaScript, for what waits for a
+  decision, contacts, devices, settings and a doctor summary. A single-use launch link opens the
+  session; the Host, Origin and Sec-Fetch-Site are checked, and every form carries a token bound
+  to the session and to the choices it offered. The CLI and the UI decide through one shared
+  service, and a decision is refused when what was shown changed. Settings are written only if
+  the file did not change since it was shown; values from the environment are shown, not
+  written. With the experimental encrypted messages, a contact's encryption is a setting there,
+  held plaintext from a contact whose encryption is required is shown with a link to it, and
+  the encrypted conversation's checkpoint has its own page.
+- Optional: with `HOPTELL_ELICITATION=read_inbox`, `read_inbox` may first ask the owner in the
+  client's own dialog about one held sender (`allow-once` or `later`), on MCP revisions
+  2025-06-18 and 2025-11-25 only, within 60 seconds, with a 30-minute pause after a decline.
+- `hoptell contacts allow-once` is now refused while the contacts policy is damaged, as `allow`
+  and `block` already were.
 - Access control at the relay, in two parts. Each part can only refuse a message:
   - an operator policy (`hoptell relay --policy`), with groups of members or identity-provider
     groups;

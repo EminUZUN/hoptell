@@ -44,7 +44,7 @@ export function git(cwd, ...args) {
  * A machine: home (state) and approved folders {id: dir}. Returns {home, roots: [{id, path}],
  * setting, tools (the file tools with a stand-in relay), sent (texts sent), env (for the CLI)}.
  */
-export function machine(t, folders = { app: {} }, { realm = REALM, recipient = undefined } = {}) {
+export function machine(t, folders = { app: {} }, { realm = REALM, recipient = undefined, transfers = null } = {}) {
   const base = tmpDir(t, "rw");
   const home = path.join(base, "state");
   fs.mkdirSync(home, { mode: 0o700 });
@@ -57,7 +57,7 @@ export function machine(t, folders = { app: {} }, { realm = REALM, recipient = u
     return { id, path: dir };
   });
   const setting = JSON.stringify(roots);
-  const tools = createFileTools({ setting, home, peerName: "sam", realm: () => realm, log: () => {}, reader: createReader() });
+  const tools = createFileTools({ setting, home, peerName: "sam", realm: () => realm, log: () => {}, reader: createReader(), transfers });
   t.after(() => tools?.dispose());
   const sent = [];
   const relay = {
@@ -69,8 +69,8 @@ export function machine(t, folders = { app: {} }, { realm = REALM, recipient = u
   };
   fs.writeFileSync(path.join(base, "empty.env"), "");
   const env = { PATH: process.env.PATH, HOPTELL_HOME: home, HOPTELL_SNAPSHOT_ROOTS: setting, HOPTELL_ENV: path.join(base, "empty.env"), XDG_CONFIG_HOME: path.join(base, "config") };
-  const call = async (name, args) => {
-    const r = await tools.handle(name, args, relay);
+  const call = async (name, args, opts = {}) => {
+    const r = await tools.handle(name, args, relay, opts);
     return { ...r.structuredContent, isError: r.isError };
   };
   return { base, home, roots, dir: Object.fromEntries(roots.map((r) => [r.id, r.path])), setting, tools, call, sent, env, store: new ReviewSetStore({ home }) };

@@ -1764,3 +1764,58 @@ test("MCP instructions stay within Claude Code's 2048-character limit, delivery 
     }
   }
 });
+
+test("a relay's hello timeout (4001 no hello) is retried; a refused hello (4001 bad hello) stops", async (t) => {
+  for (const [reason, expect] of [["no hello", "down"], ["bad hello", "fatal"]]) {
+    const srv = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise((r) => srv.once("listening", r));
+    t.after(() => srv.close());
+    let connections = 0;
+    srv.on("connection", (ws) => {
+      connections++;
+      ws.close(4001, reason);
+    });
+    const c = new RelayClient({ url: `ws://127.0.0.1:${srv.address().port}`, token: fakeToken(), name: "alice", protocol: 1 });
+    t.after(() => c.close());
+    c.delay = 50; // a short backoff for the test
+    const events = [];
+    for (const e of ["down", "fatal"]) c.on(e, () => events.push(e));
+    c.start();
+    for (let i = 0; i < 100 && (expect === "down" ? connections < 2 : !events.length); i++) await sleep(20);
+    await c.close();
+    assert.equal(events[0], expect, reason);
+    if (expect === "down") assert.ok(connections >= 2, "reconnected after no hello");
+    else assert.equal(connections, 1, "no retry after a refused hello");
+  }
+});
+
+test("doctor tells the relay's hello timeout (4001 no hello) from a refused hello", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const token = fakeToken();
+  for (const [reason, expect] of [
+    ["no hello", /FAIL +relay login: the relay timed out waiting for the login message \(no hello\): a slow or unstable network, try again \(4001\)/],
+    ["bad hello", /FAIL +relay login: the relay rejected the login message \(bad hello\) \(4001\)/],
+    ["xno hello", /FAIL +relay login: the relay rejected the login message \(bad hello\) \(4001\)/],
+  ]) {
+    const srv = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise((r) => srv.once("listening", r));
+    t.after(() => srv.close());
+    srv.on("connection", (ws) => ws.on("message", () => ws.close(4001, reason)));
+    const out = await w.cli(["doctor"], { HOPTELL_RELAY: `ws://127.0.0.1:${srv.address().port}/`, HOPTELL_TOKEN: token });
+    assert.match(out.stdout, expect, reason);
+  }
+});
+
+test("the relay pings on its own interval (pingMs), apart from rare sweeps", async (t) => {
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, sweepMs: 3_600_000, pingMs: 100, log: () => {} });
+  t.after(() => relay.close());
+  const ws = new WebSocket(`ws://127.0.0.1:${relay.port}`);
+  t.after(() => ws.terminate());
+  let pings = 0;
+  ws.on("ping", () => pings++);
+  ws.on("open", () => ws.send(JSON.stringify({ type: "hello", name: "pinged", token: TOKEN })));
+  await new Promise((r) => ws.once("message", r));
+  for (let i = 0; i < 50 && pings < 3; i++) await sleep(50);
+  assert.ok(pings >= 3, `pinged ${pings} times with an hourly sweep`);
+});
