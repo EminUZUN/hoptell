@@ -79,3 +79,48 @@ test("doctor shows the relay realm and whether this machine's profile agrees", a
   assert.equal(changed.code, 1);
   assert.match(changed.stdout, /FAIL +relay profile: this profile's relay realm changed/);
 });
+
+test("a members file passed by systemd LoadCredential (0440 in its credentials directory) loads; nothing wider or elsewhere does", { skip: process.platform === "win32" }, async (t) => {
+  const os = await import("node:os");
+  const { loadMembersAndHosts } = await import("../lib/members.js");
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-creds-")));
+  t.after(() => {
+    for (const d of [svc, shared]) if (fs.existsSync(d)) fs.chmodSync(d, 0o700);
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+  // The systemd layout, with this user standing in for root (`trust`).
+  const root = path.join(base, "run-credentials");
+  const svc = path.join(root, "hoptell-relay.service");
+  const shared = path.join(base, "shared");
+  fs.mkdirSync(svc, { recursive: true });
+  fs.mkdirSync(shared);
+  const doc = JSON.stringify({ members: [{ name: "alice", token: fakeToken() }] });
+  const put = (dir) => {
+    const f = path.join(dir, "members.json");
+    fs.writeFileSync(f, doc);
+    fs.chmodSync(f, 0o440);
+    fs.chmodSync(dir, 0o550);
+    return f;
+  };
+  const file = put(svc);
+  const other = put(shared);
+  const trust = { rootUid: process.getuid(), root };
+  const load = (f, credentialsDir) => loadMembersAndHosts(f, { credentialsDir, trust });
+  assert.equal(load(file, svc).members.length, 1, "systemd's 0440 copy loads");
+  assert.throws(() => load(file, null), /holds tokens/, "without the credentials directory, 0440 is refused");
+  assert.throws(() => loadMembersAndHosts(file, { credentialsDir: svc }), /holds tokens/, "the default trust (root, /run/credentials) does not cover this test layout");
+  assert.throws(() => load(other, shared), /holds tokens/, "a group-traversable directory outside the systemd root is refused");
+  assert.throws(() => load(other, svc), /holds tokens/, "a file outside the credentials directory is refused");
+  for (const mode of [0o040, 0o444, 0o460, 0o640, 0o450, 0o400 | 0o004]) {
+    fs.chmodSync(svc, 0o700);
+    fs.chmodSync(file, mode);
+    fs.chmodSync(svc, 0o550);
+    assert.throws(() => load(file, svc), /holds tokens/, `mode ${mode.toString(8)} is refused`);
+  }
+  fs.chmodSync(svc, 0o700);
+  fs.chmodSync(file, 0o440);
+  fs.chmodSync(svc, 0o570);
+  assert.throws(() => load(file, svc), /holds tokens/, "a group-writable credentials directory is refused");
+  fs.chmodSync(svc, 0o551);
+  assert.throws(() => load(file, svc), /holds tokens/, "a credentials directory open to others is refused");
+});

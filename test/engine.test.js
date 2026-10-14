@@ -58,6 +58,8 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       receipts: "on",
       leaseMinutes: 30,
       elicitation: "off",
+      ownerChannel: true,
+      agentsMax: 4,
       notify: true,
       pid: process.pid,
       hostname: "testhost",
@@ -73,6 +75,10 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
   assert.match(settingsFor({ HOPTELL_PUSH: "loud" }).errors.push, /HOPTELL_PUSH must be/);
   assert.match(settingsFor({ HOPTELL_RECEIPTS: "maybe" }).errors.receipts, /HOPTELL_RECEIPTS/);
   assert.match(settingsFor({ HOPTELL_LEASE_MINUTES: "0" }).errors.receipts, /HOPTELL_LEASE_MINUTES/);
+  // HOPTELL_AGENTS_MAX (design 7.1): live spawned runs per home, at most 16; anything else is 4.
+  assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "40" }).agentsMax, 16);
+  assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "2" }).agentsMax, 2);
+  assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "zero" }).agentsMax, 4);
   assert.equal(settingsFor({ HOPTELL_RECEIPTS: "OFF", HOPTELL_LEASE_MINUTES: "5" }).leaseMinutes, 5);
   const badRole = settingsFor({ HOPTELL_RELAY: "ws://x:1", HOPTELL_TOKEN: "t".repeat(20), HOPTELL_ROLES: "bad role" });
   assert.match(badRole.errors.relay, /role/);
@@ -220,6 +226,8 @@ const ALLOWED = {
   "host.js": "PATH for the process-inspection tools it runs (not a hoptell setting)",
   "gitsafe.js": "PATH, only to find the git executable (not a hoptell setting); Git itself gets an environment built from scratch",
   "tmux.js": "CLI commands tmux/inject: the spawn environment for tmux without HOPTELL_ values, and the caller's directory",
+  "agentdeny.js": "ownerRelaysFile: a relative HOPTELL_RELAYS against the surface's working directory (settings.js's rule), when the caller passes no directory",
+  "decisions.js": "approvalContext: the approving surface's environment, when the caller passes none, to resolve the owner relays file and CODEX_HOME a hardened profile is checked against",
 };
 test("guard: no hidden reads of the environment, home or working directory behind the engine", () => {
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "lib");

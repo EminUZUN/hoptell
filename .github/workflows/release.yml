@@ -39,14 +39,22 @@ jobs:
             [ "$got" = "$v" ] || { echo "::error::$f is $got, tag is $v"; exit 1; }
           done
 
-      # The release gate (design 3.5): the packed package passes while it declares no reviewed
-      # binding (it keeps the experimental label); once it declares one, it must equal the
-      # committed release-gate records, or the release stops here.
+      # The release gate (design 3.5), on the packed package, offline (no Docker). First
+      # --records: the package equals the committed release-gate records whatever it declares
+      # (the recorded runtime artifacts, the build mapping and its two attestations, and the
+      # reviewed inputs regenerated at this commit), so the ordinary check below only ever
+      # imports reviewed bytes. A tag whose records were not regenerated after a reviewed-input
+      # change stops here. Then the ordinary check: the package passes while it declares no
+      # reviewed binding (it keeps the experimental label); once it declares one, the declared
+      # digests must be the mapping's. It reads REVIEWED_BINDING by importing the packed
+      # lib/mls/openmls.js in a child process; a value it cannot read unambiguously stops the
+      # release too.
       - name: Release gate (design 3.5)
         run: |
           tmp="$(mktemp -d)"
           npm pack --pack-destination "$tmp"
           tar xzf "$tmp"/hoptell-*.tgz -C "$tmp"
+          node scripts/release-check.mjs --records --package "$tmp/package"
           node scripts/release-check.mjs --package "$tmp/package"
 
       # Re-running a failed release skips what is already published (npm version, image

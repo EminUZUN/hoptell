@@ -1,0 +1,629 @@
+{
+  "version": 1,
+  "about": "Real-CLI adapter gate runs (design 7.1, Adapter gates). Each entry is one run of test/real-cli/<file> (npm run test:real-cli with HOPTELL_REAL_CLI). adapterArgs: the adapter's arguments for a read-only profile without cliOptions, with placeholders, as buildPlan made them for the run. A pass in lib/agentadapters.js GATES needs an entry here whose required gates all passed with the adapter's current arguments (test/agents-gates.test.js). Entries are added by a reviewed commit only; the tests print a summary and never write this file. `informational`: probes recorded for information only (never a pass condition, never read by GATES).",
+  "runs": [
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "family": "0.162",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "date": "2026-10-13",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js",
+      "adapterArgs": [
+        "exec",
+        "--ignore-user-config",
+        "--ephemeral",
+        "--json",
+        "-s",
+        "read-only",
+        "-c",
+        "approval_policy=\"never\"",
+        "-C",
+        "<cwd>",
+        "-o",
+        "<result>",
+        "-c",
+        "mcp_servers.hoptell.command=\"<node>\"",
+        "-c",
+        "mcp_servers.hoptell.args=[\"<bin>\", \"mcp\", \"--run\", \"r_0000000000000000\", \"--home\", \"<home>\"]",
+        "-c",
+        "mcp_servers.hoptell.env={HOPTELL_RUN=\"r_0000000000000000\", HOPTELL_HOME=\"<home>\", HOPTELL_ENV=\"<env>\", HOPTELL_RELAYS=\"<relays>\"}",
+        "-"
+      ],
+      "gates": {
+        "mcp-isolation": {
+          "result": "fail",
+          "observed": "The decoy server of CODEX_HOME's config.toml was not started (--ignore-user-config), but the signed-in account's codex_apps connector server was loaded and offered its tools (GitHub, Gmail, Calendar, Outlook and others)."
+        },
+        "run-marker": {
+          "result": "fail",
+          "observed": "hoptell mcp --run <run> --home <home> ran under the codex process, but every hoptell tool call failed: MCP tool call requires approval, but approval policy is never."
+        },
+        "approval-denial": {
+          "result": "inconclusive",
+          "observed": "The write and the network fetch were denied (Operation not permitted; host not resolved) and the run exited without a prompt, but the event stream of 0.162.1 has no command item, so the attempt was not shown (the canary control came later)."
+        }
+      },
+      "controls": {
+        "decoy-loads-without-ignore-user-config": "pass"
+      }
+    },
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "family": "0.162",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "nativeBinaryDigest": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0",
+      "date": "2026-10-13",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js",
+      "adapterArgs": [
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--json",
+        "-s",
+        "read-only",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "features.apps=false",
+        "-c",
+        "features.plugins=false",
+        "-c",
+        "features.hooks=false",
+        "-c",
+        "features.browser_use=false",
+        "-c",
+        "features.browser_use_external=false",
+        "-c",
+        "features.browser_use_full_cdp_access=false",
+        "-c",
+        "features.computer_use=false",
+        "-c",
+        "features.multi_agent=false",
+        "-c",
+        "features.image_generation=false",
+        "-c",
+        "features.goals=false",
+        "-c",
+        "web_search=\"disabled\"",
+        "-c",
+        "agents.max_threads=1",
+        "-C",
+        "<cwd>",
+        "-o",
+        "<result>",
+        "-c",
+        "mcp_servers.hoptell.command=\"<node>\"",
+        "-c",
+        "mcp_servers.hoptell.args=[\"<bin>\", \"mcp\", \"--run\", \"r_0000000000000000\", \"--home\", \"<home>\"]",
+        "-c",
+        "mcp_servers.hoptell.env={HOPTELL_RUN=\"r_0000000000000000\", HOPTELL_HOME=\"<home>\", HOPTELL_ENV=\"<env>\", HOPTELL_RELAYS=\"<relays>\"}",
+        "-c",
+        "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+        "-"
+      ],
+      "gates": {
+        "mcp-isolation": {
+          "result": "pass",
+          "observed": "With a decoy server and a wide sandbox in CODEX_HOME's config.toml: the decoy was not started; the only MCP calls were hoptell/read_task and hoptell/list_peers; the model reported the six run tools and no other MCP tool. Control: without --ignore-user-config the same CLI started the decoy."
+        },
+        "approval-denial": {
+          "result": "pass",
+          "observed": "Under -s read-only the shell command ran (its answer held the canary read from disk), the write failed (Operation not permitted) and the fetch failed (host not resolved); neither file exists; the run exited without a prompt."
+        },
+        "run-marker": {
+          "result": "pass",
+          "observed": "`hoptell mcp --run <run> --home <home>` ran under the codex process; read_task returned the run's nonce; with HOPTELL_EXPERIMENTAL_E2EE=1 in the environment and settings no device store was created. The same invocation, started under a test MCP client during the live run, listed exactly the six run tools and answered not_available_in_run for spawn_agent, send_file, stop_agent and a random name."
+        },
+        "tool-catalog": {
+          "result": "pass",
+          "observed": "Auth-only CODEX_HOME. Catalog from the Responses-stream trace (read on a pipe, names only), each of 3 requests: functions.wait, functions.request_user_input, functions.request_user_input_async, functions.exec, clock.sleep, collaboration.followup_task, collaboration.interrupt_agent, collaboration.list_agents, collaboration.send_message, collaboration.spawn_agent, collaboration.wait_agent; nested in exec: apply_patch, exec_command, list_mcp_resource_templates, list_mcp_resources, read_mcp_resource, view_image, write_stdin, clock__curr_time. Exactly the reviewed list; no web__run, image generation or goal tools. exec's tools object (listed by the model through exec): the nested list plus mcp__hoptell__ack_messages, list_peers, read_inbox, read_task, send_message, wait_for_message; no other MCP tool."
+        },
+        "real-home-catalog": {
+          "result": "pass",
+          "observed": "The owner's real CODEX_HOME, read-only: the same trace catalog and the same exec tools as with the auth-only home (adds nothing). auth.json digest 34cdc38218df and config.toml digest d9902d5ca721 unchanged before and after; Codex itself updated logs_2.sqlite and models_cache.json and removed a tmp/arg0 lock."
+        },
+        "sub-agents": {
+          "result": "inconclusive",
+          "observed": "Pending the lead's decision: the sub-agent gate is re-run through the real spawn path until a child starts, with confinement and both teardown paths (stop and natural exit) seen with a live child. collaboration.* is still offered in the parent's catalog (multi_agent=false does not remove it). With a decoy server and a wide sandbox in config.toml, the run started one fresh sub-agent (fork_turns \"none\"; a forked one fails under --ephemeral: no rollout). It started: 7 requests with the reviewed sub-agent catalog (the parent's without functions.request_user_input_async), collab items in the event stream, and a second `hoptell mcp --run` with the run's arguments under the agent (exactly two). exec's tools in the sub-agent: the six mcp__hoptell__ tools and the reviewed nested built-ins, nothing else; MCP=none. Its hoptell spawn_agent call failed inside Codex (not a function: never offered); the probe of the same invocation listed the six tools and answered not_available_in_run for the rest. Its command ran (canary) but the write (Operation not permitted) and the fetch were denied; no prompt; no decoy. Its send_message was refused with 4006 name in use (the parent's server holds the run's wire name; observed behaviour, not a guarantee). Its own spawn (fork_turns none) was refused: agent thread limit reached (agents.max_threads=1). After the run exited no process of the agent's tree was alive."
+        },
+        "teardown-stop": {
+          "result": "pass",
+          "observed": "stop_agent while the sub-agent ran `sleep 240` (the agent, both run-only servers and the sleep seen in the tree): the run ended stopped and no process of the tree was alive. Before the process-tree fix the sleep outlived the stop (Codex starts commands in a session of their own, outside the agent's process group)."
+        }
+      },
+      "controls": {
+        "decoy-loads-without-ignore-user-config": "pass"
+      },
+      "note": "gate18 run; superseded by the next entry (gate20), which re-ran every gate after the sub-agent result was set inconclusive."
+    },
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "family": "0.162",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "nativeBinaryDigest": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0",
+      "date": "2026-10-13",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js",
+      "adapterArgs": [
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--json",
+        "-s",
+        "read-only",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "features.apps=false",
+        "-c",
+        "features.plugins=false",
+        "-c",
+        "features.hooks=false",
+        "-c",
+        "features.browser_use=false",
+        "-c",
+        "features.browser_use_external=false",
+        "-c",
+        "features.browser_use_full_cdp_access=false",
+        "-c",
+        "features.computer_use=false",
+        "-c",
+        "features.multi_agent=false",
+        "-c",
+        "features.image_generation=false",
+        "-c",
+        "features.goals=false",
+        "-c",
+        "web_search=\"disabled\"",
+        "-c",
+        "agents.max_threads=1",
+        "-C",
+        "<cwd>",
+        "-o",
+        "<result>",
+        "-c",
+        "mcp_servers.hoptell.command=\"<node>\"",
+        "-c",
+        "mcp_servers.hoptell.args=[\"<bin>\", \"mcp\", \"--run\", \"r_0000000000000000\", \"--home\", \"<home>\"]",
+        "-c",
+        "mcp_servers.hoptell.env={HOPTELL_RUN=\"r_0000000000000000\", HOPTELL_HOME=\"<home>\", HOPTELL_ENV=\"<env>\", HOPTELL_RELAYS=\"<relays>\"}",
+        "-c",
+        "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+        "-"
+      ],
+      "gates": {
+        "mcp-isolation": {
+          "result": "pass",
+          "observed": "With a decoy server and a wide sandbox in CODEX_HOME's config.toml: the decoy was not started; the only MCP calls were hoptell/read_task and hoptell/list_peers; the model reported the six run tools and no other MCP tool. Control: without --ignore-user-config the same CLI started the decoy."
+        },
+        "approval-denial": {
+          "result": "pass",
+          "observed": "Under -s read-only the shell command ran (its answer held the canary read from disk), the write failed (Operation not permitted) and the fetch failed (host not resolved); neither file exists; the run exited without a prompt."
+        },
+        "run-marker": {
+          "result": "pass",
+          "observed": "`hoptell mcp --run <run> --home <home>` ran under the codex process; read_task returned the run's nonce; with HOPTELL_EXPERIMENTAL_E2EE=1 in the environment and settings no device store was created. The same invocation, started under a test MCP client during the live run, listed exactly the six run tools and answered not_available_in_run for spawn_agent, send_file, stop_agent and a random name."
+        },
+        "tool-catalog": {
+          "result": "pass",
+          "observed": "Auth-only CODEX_HOME. Catalog from the Responses-stream trace (read on a pipe, names only), each of 3 requests: functions.wait, functions.request_user_input, functions.request_user_input_async, functions.exec, clock.sleep, collaboration.followup_task, collaboration.interrupt_agent, collaboration.list_agents, collaboration.send_message, collaboration.spawn_agent, collaboration.wait_agent; nested in exec: apply_patch, exec_command, list_mcp_resource_templates, list_mcp_resources, read_mcp_resource, view_image, write_stdin, clock__curr_time. Exactly the reviewed list; no web__run, image generation or goal tools. exec's tools object (listed by the model through exec): the nested list plus mcp__hoptell__ack_messages, list_peers, read_inbox, read_task, send_message, wait_for_message; no other MCP tool."
+        },
+        "real-home-catalog": {
+          "result": "pass",
+          "observed": "The owner's real CODEX_HOME, read-only: the same trace catalog and the same exec tools as with the auth-only home (adds nothing). auth.json digest 34cdc38218df and config.toml digest d9902d5ca721 unchanged before and after; Codex itself updated logs_2.sqlite and models_cache.json and removed a tmp/arg0 lock."
+        },
+        "sub-agents": {
+          "result": "pass",
+          "observed": "Child started in the same run as its checks (gate20; a fresh sub-agent, fork_turns \"none\", started in every run with the final test: 6 of 6 sub-agent runs, 5 stop runs, 2 exit runs). collaboration.* is still offered in the parent's catalog. With a decoy server and a wide sandbox in config.toml: 7 requests with the reviewed sub-agent catalog (the parent's without functions.request_user_input_async), collab items in the event stream, exactly two `hoptell mcp --run` with the run's arguments under the agent. exec's tools in the sub-agent: the six mcp__hoptell__ tools and the reviewed nested built-ins; MCP=none. Client side: its hoptell spawn_agent call failed inside Codex (TypeError: not a function). Server side: the probe of the same invocation listed the six tools and answered not_available_in_run for spawn_agent, send_file, stop_agent and a random name. Its command ran (canary) but the write and the fetch were denied; no prompt; no decoy. Its send_message was refused with 4006 name in use (observed behaviour, not a guarantee). Nesting: agents.max_depth is ignored by these sub-agents (V1 only); agents.max_threads=1 refused its own spawn (agent thread limit reached). The run's lifetime and stop end every descendant recorded while it ran. After the exit no process of the tree the test saw (read every 250 ms) was alive."
+        },
+        "teardown-stop": {
+          "result": "pass",
+          "observed": "gate20: stop_agent while the sub-agent ran `sleep 240` (the tree held the codex launcher and binary, the parent's and the sub-agent's run-only servers, the sub-agent's codex process and the sleep): the run ended stopped; the supervisor's tree teardown ended the sleep (run log: ended 1 process(es) the agent left behind); afterwards no process of the tree was alive. Before the process-tree fix the sleep outlived the stop."
+        },
+        "teardown-exit": {
+          "result": "pass",
+          "observed": "gate20: the parent spawned a sub-agent running `sleep 240`, did not wait for it and exited after 59 s, with the sub-agent's run-only server and its sleep alive in the tree; the run ended exited and no process of the tree was alive afterwards (Codex ended them on its own exit; the supervisor found nothing left)."
+        }
+      },
+      "controls": {
+        "decoy-loads-without-ignore-user-config": "pass"
+      }
+    },
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "family": "0.162",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "nativeBinaryDigest": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0",
+      "date": "2026-10-13",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js",
+      "adapterArgs": [
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--json",
+        "-s",
+        "read-only",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "features.apps=false",
+        "-c",
+        "features.plugins=false",
+        "-c",
+        "features.hooks=false",
+        "-c",
+        "features.browser_use=false",
+        "-c",
+        "features.browser_use_external=false",
+        "-c",
+        "features.browser_use_full_cdp_access=false",
+        "-c",
+        "features.computer_use=false",
+        "-c",
+        "features.multi_agent=false",
+        "-c",
+        "features.image_generation=false",
+        "-c",
+        "features.goals=false",
+        "-c",
+        "web_search=\"disabled\"",
+        "-c",
+        "agents.max_threads=1",
+        "-C",
+        "<cwd>",
+        "-o",
+        "<result>",
+        "-c",
+        "mcp_servers.hoptell.command=\"<node>\"",
+        "-c",
+        "mcp_servers.hoptell.args=[\"<bin>\", \"mcp\", \"--run\", \"r_0000000000000000\", \"--home\", \"<home>\"]",
+        "-c",
+        "mcp_servers.hoptell.env={HOPTELL_RUN=\"r_0000000000000000\", HOPTELL_HOME=\"<home>\", HOPTELL_ENV=\"<env>\", HOPTELL_RELAYS=\"<relays>\"}",
+        "-c",
+        "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+        "-"
+      ],
+      "gates": {
+        "mcp-isolation": {
+          "result": "pass",
+          "observed": "gate21: exited 0; no decoy; the run-only hoptell server (--run) under the agent only."
+        },
+        "approval-denial": {
+          "result": "pass",
+          "observed": "gate21: canary in the answer; the write (Operation not permitted) and the fetch (could not resolve host) denied; no prompt; exit 0."
+        },
+        "run-marker": {
+          "result": "pass",
+          "observed": "gate21: the probe of the same server invocation listed the six run tools and answered not_available_in_run for spawn_agent, send_file, stop_agent and a random name."
+        },
+        "tool-catalog": {
+          "result": "pass",
+          "observed": "gate21 (auth-only CODEX_HOME): 3 catalogs, each equal to the reviewed list; exec's tools the six hoptell tools and the reviewed built-ins. The tap passed on no stderr line (counts only)."
+        },
+        "real-home-catalog": {
+          "result": "pass",
+          "observed": "gate21 (real CODEX_HOME, read-only): the same catalogs as the auth-only home, nothing added; auth.json 34cdc38218df and config.toml d9902d5ca721 unchanged."
+        },
+        "sub-agents": {
+          "result": "pass",
+          "observed": "gate21: a fresh sub-agent (fork_turns \"none\") started and was confined as in gate20 (reviewed sub-agent catalog, a second run-only server with the run's arguments, write and fetch denied, nested spawn refused, no decoy). After the exit no process of the tree the test saw (read every 250 ms) was alive."
+        },
+        "teardown-stop": {
+          "result": "pass",
+          "observed": "gate21: stop_agent while the sub-agent ran `sleep 240` (two run-only servers under the agent): the run ended stopped; the supervisor ended the recorded `sleep` (run log: ended 1 process(es) the agent left behind); afterwards no process of the tree the test saw was alive."
+        },
+        "teardown-exit": {
+          "result": "pass",
+          "observed": "gate21: the agent exited by itself after 57 s with the sub-agent's run-only server and `sleep` seen alive; afterwards no process of the tree the test saw was alive."
+        }
+      },
+      "controls": {
+        "decoy-loads-without-ignore-user-config": "pass"
+      },
+      "note": "gate21: confirming run of the whole gate file after the review changes (gates bound to this binary and argument shape, one-table descendant recording with failures kept for the sweep, a catalog tap that passes on no stderr). Same binary and arguments as the previous entry."
+    },
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "headlessMode": "hardening",
+      "family": "0.162",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "nativeBinaryDigest": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0",
+      "date": "2026-10-14",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js",
+      "adapterArgs": [
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--json",
+        "-c",
+        "default_permissions=\"<PROFILE_ID>\"",
+        "-c",
+        "permissions.<PROFILE_ID>.extends=\":read-only\"",
+        "-c",
+        "permissions.<PROFILE_ID>.filesystem=<DENY_TABLE>",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "features.apps=false",
+        "-c",
+        "features.plugins=false",
+        "-c",
+        "features.hooks=false",
+        "-c",
+        "features.browser_use=false",
+        "-c",
+        "features.browser_use_external=false",
+        "-c",
+        "features.browser_use_full_cdp_access=false",
+        "-c",
+        "features.computer_use=false",
+        "-c",
+        "features.multi_agent=false",
+        "-c",
+        "features.image_generation=false",
+        "-c",
+        "features.goals=false",
+        "-c",
+        "agents.enabled=false",
+        "-c",
+        "features.multi_agent_v2=false",
+        "-c",
+        "web_search=\"disabled\"",
+        "-c",
+        "agents.max_threads=1",
+        "-C",
+        "<cwd>",
+        "-o",
+        "<result>",
+        "-c",
+        "mcp_servers.hoptell.command=\"<node>\"",
+        "-c",
+        "mcp_servers.hoptell.args=[\"<bin>\", \"mcp\", \"--run\", \"r_0000000000000000\", \"--home\", \"<home>\"]",
+        "-c",
+        "mcp_servers.hoptell.env={HOPTELL_RUN=\"r_0000000000000000\", HOPTELL_HOME=\"<home>\", HOPTELL_ENV=\"<env>\", HOPTELL_RELAYS=\"<relays>\"}",
+        "-c",
+        "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+        "-"
+      ],
+      "gates": {
+        "mcp-isolation": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"exited\",\"exit\":{\"code\":0,\"signal\":null},\"decoyStarted\":false,\"hoptellServer\":[{\"args\":\"~/.nvm/versions/node/v22.22.1/bin/node ~/hoptell-wt/hgate/bin/hoptell.js mcp --run r_c728475c613506c5 --home <home>\",\"underAgent\":true},{\"args\":\"~/.nvm/versions/node/v22.22.1/bin/node ~/hoptell-wt/hgate/bin/hoptell.js mcp --run r_c728475c613506c5 --home <home>\",\"underAgent\":false}],\"readTaskServedNonce\":true,\"toolCalls\":[\"hoptell/read_task\",\"hoptell/read_task\",\"hoptell/list_peers\",\"hoptell/list_peers\"],\"toolsReported\":[\"ack_messages\",\"list_peers\",\"read_inbox\",\"read_task\",\"send_message\",\"wait_for_message\"],\"otherReported\":\"none\",\"otherServers\":[],\"deviceStore\":false,\"mode\":\"hardening\",\"pass\":true}"
+        },
+        "approval-denial": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"exited\",\"mode\":\"hardening\",\"canaryInOutput\":false,\"exit\":{\"code\":0,\"signal\":null},\"commandEvents\":0,\"canaryInAnswer\":true,\"answer\":\"RESULT=<canary>\\\\n touch: $TMPDIR/hoptell-agents-Y7jCbE/work/denied.txt: Operation not permitted\\\\n curl: (6) Could not resolve host: example.com\\\\n exit code=6\",\"written\":false,\"fetched\":false,\"pass\":true}"
+        },
+        "run-marker": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"pass\":true,\"probe\":{\"reached\":true,\"listed\":[\"list_peers\",\"send_message\",\"wait_for_message\",\"read_inbox\",\"ack_messages\",\"read_task\"],\"calls\":{\"spawn_agent\":{\"isError\":true,\"text\":\"not_available_in_run: spawn_agent is not available to a spawned agent's run\"},\"send_file\":{\"isError\":true,\"text\":\"not_available_in_run: send_file is not available to a spawned agent's run\"},\"stop_agent\":{\"isError\":true,\"text\":\"not_available_in_run: stop_agent is not available to a spawned agent's run\"},\"gate_3db644\":{\"isError\":true,\"text\":\"not_available_in_run: gate_3db644 is not available to a spawned agent's run\"}}},\"see\":\"mcpIsolation run\",\"notLive\":\"test/agents-mcp.test.js: a record that is not live makes `hoptell mcp --run` exit before serving\"}"
+        },
+        "tool-catalog": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"exited\",\"mode\":\"hardening\",\"cloud\":{\"label\":\"tempHomeCatalog\",\"real\":false,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]},\"catalogs\":3,\"diffs\":[{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]}],\"modelCalls\":[\"exec\"],\"execTools\":[\"apply_patch\",\"clock__curr_time\",\"exec_command\",\"list_mcp_resource_templates\",\"list_mcp_resources\",\"mcp__hoptell__ack_messages\",\"mcp__hoptell__list_peers\",\"mcp__hoptell__read_inbox\",\"mcp__hoptell__read_task\",\"mcp__hoptell__send_message\",\"mcp__hoptell__wait_for_message\",\"read_mcp_resource\",\"view_image\",\"write_stdin\"],\"authBefore\":\"34cdc38218df\",\"authAfter\":\"34cdc38218df\",\"configUnchanged\":true,\"codexHomeChanged\":[\"goals_1.sqlite\",\"installation_id\",\"logs_2.sqlite\",\"memories_1.sqlite\",\"models_cache.json\",\"queue_1.sqlite\",\"state_5.sqlite\",\"skills/.system/.codex-system-skills.marker\",\"skills/.system/imagegen/LICENSE.txt\",\"skills/.system/imagegen/SKILL.md\",\"skills/.system/openai-docs/LICENSE.txt\",\"skills/.system/openai-docs/SKILL.md\",\"skills/.system/review-agent/SKILL.md\",\"skills/.system/skill-creator/SKILL.md\",\"skills/.system/skill-creator/license.txt\",\"skills/.system/skill-installer/LICENSE.txt\",\"skills/.system/skill-installer/SKILL.md\",\"skills/.system/imagegen/agents/openai.yaml\",\"skills/.system/imagegen/assets/imagegen-small.svg\",\"skills/.system/imagegen/assets/imagegen.png\",\"skills/.system/imagegen/references/cli.md\",\"skills/.system/imagegen/references/codex-network.md\",\"skills/.system/imagegen/references/image-api.md\",\"skills/.system/imagegen/references/prompting.md\",\"skills/.system/imagegen/references/sample-prompts.md\",\"skills/.system/imagegen/scripts/image_gen.py\",\"skills/.system/imagegen/scripts/remove_chroma_key.py\",\"skills/.system/openai-docs/agents/openai.yaml\",\"skills/.system/openai-docs/assets/openai-small.svg\",\"skills/.system/openai-docs/assets/openai.png\",\"skills/.system/openai-docs/references/codex-self-knowledge.md\",\"skills/.system/openai-docs/references/latest-model.md\",\"skills/.system/openai-docs/references/mcp-diagnostics.md\",\"skills/.system/openai-docs/references/model-migration.md\",\"skills/.system/openai-docs/references/model-selection.md\",\"skills/.system/openai-docs/references/official-docs.md\",\"skills/.system/openai-docs/references/prompting-guide.md\",\"skills/.system/openai-docs/references/upgrade-guide.md\",\"skills/.system/openai-docs/references/upgrading-to-gpt-6-astra.md\",\"skills/.system/openai-docs/scripts/fetch-codex-manual.mjs\",\"skills/.system/openai-docs/scripts/resolve-latest-model-info\",\"skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs\",\"skills/.system/review-agent/agents/openai.yaml\",\"skills/.system/skill-creator/agents/openai.yaml\",\"skills/.system/skill-creator/assets/skill-creator-small.svg\",\"skills/.system/skill-creator/assets/skill-creator.png\",\"skills/.system/skill-creator/references/openai_yaml.md\",\"skills/.system/skill-creator/scripts/generate_openai_yaml.py\",\"skills/.system/skill-creator/scripts/init_skill.py\",\"skills/.system/skill-creator/scripts/quick_validate.py\",\"skills/.system/skill-installer/agents/openai.yaml\",\"skills/.system/skill-installer/assets/skill-installer-small.svg\",\"skills/.system/skill-installer/assets/skill-installer.png\",\"skills/.system/skill-installer/scripts/github_utils.py\",\"skills/.system/skill-installer/scripts/install-skill-from-github.py\",\"skills/.system/skill-installer/scripts/list-skills.py\"],\"codexHomeRemoved\":[],\"pass\":true,\"modelReportedMcp\":[\"none\"]}"
+        },
+        "real-home-catalog": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"exited\",\"mode\":\"hardening\",\"cloud\":{\"label\":\"realHomeCatalog\",\"real\":true,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]},\"catalogs\":3,\"diffs\":[{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]}],\"modelCalls\":[\"exec\"],\"execTools\":[\"apply_patch\",\"clock__curr_time\",\"exec_command\",\"list_mcp_resource_templates\",\"list_mcp_resources\",\"mcp__hoptell__ack_messages\",\"mcp__hoptell__list_peers\",\"mcp__hoptell__read_inbox\",\"mcp__hoptell__read_task\",\"mcp__hoptell__send_message\",\"mcp__hoptell__wait_for_message\",\"read_mcp_resource\",\"view_image\",\"write_stdin\"],\"authBefore\":\"34cdc38218df\",\"authAfter\":\"34cdc38218df\",\"configUnchanged\":true,\"codexHomeChanged\":[\"logs_2.sqlite\",\"logs_2.sqlite-wal\",\"models_cache.json\"],\"codexHomeRemoved\":[\"shell_snapshots/01a13978-976d-7112-a627-9f77025ae444.1791965566940595000.sh\"],\"pass\":true,\"modelReportedMcp\":[\"clock__curr_time\"],\"addsNothing\":true}"
+        },
+        "sub-agents": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"pass\":true,\"rows\":{\"plain\":{\"state\":\"exited\",\"mode\":\"plain\",\"requests\":6,\"collaborationInCatalogs\":6,\"otherCatalogs\":2,\"diffs\":null,\"modelCalls\":[\"collaboration.spawn_agent\",\"collaboration.wait_agent\"],\"spawnCalls\":1,\"collabEvents\":2,\"runServers\":1,\"spawnAnswer\":\"{\\\"task_name\\\":\\\"/root/gate_check\\\"}\",\"subAnswered\":true,\"subAgentsOff\":null,\"treeSeen\":7,\"leftAfterExit\":[],\"started\":true},\"hardening\":{\"state\":\"exited\",\"mode\":\"hardening\",\"requests\":3,\"collaborationInCatalogs\":0,\"otherCatalogs\":0,\"diffs\":[{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]},{\"hoptell\":[],\"extra\":[],\"missing\":[]}],\"modelCalls\":[\"exec\"],\"spawnCalls\":0,\"collabEvents\":0,\"runServers\":1,\"spawnAnswer\":\"Error: spawn_agent tool is unavailable\",\"subAnswered\":false,\"subAgentsOff\":true,\"treeSeen\":6,\"leftAfterExit\":[],\"cloud\":{\"label\":\"subagent\",\"real\":false,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]},\"started\":false}},\"definition\":\"hardened: no sub-agent can start (draft 6.3)\"}"
+        },
+        "teardown-stop": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"stopped\",\"mode\":\"hardening\",\"sleepSeen\":1,\"aliveAtStop\":1,\"stopped\":\"stopped\",\"treeSeen\":[\"node ~/.nvm/versions/node/v22.22.1/bin/codex exec --ignore-user-config --ignore-rules \",\"~/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/code\",\"~/.nvm/versions/node/v22.22.1/bin/node ~/hoptell-wt/hgate/bin/hoptell.js\",\"~/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/code\",\"sleep 240\"],\"leftAfterStop\":[],\"log\":[\"[hoptell 2026-10-14T08:17:23.903Z] ended 4 process(es) the agent left behind\"],\"cloud\":{\"label\":\"stop\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},\"inconclusive\":false,\"pass\":true,\"definition\":\"hardened: a recorded shell descendant is stopped (draft 6.3)\"}"
+        },
+        "teardown-exit": {
+          "result": "pass",
+          "provider": "real",
+          "observed": "{\"state\":\"exited\",\"mode\":\"hardening\",\"exit\":{\"code\":0,\"signal\":null},\"duration\":17092,\"sleepSeen\":1,\"treeSeen\":[\"node ~/.nvm/versions/node/v22.22.1/bin/codex exec --ignore-user-config --ignore-rules \",\"~/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/code\",\"~/.nvm/versions/node/v22.22.1/bin/node ~/hoptell-wt/hgate/bin/hoptell.js\",\"git -c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c core.fsmonitor=false rev-parse HE\",\"git -c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c core.fsmonitor=false remote -v\",\"git -c safe.bareRepository=explicit config --null --get core.fsmonitor\",\"/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license check\",\"/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license check\",\"/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license check\",\"~/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/code\",\"sleep 240\"],\"leftAfterExit\":[],\"log\":[\"[hoptell 2026-10-14T08:17:42.213Z] ended 1 process(es) the agent left behind\"],\"cloud\":{\"label\":\"exit\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},\"inconclusive\":false,\"pass\":true,\"definition\":\"hardened: a shell descendant ends with the run (draft 6.3)\"}"
+        },
+        "reads-denied": {
+          "result": "pass",
+          "provider": "mock",
+          "observed": "{\"pass\":true,\"lines\":{\"CONTROL\":{\"expect\":\"read\",\"seen\":true,\"status\":0,\"notPermitted\":false},\"HOME\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_HOME\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"HOMEFILE\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_HOMEFILE\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"TOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_TOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"RELAYTOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_RELAYTOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"RELAYS\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_RELAYS\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"CODEXHOME\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_CODEXHOME\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"AUTHJSON\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_AUTHJSON\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"MLSDEVICE\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_MLSDEVICE\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"SYMDIRTOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"L_SYMDIRTOKEN\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"SYMDIRREAL\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true},\"DATASPELLING\":{\"expect\":\"denied\",\"seen\":true,\"status\":1,\"notPermitted\":true}},\"viewImage\":{\"control\":true,\"linkExists\":true,\"denied\":true,\"pass\":true},\"dataSpellingTested\":true,\"profileGiven\":{\"denyMatches\":true,\"deny\":7,\"denyEscalatable\":[],\"otherAccess\":[],\"reads\":[\":root\",\"<CODEX_HOME>/tmp/arg0/<codex helper>\"],\"networkRestricted\":true}}",
+          "evidence": {
+            "kind": "mock-provider",
+            "executable": {
+              "wrapper": "12cc62c78e49c07abc16ac2efc5f6c0e4dcc62437f77b085f0d6157fb089e60e",
+              "codex": {
+                "launcher": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+                "native": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+              }
+            },
+            "argvDelta": [
+              "-c",
+              "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+              "-c",
+              "model_provider=\"hoptell_probe\""
+            ],
+            "insertedBefore": "-",
+            "refusesOtherProviderSlots": true,
+            "provider": "a local scripted mock of the Responses API on 127.0.0.1; empty CODEX_HOME; no sign-in",
+            "claim": "The Codex launcher and native binary exercised the production permission-profile slots and other buildPlan arguments, plus the recorded four-token local-provider delta, while a scripted provider called commands and tools. The test observed the gate-specific results; it did not exercise the production provider or real-home cloud policy."
+          }
+        },
+        "reads-allowed": {
+          "result": "pass",
+          "provider": "mock",
+          "observed": "{\"pass\":true,\"controlRead\":true,\"readTask\":true}",
+          "evidence": {
+            "kind": "mock-provider",
+            "executable": {
+              "wrapper": "12cc62c78e49c07abc16ac2efc5f6c0e4dcc62437f77b085f0d6157fb089e60e",
+              "codex": {
+                "launcher": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+                "native": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+              }
+            },
+            "argvDelta": [
+              "-c",
+              "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+              "-c",
+              "model_provider=\"hoptell_probe\""
+            ],
+            "insertedBefore": "-",
+            "refusesOtherProviderSlots": true,
+            "provider": "a local scripted mock of the Responses API on 127.0.0.1; empty CODEX_HOME; no sign-in",
+            "claim": "The Codex launcher and native binary exercised the production permission-profile slots and other buildPlan arguments, plus the recorded four-token local-provider delta, while a scripted provider called commands and tools. The test observed the gate-specific results; it did not exercise the production provider or real-home cloud policy."
+          }
+        },
+        "hostile-project-config": {
+          "result": "pass",
+          "provider": "mock",
+          "observed": "{\"pass\":true,\"decoyStarted\":false,\"written\":false}",
+          "evidence": {
+            "kind": "mock-provider",
+            "executable": {
+              "wrapper": "12cc62c78e49c07abc16ac2efc5f6c0e4dcc62437f77b085f0d6157fb089e60e",
+              "codex": {
+                "launcher": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+                "native": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+              }
+            },
+            "argvDelta": [
+              "-c",
+              "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+              "-c",
+              "model_provider=\"hoptell_probe\""
+            ],
+            "insertedBefore": "-",
+            "refusesOtherProviderSlots": true,
+            "provider": "a local scripted mock of the Responses API on 127.0.0.1; empty CODEX_HOME; no sign-in",
+            "claim": "The Codex launcher and native binary exercised the production permission-profile slots and other buildPlan arguments, plus the recorded four-token local-provider delta, while a scripted provider called commands and tools. The test observed the gate-specific results; it did not exercise the production provider or real-home cloud policy."
+          }
+        },
+        "write-network-parity": {
+          "result": "pass",
+          "provider": "mock",
+          "observed": "{\"pass\":true,\"rows\":{\"plain\":{\"state\":\"exited\",\"mode\":\"plain\",\"argv\":{\"execs\":1,\"identical\":true,\"shapeBound\":true,\"exactDelta\":true,\"wrapperIsTemplate\":true,\"targetDigest\":true,\"ok\":true},\"ran\":true,\"W\":1,\"N\":7,\"written\":false,\"fetched\":false,\"reached\":false},\"hardening\":{\"state\":\"exited\",\"mode\":\"hardening\",\"argv\":{\"execs\":1,\"identical\":true,\"shapeBound\":true,\"exactDelta\":true,\"wrapperIsTemplate\":true,\"targetDigest\":true,\"ok\":true},\"ran\":true,\"W\":1,\"N\":7,\"written\":false,\"fetched\":false,\"reached\":false}},\"provider\":\"local mock\"}",
+          "evidence": {
+            "kind": "mock-provider",
+            "executable": {
+              "wrapper": "12cc62c78e49c07abc16ac2efc5f6c0e4dcc62437f77b085f0d6157fb089e60e",
+              "codex": {
+                "launcher": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+                "native": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+              }
+            },
+            "argvDelta": [
+              "-c",
+              "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+              "-c",
+              "model_provider=\"hoptell_probe\""
+            ],
+            "insertedBefore": "-",
+            "refusesOtherProviderSlots": true,
+            "provider": "a local scripted mock of the Responses API on 127.0.0.1; empty CODEX_HOME; no sign-in",
+            "claim": "The Codex launcher and native binary exercised the production permission-profile slots and other buildPlan arguments, plus the recorded four-token local-provider delta, while a scripted provider called commands and tools. The test observed the gate-specific results; it did not exercise the production provider or real-home cloud policy."
+          }
+        },
+        "preflight-contract": {
+          "result": "pass",
+          "provider": "none",
+          "observed": "{\"pass\":true,\"denied\":null,\"control\":\"the preflight could stat $TMPDIR/hoptell-agents-Sh4hO0/work/outside.txt, which must be denied\"}"
+        },
+        "cloud-stream": {
+          "result": "pass",
+          "provider": "all",
+          "observed": "{\"pass\":true,\"runs\":[{\"label\":\"isolation\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"denial\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"tempHomeCatalog\",\"real\":false,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]},{\"label\":\"subagent\",\"real\":false,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]},{\"label\":\"stop\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"exit\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"mock-reads\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"mock-parity\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]},{\"label\":\"mock-subagent\",\"real\":false,\"supervisor\":{\"noneLines\":2,\"observed\":[]},\"none\":2,\"other\":[]}],\"realHome\":[{\"label\":\"realHomeCatalog\",\"real\":true,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]}],\"rule\":\"every hardened run on a temporary CODEX_HOME: exactly two (none) lines and nothing else (a tapped run read from the tap); the real-home run recorded, not judged\"}"
+        },
+        "sub-agent-reads": {
+          "result": "pass",
+          "provider": "mock",
+          "observed": "{\"pass\":true,\"plainState\":\"exited\",\"plainSpawnAdvertised\":true,\"state\":\"exited\",\"argv\":{\"execs\":1,\"identical\":true,\"shapeBound\":true,\"exactDelta\":true,\"wrapperIsTemplate\":true,\"targetDigest\":true,\"ok\":true},\"hardenedCollaboration\":null,\"reply\":\"\\\"unsupported call: collaborationspawn_agent\\\"\",\"collabEvents\":0,\"requests\":2,\"provider\":\"local mock\"}",
+          "evidence": {
+            "kind": "mock-provider",
+            "executable": {
+              "wrapper": "12cc62c78e49c07abc16ac2efc5f6c0e4dcc62437f77b085f0d6157fb089e60e",
+              "codex": {
+                "launcher": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+                "native": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0"
+              }
+            },
+            "argvDelta": [
+              "-c",
+              "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+              "-c",
+              "model_provider=\"hoptell_probe\""
+            ],
+            "insertedBefore": "-",
+            "refusesOtherProviderSlots": true,
+            "provider": "a local scripted mock of the Responses API on 127.0.0.1; empty CODEX_HOME; no sign-in",
+            "claim": "The Codex launcher and native binary exercised the production permission-profile slots and other buildPlan arguments, plus the recorded four-token local-provider delta, while a scripted provider called commands and tools. The test observed the gate-specific results; it did not exercise the production provider or real-home cloud policy."
+          }
+        }
+      },
+      "mockProvider": {
+        "slots": [
+          "-c",
+          "model_providers.hoptell_probe={name=\"hoptell-probe\", base_url=\"http://127.0.0.1:<port>/v1\", wire_api=\"responses\"}",
+          "-c",
+          "model_provider=\"hoptell_probe\""
+        ],
+        "insertedBefore": "-",
+        "note": "inserted by the profile command (test/real-cli/mock-provider.mjs, a wrapper) in the five mock rows only; the wrapper received plan.args byte-identical and Codex received plan.args plus exactly these four tokens"
+      },
+      "controls": {
+        "decoy-loads-without-ignore-user-config": "pass",
+        "plain-sub-agent-starts": "pass",
+        "plain-advertises-spawn_agent": "pass",
+        "plain-parity-row": "{\"state\":\"exited\",\"mode\":\"plain\",\"argv\":{\"execs\":1,\"identical\":true,\"shapeBound\":true,\"exactDelta\":true,\"wrapperIsTemplate\":true,\"targetDigest\":true,\"ok\":true},\"ran\":true,\"W\":1,\"N\":7,\"written\":false,\"fetched\":false,\"reached\":false}",
+        "preflight-outside-path": "{\"pass\":true,\"denied\":null,\"control\":\"the preflight could stat $TMPDIR/hoptell-agents-Sh4hO0/work/outside.txt, which must be denied\"}"
+      },
+      "informational": {
+        "real-home-cloud": "{\"label\":\"realHomeCatalog\",\"real\":true,\"supervisor\":{\"noneLines\":0,\"observed\":[\"missing_none\"]},\"tapClasses\":[\"none\",\"none\"],\"tapNoneBeforeFirstResponse\":2,\"supervisorMissingNone\":\"a tap artifact: the tap holds stderr\",\"none\":2,\"other\":[]}",
+        "real-home-codex-home": "{\"authBefore\":\"34cdc38218df\",\"authAfter\":\"34cdc38218df\",\"configUnchanged\":true,\"codexHomeChanged\":[\"logs_2.sqlite\",\"logs_2.sqlite-wal\",\"models_cache.json\"],\"codexHomeRemoved\":[\"shell_snapshots/01a13978-976d-7112-a627-9f77025ae444.1791965566940595000.sh\"],\"addsNothing\":true}",
+        "codex-arg0-helper-exception": "{\"exactEntry\":true,\"entries\":[\"tmp/arg0/codex-arg0WgmywV\"],\"plantedFileReadable\":true,\"plant\":{\"seen\":true,\"status\":0,\"notPermitted\":false}}"
+      },
+      "note": "gate22: the hardening record run, one invocation of the whole gate file (env -u CODEX_HOME HOPTELL_REAL_CLI=codex HOPTELL_GATE_HEADLESS_MODE=hardening HOPTELL_GATE_REAL_CODEX_HOME=1), all 15 required gates in the hardened shape; the five mock rows on the local scripted provider under the draft 6.4 rule. The real CODEX_HOME was read once, in the last run (real-home-catalog), read-only. Each observed text is summary.required[gate].observed of that invocation, with only the home and temp-dir path prefixes shortened to ~ and $TMPDIR."
+    }
+  ],
+  "informational": [
+    {
+      "cli": "codex",
+      "mode": "headless",
+      "version": "0.162.1",
+      "binaryDigest": "61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70",
+      "nativeBinaryDigest": "74c6a6d263f40d65f99c27a815275f5b4ed0bcc2baecc396b4cf3255498bdfc0",
+      "date": "2026-10-13",
+      "host": "macOS (darwin arm64)",
+      "test": "test/real-cli/codex-headless.test.js (home reads)",
+      "probe": "home-reads",
+      "invocation": "spawnAgent with the gated read-only profile: buildPlan's arguments (the adapterArgs of the gate runs above, effort low); temporary CODEX_HOME with a copy of auth.json only, removed afterwards; no app-server daemon was started from it",
+      "files": "synthetic, each holding a random canary; no real credential; the keychain was not probed",
+      "reads": {
+        "<work>/control.txt (control)": "allowed",
+        "<home>/agents/read-gate-canary.json": "allowed",
+        "<base>/read-gate.token (a relays entry's tokenFile)": "allowed",
+        "<home>/mls/read-gate-realm/device.json": "allowed"
+      }
+    }
+  ]
+}

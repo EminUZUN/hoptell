@@ -38,6 +38,26 @@ if (process.argv[2] === "hook-header") {
   process.exit(0);
 }
 
+// `hoptell mcp --run <id> --home <home>` (design 7.1): a spawned agent's server reads the run's own
+// settings file, never the environment's or the owner's default one.
+let mcpRun = null;
+if (process.argv[2] === "mcp" && process.argv.includes("--run")) {
+  const m = await import("../lib/mcp.js");
+  try {
+    mcpRun = m.prepareRunEnv(process.argv.slice(3), process.env);
+  } catch (e) {
+    console.error(`hoptell: ${e.message}`);
+    process.exit(2);
+  }
+  // The record first: nothing of the run (not even its settings file) is read for a run that
+  // does not verify.
+  const v = await m.verifyRun(mcpRun.home, mcpRun.run);
+  if (v.problem) {
+    console.error(`[hoptell] not serving: ${v.problem}`);
+    process.exit(1);
+  }
+}
+
 try {
   loadEnv();
 } catch (e) {
@@ -82,12 +102,19 @@ Usage:
                                             sign in to the relay with your identity provider; then HOPTELL_AUTH=login
   hoptell logout                            remove (and revoke) the stored sign-in credential
   hoptell mcp                               MCP server for an agent session (stdio)
+  hoptell mcp --run <run> --home <home>     the same for a spawned agent's run: only the run's tools
   hoptell mcp-http [--port 7790]            the same over HTTP on 127.0.0.1, for clients that only speak HTTP
-  hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>
+  hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>
   hoptell mcp-hosted --experimental --config <file> --state-dir <dir>
                                             EXPERIMENTAL hosted MCP endpoint behind an HTTPS proxy: the host
                                             reads its tenants' messages; link|unlink|list manage its links
                                             tokens for those clients (shown once, stored hashed)
+  hoptell agents profiles | profile approve <id> [--accept-read-risk] | list [--all] | stop <run> | result <run>
+                 | confirm <run> [--start | --discard] | audit [--run <id>]
+                                            agent profiles: which local agent CLIs your sessions may
+                                            start, and how; a new or changed profile needs your approval
+                                            (a codex profile: read its warning, then approve with
+                                            --accept-read-risk)
   hoptell tmux <name> [--roles a,b] -- <agent command>
                                             run an agent in tmux; attempt an inbox notice when its prompt appears idle
   hoptell list                              list peers on the relay
@@ -122,6 +149,10 @@ Usage:
   hoptell save <t_id> <path> [--overwrite] [--yes] | --forget <t_id>
                                             EXPERIMENTAL: save a staged transfer to a path you choose
                                             (never replaces a file without --overwrite)
+  hoptell telegram setup [--relay <alias>] [--name owner]   the owner channel (a Telegram bot; token on stdin)
+  hoptell telegram pair | run | status | unpair [--all]   (run exits 78 when the encryption policy refuses it: do not restart on 78)
+  hoptell telegram trust '<pin>' [--add] | --remove-key <key id> | --revoke <realm id>
+  hoptell telegram key next | key commit    rotate the bridge's signing key (bridge stopped)
   hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
 
 Settings: environment variables, else the first file found of
@@ -520,7 +551,7 @@ try {
       const { settingsContext } = await import("../lib/decisions.js");
       const { startOwnerUi } = await import("../lib/ownerui.js");
       const contacts = await contactsOf();
-      const sources = { contacts };
+      const sources = { contacts, agents: { homedir: os.homedir(), env: process.env, surface: "ui" } };
       // The relay (HOPTELL_RELAY) is reached only for what lives there: contact requests, and the
       // device lists with experimental device keys. Without it those views say so.
       if (process.env.HOPTELL_RELAY) {
@@ -701,8 +732,11 @@ try {
       const { loadMembersAndHosts } = await import("../lib/members.js");
       // The members list and the host credentials (design 4.5) come from one read of the file.
       let hostsRead = null;
+      // systemd LoadCredential= hands the file over as a 0440 copy in its credentials directory;
+      // the relay's own reads of it (start, reload, the admin views) accept that copy.
+      const membersRead = { credentialsDir: process.env.CREDENTIALS_DIRECTORY || null };
       const readMembers = () => {
-        const d = loadMembersAndHosts(membersFile);
+        const d = loadMembersAndHosts(membersFile, membersRead);
         hostsRead = d.hosts;
         return d.members;
       };
@@ -715,6 +749,9 @@ try {
       const log = makeLogger(opt("--log-format", process.env.HOPTELL_LOG_FORMAT || "text"));
       const { fencedMessage, loadRealm, lockStateDir, readRestoreIntent } = await import("../lib/realm.js");
       const stateDirectory = stateDirOf();
+      // Before anything listens: a relay must not say it is listening and then stop on this.
+      const socketProblem = (await import("../lib/admin.js")).socketPathProblem(stateDirectory);
+      if (socketProblem) fail(socketProblem);
       const release = lockStateDir(stateDirectory);
       for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => (release(), process.exit(0)));
       process.on("exit", release);
@@ -815,6 +852,7 @@ try {
         config: { members: membersFile || null, policy: policyFile || null, oidc: oidcFile || null },
         flags: { e2ee },
         apply: { readMembers, members: (list) => relay.reload(list, hostsRead), policy: (p) => access.setPolicy(p) },
+        membersRead,
         log,
       });
       dropped = admin.auditDropped;
@@ -877,26 +915,32 @@ try {
         const h = await import("../lib/httpmcp.js");
         const [, action, label] = args.filter((a, i) => !a.startsWith("--") && !["--port", "--name", "--roles"].includes(args[i - 1]));
         if (action === "add" && label) {
-          const r = await h.addClient(home(), label, { name: opt("--name") ?? null, roles: parseRoles(opt("--roles") ?? "") });
+          const r = await h.addClient(home(), label, { name: opt("--name") ?? null, roles: parseRoles(opt("--roles") ?? ""), agents: args.includes("--agents") });
           console.log(`Client "${r.label}" added. Its token (shown only now): ${r.token}`);
           console.log(`Configure the client with the URL http://127.0.0.1:<port>/mcp and the header "Authorization: Bearer <token>".`);
         } else if (action === "list") {
           const rows = h.listClients(home());
           if (!rows.length) console.log("No clients.");
-          for (const c of rows) console.log(`${c.label}${c.name ? `  name ${c.name}` : ""}${c.roles?.length ? `  roles ${c.roles.join(",")}` : ""}  since ${c.created}`);
+          for (const c of rows) console.log(`${c.label}${c.name ? `  name ${c.name}` : ""}${c.roles?.length ? `  roles ${c.roles.join(",")}` : ""}${c.agents ? "  agents" : ""}  since ${c.created}`);
         } else if (action === "remove" && label) {
           await h.removeClient(home(), label);
           console.log(`Removed client "${label}"; its token no longer works and its open sessions end within a minute.`);
-        } else fail("usage: hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>", 2);
+        } else fail("usage: hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>", 2);
         break;
       }
       const { runMcpHttp } = await import("../lib/mcp.js");
       await runMcpHttp({ port: opt("--port") ? Number(opt("--port")) : undefined });
       break;
     }
+    case "agents": {
+      // Agent profiles and runs (design 7.1).
+      const { agentsCommand } = await import("../lib/agentscli.js");
+      await agentsCommand({ args, home: home(), env: process.env, homedir: os.homedir(), fail });
+      break;
+    }
     case "mcp": {
       const { runMcp } = await import("../lib/mcp.js");
-      await runMcp();
+      await runMcp(mcpRun ?? {});
       break;
     }
     case "tmux": {
@@ -1146,6 +1190,12 @@ try {
       process.exitCode = code;
       break;
     }
+    case "telegram": {
+      // The owner channel (design 7.2): the bot token comes from standard input only.
+      const { telegramCommand } = await import("../lib/ownerchannelcli.js");
+      process.exitCode = await telegramCommand(args, { home: home(), env: process.env, homedir: os.homedir() });
+      break;
+    }
     case "hooks": {
       // Settings for Claude Code without the plugin: printed only, never written.
       const { hooksSnippet } = await import("../lib/wake.js");
@@ -1249,7 +1299,7 @@ try {
             for (const k of claims) k.release();
             if (released?.receipt) await legacyPipe.release(me);
           };
-          if (shown.length) out = { text: shown.map(inbox.format).join("\n\n"), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
+          if (shown.length) out = { text: shown.map(inbox.format).join("\n\n"), note: inbox.batchNote(shown), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
           else await undo();
         } else if (r.state === "bound") {
           // Keeps the session's receipt policy; claims use the configured lease.
@@ -1257,11 +1307,12 @@ try {
           const pipe = pipes.get(r.store.dir);
           // A message that cannot be read is an error (nothing is acknowledged); the current policy
           // is applied, and messages it holds back join their requests.
+          await (await import("../lib/ownersig.js")).completeSeen(home(), pipe); // owner-channel replay records first (design 7.2)
           const batch = await pipe.take(consumer, { screen: contacts.screenFor(sessionOfDir(r.store.dir)) });
           if (batch?.quarantined?.length) await contacts.adopt();
           if (batch && (batch.messages.length || batch.damaged?.length)) {
             const notes = (batch.damaged ?? []).map((f) => `(A stored message was damaged and was set aside, unread, in ${f}.)`);
-            out = { text: [...notes, ...batch.messages.map((m) => inbox.format(m.msg))].join("\n\n"), receipt: batch.receipt, pipe };
+            out = { text: [...notes, ...batch.messages.map((m) => inbox.format(m.msg))].join("\n\n"), note: inbox.batchNote(batch.messages.map((m) => m.msg)), receipt: batch.receipt, pipe };
           }
         }
         if (out || Date.now() >= deadline) break;
@@ -1273,7 +1324,7 @@ try {
       }
       const footer = out.receipt && noAck ? `\nReceipt: ${out.receipt} (acknowledge with: hoptell ack ${out.receipt} ${bySession ? `--session "${target}"` : target})` : "";
       // Acknowledge only after the output is written (automatic mode); a failed write keeps them.
-      process.stdout.write(`${out.text}\n\n${inbox.NOT_YOUR_USER}${footer}\nReply with send_message, then start this listener again.\n`, async (err) => {
+      process.stdout.write(`${out.text}\n\n${out.note ?? inbox.NOT_YOUR_USER}${footer}\nReply with send_message, then start this listener again.\n`, async (err) => {
         if (err) {
           if (out.undo) await out.undo(); // not printed: the messages stay
           else for (const k of out.claims ?? []) k.release();
@@ -1301,6 +1352,7 @@ try {
         bound = r.store;
       }
       const pipe = await openStore(bound);
+      await (await import("../lib/ownersig.js")).completeSeen(home(), pipe); // owner-channel replay records first (design 7.2)
       const r = await pipe.ack(receipt);
       if (r !== "ok") fail(`unknown receipt ${receipt}: it may have expired (its messages were returned to the inbox) or be mistyped`);
       console.log("Acknowledged.");

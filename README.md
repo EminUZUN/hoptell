@@ -155,7 +155,7 @@ Check: `hoptell list` should connect and print the peers (none yet).
 ```sh
 claude mcp add --scope user hoptell -- hoptell mcp
 hoptell mcp-http [--port 7790]            # the same over HTTP on 127.0.0.1 (see above)
-hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>
+hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>
 hoptell hook-header                       # the hook registration header for an HTTP client
 ```
 
@@ -469,7 +469,11 @@ member token, `<host>-<n>` with the shared token. `list_peers` shows the name in
 A session holds its name with a lease. While it is online, another connection cannot take
 the name: a second agent session with the same name waits until the name is free, and
 `hoptell wait` stops with an error (`--wait-for-name` waits instead, and `--replace` takes the
-name over once, for the same member). When a session's connection drops, the name is reserved
+name over once, for the same member). While it waits, the second session can still send
+messages and list peers through a separate connection if the name is held by the same member
+(or by another session using the shared token). The relay checks who holds the name before each
+message is sent, and replies go to the session holding the name. This requires a relay updated
+for this feature. Other tools are unavailable until the second session holds the name. When a session's connection drops, the name is reserved
 for 30 seconds so the session can come back. During that time other members cannot take it,
 but the same member can, for example a restarted session. All shared-token sessions count as
 one member here. A session that exits cleanly frees the name immediately.
@@ -974,6 +978,186 @@ relay's policy can refuse uploads with `"transfers": [{ "from": "group:<name>", 
 (selectors as in its rules, the first match decides, default allow); a group's identity-provider
 groups count as the uploader is signed in now.
 
+## Spawning agents
+
+An agent session of yours can start another agent on the same machine for one task, within
+limits you set in advance. Only one setup is enabled: Codex in headless mode with its
+`read-only` sandbox, on the tested Codex 0.162.1 build. Before each run, hoptell checks the
+installed Codex files against that build and refuses others. Other CLIs, Codex in tmux and other
+argument shapes are refused too.
+
+**Profiles.** A profile is a JSON file you write in `~/.hoptell/agents/profiles/<id>.json`
+(schema: `schema/agent-profile.schema.json`). It names the CLI, the mode and sandbox, the folders a
+run may work in, the relays and roles the run gets, which sessions may use it (`spawners`),
+whether you confirm each run (`confirm`), and limits: live runs, runs per hour, lifetime (30
+minutes by default, at most 240 in headless mode), task size and result size. hoptell uses a
+profile only while its content is exactly what you approved. After any edit, approve it again.
+
+**Approving.** `hoptell agents profiles` lists your profiles and their state, and `hoptell ui`
+shows the same view with the command line hoptell will run. For a Codex profile, `hoptell agents
+profile approve <id>` first prints this warning and approves nothing:
+
+> Spawned Codex runs use your macOS account. A run may read account-readable files, including
+> relay member tokens and the sealed MLS device record. It could send a token in a hoptell
+> message or its result even when direct shell writes and network access are denied. Anyone with
+> that token can sign in as your member. Approve this profile only if you trust the tasks you
+> assign and the files the run may read. Access to the Keychain and the device-state sealing key
+> has not been tested.
+
+After reading it, approve the profile with `hoptell agents profile approve <id> --accept-read-risk`.
+`hoptell ui` shows the warning above its approve button.
+
+**Running.** When a profile exists as an agent session starts, its hoptell MCP server offers
+`spawn_agent`, `list_agents` and `stop_agent`. MCP over HTTP offers them only to clients added with
+`hoptell mcp-http client add <label> --agents`, and hosted endpoints never offer them. The task
+goes to the new agent on standard input, and a Codex run's working folder must be inside a Git work
+tree. When the run ends, hoptell attempts to send the result to the spawning session as a peer
+message; if delivery fails, the result stays available locally, and `hoptell agents result <run>`
+prints it. With `"confirm": "always"`, a run waits for you: `hoptell agents confirm <run> --start`
+or `--discard`, or `hoptell ui`. The default is `always` when a granted relay is not classified as
+local; hoptell classifies an install-created entry or one named `local` as local. A run waiting for
+confirmation expires after an hour and is marked discarded at the next cleanup. `hoptell agents
+list` shows runs, and `hoptell agents stop <run>` stops one.
+
+**What a run can't do.** A run gets its own hoptell MCP server with six tools: `list_peers`,
+`send_message`, `wait_for_message`, `read_inbox`, `ack_messages` and `read_task`. It can't spawn
+agents, use `ask_owner`, see or answer your pending decisions, or send encrypted messages. Codex's
+`read-only` sandbox denies its shell writes and network access. At the end of its lifetime, or when
+you stop it, hoptell attempts to stop the run and its recorded descendants; it reports any it
+cannot confirm stopped. Its messages, including its result, are peer messages, never your approval.
+In `plain` mode, Codex can start a sub-agent. In real-spawn tests, a fresh Codex sub-agent received
+the run-only hoptell tools, and its command writes and network requests were denied. If your
+encryption policy for your own member is `required`, spawning is refused and results are not sent;
+`hoptell agents result <run>` still prints them.
+
+The hoptell tools limit what hoptell gives a run, not what the process can read: as the warning
+says, a run uses your account. Use spawning only for tasks and folders you would trust with your
+hoptell files.
+
+**Path-deny hardening (opt-in, codex-cli 0.162.1 only).** A read-only Codex headless profile can
+set `"codex": {"headlessMode": "hardening"}`. Changing the mode changes the profile, so you approve
+it again. In this mode hoptell starts Codex with a per-run permission profile that asks Codex's OS
+sandbox to deny reads of the hoptell home, your relays file and the token files it names, and
+CODEX_HOME. Writes and network access stay denied, as in `plain`, and Codex sub-agents are turned
+off. The mode is available only on the exact Codex 0.162.1 binaries of its gate record; any other
+version is refused (`adapter_gate_unverified`).
+
+What was tested: hoptell's gate run showed Codex's sandbox enforcing this profile for commands
+and tools that a scripted test model called. The read checks used a local test model provider,
+because the production model declines to probe these paths; the production model and provider
+were not tested on these reads.
+
+It is hardening, not containment:
+- the run still uses your account and can read whatever else your account can read;
+- Codex adds a read entry for its own per-session helper folder inside CODEX_HOME
+  (`<CODEX_HOME>/tmp/arg0/...`), and a file placed there was readable;
+- workspace-managed Codex configuration can change what applies. When Codex's cloud-config
+  output is not the expected report of none, hoptell adds a note to the run's result and keeps the
+  run going;
+- other processes running as you are not affected.
+
+Without the field, a profile uses `plain`, the mode described above.
+
+## The owner channel over Telegram
+
+Your agents can ask you a question with the `ask_owner` tool, and you can send them instructions,
+from a Telegram chat on your phone. One bot serves your agents on every machine: a single
+process, the bridge (`hoptell telegram run`), polls the bot and talks to your agents through the
+relay as a peer of your own member. It is off until you set it up.
+
+**Before you start.** You need a bot of your own: create one with Telegram's
+[@BotFather](https://t.me/BotFather) and copy its token. The bridge needs a member token (not a
+shared token) on a relay that supports the recipient check (`to_member`); the relay of this
+version does, and an older relay must be upgraded first. Buttons and agent commands also need the
+relay to confirm which agents are yours (`list_own`, the same version). Telegram is a third party,
+and bot chats are not end-to-end encrypted: read "The owner channel over Telegram" in
+[PRIVACY.md](PRIVACY.md), and never put secrets in a question.
+
+**Setup (the bridge machine).**
+
+```
+hoptell telegram setup [--relay <alias>] [--name owner] < token.txt   # the token on standard input only
+hoptell telegram run                                                    # keep it running
+hoptell telegram pair                                                   # prints a one-time code
+```
+
+`setup` checks the bot with Telegram and stores the token in the OS keychain (or the encrypted
+credential file). The first setup also creates the bridge's signing key there and prints its pin;
+a setup with a new token for the same bot keeps the key and every pin. The bridge joins the relay under its own
+name (`owner`, with the relay's name prefix, such as `me-owner`). If a webhook is set on the bot,
+`setup` and `run` stop: hoptell never deletes it. One bridge per bot: a second poller makes the
+bridge stop, not compete.
+
+**Pairing.** `hoptell telegram pair` prints a code that works once, for 10 minutes. Send
+`/start <code>` to your bot from your own account, in a private chat, while the bridge runs. That
+binds your Telegram user id and that chat. Everything from any other user, group or chat is
+dropped without an answer. The code is not case-sensitive. A wrong code gets no answer, and five
+wrong codes void it.
+
+**Trust (each agent machine).** Run the printed `hoptell telegram trust '<pin>'` on every machine
+whose agents use the channel (setup trusts it on its own machine). Only a message signed with a
+trusted bridge key is shown to an agent as yours. Without a pin, `ask_owner` is not offered.
+
+**Questions.** An agent calls `ask_owner` with a question, optional choices (2 to 6) and an
+expiry. You get a card naming the agent and its relay. Answer by replying to the card, or tap a
+choice. The first answer wins; the card then shows it. The agent receives your answer as a
+message with the Sender line "your owner, through the owner channel …". An unanswered question
+expires, and the agent is told.
+
+**Instructions and targeting.** Any of these sends a signed instruction to one of your own
+agents:
+
+- `/msg` (or `/peers`), tap an agent's name, then reply to the prompt that opens;
+- the agent's own command from the bot's menu: `/<agent>` opens the same prompt, and
+  `/<agent> <text>` sends at once;
+- `@<name> <text>`, with the agent's name with or without the relay's prefix;
+- a reply to any bot message that names one agent: a prompt, a "Sent to …" confirmation, or a
+  "Not sent" note.
+
+A reply to a question card that is already closed asks first: tap "Send to <agent>" within 10
+minutes to send it as a new instruction. Tapping an agent's name and a bare `/<agent>` only open a
+prompt; the explicit "Send to <agent>" tap sends your stored reply as an instruction. `@all` and roles are not supported, and only your own member's agents can
+be reached: the relay checks the recipient before delivery.
+
+**Commands.** The bot's menu, set for your paired chat only, holds `/pending` (open questions:
+agent, reference and age), `/peers` (your agents, with a button for each one online, up to 50),
+`/msg` (pick an agent, also from at most 50 buttons) and `/help`, then one command per agent
+online: its name, lower-cased, with `-` as `_` (`me-Big-Bot` becomes `/big_bot`). An agent gets
+no command when its name is longer than 32 characters or is a reserved word, or when two agents'
+names give the same command (`alice` and `Alice`, `my-bot` and `my_bot`): then neither gets one
+while both are online and normally for at least 24 hours after one of them was last seen. The
+bridge checks your agents again before it acts on a command and refuses one that is ambiguous.
+After the collision clears, the command may reach the remaining agent; use `@<name> <text>` to name
+the recipient exactly, or `/msg` when the agent's button is shown. The menu shows at most 100
+commands, the four above and up to 96 agents; it is updated within about a minute as agents come
+and go.
+
+**What it means.** A verified answer or instruction is your word for the agent's task. It never
+approves a hoptell decision (contacts, devices, profiles, spawn confirmations) or a CLI permission
+prompt. Statuses the bridge generates (expired, cancelled) are labelled as automatic.
+
+**Status, unpairing and turning it off.**
+
+- `hoptell telegram status` (and `hoptell doctor`) shows the bot, the run state, pairing, pins and
+  counts, never the token, chat id or text.
+- `hoptell telegram unpair` forgets the paired chat and tries to remove its command menu; if
+  Telegram does not confirm the removal, the bridge tries again when it runs. Pair again with
+  `hoptell telegram pair`.
+- `hoptell telegram unpair --all` (with the bridge stopped) tries to send cancellation statuses
+  for open questions and to remove the menu, then clears the bridge's configuration, pairing and
+  state and tries to remove its token and signing key; check its output. If Telegram does not confirm the menu's removal, the command says so, and the next
+  run of the same bot on this machine tries again.
+- `hoptell telegram key next` and `key commit` rotate the signing key in stages; `trust --add`,
+  `--remove-key` and `--revoke` manage pins.
+- `HOPTELL_OWNER_CHANNEL=off` on an agent machine hides `ask_owner` and turns off verification:
+  owner messages then show as ordinary peer messages.
+- When your encryption policy for your own member is `required`, the owner channel does not run
+  (it sends plaintext through the relay): `ask_owner` refuses, and `hoptell telegram run` exits
+  with code 78, which a service manager should not restart on.
+
+Telegram keeps undelivered updates for 24 hours: what you send while the bridge is down longer
+than that is lost.
+
 ## CLI
 
 ```
@@ -996,6 +1180,13 @@ hoptell listen [--no-ack] --session <folder> [seconds]  # the same, for the fold
                                       # prints the messages, then acknowledges them; --no-ack prints a receipt instead
 hoptell ack <receipt> (<name> | --session <folder>)     # acknowledges messages printed with --no-ack
 hoptell doctor                        # checks settings, relay, login, inbox and tmux; never prints the token
+hoptell agents profiles              # agent profiles and their approval state (see "Spawning agents")
+hoptell agents profile approve <id> [--accept-read-risk]
+hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
+hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
+hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it
+hoptell telegram trust '<pin>' [--add] | --remove-key <key id> [--realm <realm id>] | --revoke <realm id>
+hoptell telegram key next | key commit   # rotate the bridge's signing key (bridge stopped)
 hoptell hooks                         # prints Claude Code hook settings for hook delivery without the plugin
 hoptell snapshot <file>               # prints a UTF-8 file snapshot with its SHA-256, for review
 hoptell snapshot --check <sha256> <file>  # exit 0 if the bytes match; nonzero if different or the check fails
@@ -1030,6 +1221,7 @@ literal, and an empty value counts as unset.
 | `HOPTELL_RECEIPTS` | peers | `on` (default): messages stay until acknowledged; `off`: reading removes them |
 | `HOPTELL_NOTIFY` | peers | `off` disables desktop notifications about senders waiting for your decision |
 | `HOPTELL_ELICITATION` | peers | `read_inbox`: `read_inbox` may ask you about held messages in the client's dialog (allow-once or later); off otherwise |
+| `HOPTELL_OWNER_CHANNEL` | peers | `off` hides `ask_owner` and turns off owner-channel verification; default `on` |
 | `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440) |
 | `HOPTELL_HOST`, `HOPTELL_PORT` | relay | listen address (required) and port (default 7777) |
 | `HOPTELL_MEMBERS` | relay | members file with per-member tokens |

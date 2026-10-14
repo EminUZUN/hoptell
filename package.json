@@ -25,7 +25,8 @@
     "lint": "eslint .",
     "test:e2e": "node test/e2e/run.mjs",
     "test:compat": "node test/compat.mjs",
-    "test:oidc": "node --test test/keycloak/keycloak.test.mjs"
+    "test:oidc": "node --test test/keycloak/keycloak.test.mjs",
+    "test:real-cli": "node --test --test-concurrency=1 test/real-cli/*.test.js"
   },
   "engines": {
     "node": ">=22"

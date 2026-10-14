@@ -119,7 +119,7 @@ const PROMPTS = [
   [/New MCP server found in this project/, ["Up", "Up", "Enter"]],
   [/tokyo night|Select a theme|Choose.*theme/i, ["Enter"]],
 ];
-const READY = /(^|\n)\s*[>›❯]\s*(\n|$|Try |Ask |Type )/;
+const READY = /(^|\n)\s*[>›»❯]\s*(\n|$|Try |Ask |Type )/;
 
 async function settle(host, target, name, client) {
   for (let i = 0; i < 120; i++) {

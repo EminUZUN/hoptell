@@ -9,12 +9,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { createAccess, loadPolicy } from "../lib/access.js";
 import { MAX_CONNECTIONS, adminRequest, createAdmin, socketPath, startAdminSocket } from "../lib/admin.js";
 import { startAdminUi } from "../lib/adminui.js";
 import { SECURITY_HEADERS } from "../lib/loopbackui.js";
-import { loadMembersFile, revokeMember } from "../lib/members.js";
+import { loadMembersAndHosts, loadMembersFile, revokeMember } from "../lib/members.js";
 import { auditedChange } from "../lib/admincli.js";
 import { loadRealm, lockStateDir } from "../lib/realm.js";
 import { newMemberId, startRelay } from "../lib/relay.js";
@@ -495,4 +496,61 @@ test("UI (3.4's shared gate): one origin, a single-use launch token, the session
   // A stopped relay: the page says so, nothing is opened.
   await w.sock.close();
   assert.match((await get(port, "/members", { cookie })).body, /The relay is not running/);
+});
+
+test("relay: a state directory too long for the admin socket stops startup before it says it is listening, naming the limit and the fix", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { default: os } = await import("node:os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-sock-"));
+  try {
+    const state = path.join(dir, "s".repeat(Math.max(1, 110 - dir.length)));
+    const bin = new URL("../bin/hoptell.js", import.meta.url).pathname;
+    const r = spawnSync(process.execPath, [bin, "relay", "--host", "127.0.0.1", "--port", "0", "--state-dir", state], { env: { ...process.env, HOPTELL_TOKEN: "t".repeat(64), HOPTELL_MEMBERS: "" }, encoding: "utf8", timeout: 10_000 });
+    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+    assert.doesNotMatch(`${r.stdout}${r.stderr}`, /listening/);
+    assert.match(r.stderr, /the admin socket's path ".+admin\.sock" is \d+ bytes; keep it within hoptell's 103-byte cross-platform limit for Unix socket paths by using a shorter state directory \(--state-dir or HOPTELL_STATE_DIR\)/);
+    assert.equal(fs.existsSync(state), false, "nothing was created");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the running relay's admin reads systemd's LoadCredential copy (0440 in its credentials directory) as the relay does; without that context it stays strict", { skip: process.platform === "win32" }, async (t) => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-adm-cred-")));
+  const state = path.join(root, "state");
+  // The systemd layout, with this user standing in for root (`trust`): a 0440 copy in a 0550 directory.
+  const creds = path.join(root, "run-credentials");
+  const svc = path.join(creds, "hoptell-relay.service");
+  fs.mkdirSync(svc, { recursive: true });
+  const members = membersFile(svc);
+  fs.chmodSync(members, 0o440);
+  fs.chmodSync(svc, 0o550);
+  t.after(() => {
+    fs.chmodSync(svc, 0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const membersRead = { credentialsDir: svc, trust: { rootUid: process.getuid(), root: creds } };
+  const release = lockStateDir(state);
+  t.after(() => release());
+  const realm = loadRealm(state);
+  const db = openRelayStore({ dir: state, fullfsync: false });
+  t.after(() => db.close());
+  const access = createAccess({ stateDir: state });
+  const readMembers = () => loadMembersAndHosts(members, membersRead).members;
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members: readMembers(), realm: { id: realm }, access, log: () => {} });
+  t.after(() => relay.close());
+  const admin = createAdmin({ stateDir: state, db, realm, relay, access, config: { members }, apply: { readMembers, members: (l) => relay.reload(l), policy: (p) => access.setPolicy(p) }, membersRead });
+  const view = await admin.call("members");
+  assert.deepEqual(view.rows.map((m) => m.name).sort(), ["alice", "bob", "carol"], "the members view reads the copy");
+  assert.deepEqual((await admin.call("members", { member: "bob" })).rows.map((m) => m.id), [ID.bob]);
+  assert.deepEqual((await admin.call("devices", { member: "alice" })).rows, [], "a member name resolves to its id");
+  await admin.call("grants", { member: "carol" });
+  // observe(): an open intent is settled with what the file shows, not "unreadable".
+  await admin.call("audit_intent", { action: "members.add", target: "alice" });
+  assert.equal(admin.settleOpenIntents("relay"), 1);
+  assert.equal(rows(db).find((r) => r.state === "unknown").detail.observed, "as_intended");
+  // The same file without the relay's credentials context (the offline tools): refused as before.
+  const strict = createAdmin({ stateDir: state, db, realm, config: { members } });
+  await assert.rejects(strict.call("members"), /holds tokens/);
+  await assert.rejects(strict.call("devices", { member: "alice" }), /holds tokens/);
 });

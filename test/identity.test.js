@@ -57,6 +57,29 @@ test("the realm id is created once, kept, and never silently replaced", (t) => {
   }
 });
 
+test("a state directory reached through a symlink (systemd DynamicUser) is checked where it resolves", { skip: !posix }, (t) => {
+  const base = path.dirname(tmp(t));
+  const real = path.join(base, "private", "hoptell");
+  fs.mkdirSync(real, { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.join(base, "private"), 0o700);
+  const link = path.join(base, "hoptell");
+  fs.symlinkSync(real, link);
+  const id = loadRealm(link);
+  assert.match(id, REALM_ID_RE);
+  assert.equal(loadRealm(link), id, "stable across starts");
+  assert.ok(fs.existsSync(path.join(real, "realm.json")), "the realm file is in the resolved directory");
+  const release = lockStateDir(link);
+  release();
+  fs.chmodSync(real, 0o755);
+  assert.throws(() => loadRealm(link), /open to other users/, "the resolved directory's mode is checked");
+  fs.chmodSync(real, 0o700);
+  const file = path.join(base, "plain-file");
+  fs.writeFileSync(file, "x");
+  const fileLink = path.join(base, "to-file");
+  fs.symlinkSync(file, fileLink);
+  assert.throws(() => loadRealm(fileLink), /EEXIST|not a directory/, "a symlink to a file is refused");
+});
+
 test("concurrent first starts agree on one realm id", async (t) => {
   const dir = tmp(t);
   const url = new URL("../lib/realm.js", import.meta.url).href;

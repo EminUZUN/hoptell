@@ -14,8 +14,12 @@
 // closed until the review's digests are declared in the code. Without --package it packs this
 // repository (npm pack) into a temporary directory and checks that.
 //
-// The release workflow (.github/workflows/release.yml) runs it on the packed package in the step
-// "Release gate (design 3.5)", before "Stage the npm release".
+// The release workflow (.github/workflows/release.yml) runs both on the packed package, in the
+// step "Release gate (design 3.5)" before "Stage the npm release": --records first, then the
+// ordinary check, so the ordinary check imports only bytes --records has tied to the records. The
+// ordinary check reads REVIEWED_BINDING by importing the package's lib/mls/openmls.js in a child
+// process (declaredReviewedDigests); a module that does not load or a value of another shape fails
+// it.
 //
 //   node scripts/release-check.mjs --package DIR [--binding-root DIR]
 //   node scripts/release-check.mjs --records [--package DIR] [--repo DIR] [--records-dir DIR] [--binding-root DIR]

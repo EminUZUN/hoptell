@@ -12,6 +12,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { settingsContext } from "../lib/decisions.js";
+import { agentsWorld, profileDoc, writeProfile } from "./agents-helpers.js";
 import { LIMITS, SECURITY_HEADERS, esc, startOwnerUi } from "../lib/ownerui.js";
 import { openBound } from "../lib/session.js";
 import { openStore, processConsumer } from "../lib/store.js";
@@ -596,4 +597,49 @@ test("A12: a verify page for a member with no visible devices still says a faile
   assert.match(page, /has no enrolled devices you can see/);
   assert.match(page, /<p class="warn"><strong>Not recorded:<\/strong> what the relay lists of your own devices could not be recorded/);
   assert.equal(formsOf(page).filter((f) => f.action === "/decide").length, 0);
+});
+
+test("agent profile approval view: the generated command line for each mode is shown (design 7.1)", async (t) => {
+  const w = agentsWorld(t);
+  writeProfile(w.home, profileDoc(w.work, { modes: ["headless", "tmux"] }));
+  const ui = await startOwnerUi({ home: w.home, sources: { agents: { homedir: w.homedir } }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(w.home, "s.env"), relaysFile: path.join(w.home, "none.json") }) });
+  t.after(() => ui.close());
+  const cookie = await launch(ui);
+  const page = await get(ui, cookie, "/decision?id=agent-profile:codex-reviewer");
+  assert.equal(page.status, 200);
+  const body = unesc(page.body).replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  assert.match(body, /headless: <code>\S*codex exec --ignore-user-config --ignore-rules --ephemeral --json -s read-only /);
+  assert.match(body, /tmux: <code>\S*codex -s read-only -a on-request /);
+  assert.ok(body.includes('"mcp", "--run", "<run>", "--home", "<home>"'), body);
+  // R7: the Codex warning, verbatim, above the approval form.
+  const { CODEX_APPROVAL_WARNING } = await import("../lib/agents.js");
+  const at = body.indexOf(`<p class="warn">${CODEX_APPROVAL_WARNING}</p>`);
+  assert.ok(at >= 0, "the Codex approval warning is shown");
+  const form = body.indexOf('action="/decide"');
+  assert.ok(form > at, "before the approval form");
+});
+
+test("spawn confirmation view: the task in full, the command line, the spawner; start and discard forms (design 7.1)", async (t) => {
+  const w = agentsWorld(t);
+  writeProfile(w.home, profileDoc(w.work, { confirm: "always" }));
+  const { readProfile, withAgentsLock, writeApproved } = await import("../lib/agents.js");
+  const { createRunFiles, newRunId, runPaths } = await import("../lib/agentruns.js");
+  const digest = readProfile(w.home, "codex-reviewer", { homedir: w.homedir }).digest;
+  await withAgentsLock(w.home, () => writeApproved(w.home, "codex-reviewer", digest));
+  const run = newRunId();
+  const task = "please review <b>this</b>\nline two";
+  await withAgentsLock(w.home, () => createRunFiles(w.home, { run, profile: "codex-reviewer", profileDigest: digest, cli: "codex", mode: "headless", name: "codex-rev-1a2b", roles: ["reviewer", "spawned"], wireNames: { local: "me-codex-rev-1a2b" }, defaultAlias: "local", cwd: w.work, spawner: { name: "lead-session", wireName: "me-lead" }, state: "pending-confirmation", created: new Date().toISOString(), pendingUntil: new Date(Date.now() + 3_600_000).toISOString(), lifetimeMinutes: 30, limits: { taskBytes: 32768, resultBytes: 65536 }, pass: [], plan: { command: "/bin/codex", args: ["exec", "-s", "read-only", "-"], stdin: "task", result: { from: "file" } }, taskDigest: crypto.createHash("sha256").update(task).digest("hex") }));
+  fs.writeFileSync(runPaths(w.home, run).task, task, { mode: 0o600 });
+  const ui = await startOwnerUi({ home: w.home, sources: { agents: { homedir: w.homedir } }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(w.home, "s.env"), relaysFile: path.join(w.home, "none.json") }) });
+  t.after(() => ui.close());
+  const cookie = await launch(ui);
+  const page = await get(ui, cookie, `/decision?id=spawn:${run}`);
+  assert.equal(page.status, 200);
+  assert.ok(page.body.includes("please review &#60;b&#62;this&#60;/b&#62;\nline two"), "the task in full, escaped");
+  assert.ok(!page.body.includes("<b>this"));
+  assert.ok(unesc(page.body).includes("Command line: <code>/bin/codex exec -s read-only - < task</code>"));
+  assert.ok(page.body.includes("lead-session"));
+  const forms = formsOf(page.body).map((f) => f.fields.action);
+  assert.deepEqual(forms.sort(), ["discard", "start"]);
+  assert.ok((await get(ui, cookie, "/pending")).body.includes(`/decision?id=spawn%3A${run}`));
 });

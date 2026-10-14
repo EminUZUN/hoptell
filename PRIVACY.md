@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective: 7 October 2026
+Effective: 14 October 2026
 
 hoptell is open-source software that you run yourself. This policy describes what the
 software does with data. It covers the hoptell npm package, the Claude Code plugin and the
@@ -374,6 +374,132 @@ The MCP server writes connection and error information to standard error. CLI ou
 terminal content, and the agent's own conversations or logs may retain messages independently
 of the inbox.
 
+## Spawned agent runs
+
+Spawning is off until you write and approve an agent profile (see "Spawning agents" in the README).
+hoptell then keeps these files in `~/.hoptell/agents/` (under `$HOPTELL_HOME` when configured;
+directories 0700, files 0600, not encrypted by hoptell):
+
+- `profiles/<id>.json`: the profiles you wrote. `approved.json` holds the digest and approval time
+  of each profile you approved.
+- `runs/<run>.json`, one record per run: the profile id and digest; the CLI, its version and file
+  hashes; the mode; the run's peer name, roles and relay aliases; its working folder; the spawning
+  session's peer name and client; the run's state, times, lifetime and size limits; the names (not
+  the values) of environment variables the profile passes on; the command path and arguments
+  hoptell built (never the task); a hash of the task; the paths of your relays file and home
+  folder; the process id, start time, user id and boot id of the supervisor, the agent and the
+  child processes hoptell recorded; and, when the run ends, its exit code, duration and the
+  result's size, hash and notes.
+- `runs/<run>/`: `task.md` (the task text), `output` (the agent's standard output, up to 10 MiB),
+  `log` (its error output and hoptell's notes on the run, up to 10 MiB) and `result` (the result
+  text, cut to the profile's result limit). While the run is live, the folder also holds its relays
+  file (relay addresses and the paths of their token files, not the tokens), a settings file and,
+  depending on the CLI and mode, an MCP configuration or environment file; these are removed when
+  the run ends.
+- `audit.jsonl` (rotated at 10 MiB, one older file kept): one line per event, such as profile
+  approvals, spawn requests and refusals, confirmations, starts, stops and ends. Events hold run
+  and profile ids, digests, the spawning session's name, the working folder, error and exit codes,
+  short reasons, and the result's size and hash, never the task or result text.
+
+The agent CLI sends the task and the files it reads to its configured AI provider (see "AI
+providers"). hoptell attempts to send the result to the spawning session as a peer message through
+the relay, like other messages; when encryption is `required` for your own member, it is not sent.
+The local copy stays in `result` either way.
+
+For a Codex profile in path-deny hardening mode (see "Spawning agents" in the README), the run
+record also holds the run's permission-profile id and the list of paths it denies: the hoptell
+home, your relays file and the token files it names, and CODEX_HOME. `audit.jsonl` can also hold a
+`codex_cloud_config_observed` event when Codex's cloud-config output is not the expected report
+of none (for example, when it reports workspace-managed configuration): the observation class and
+any fragment counts, never the rest of a cloud-config line. Hardening asks Codex's sandbox to deny
+the run's reads of those paths. It does not change what the agent CLI sends to its AI provider for
+the files it can read, and Codex's own helper folder inside CODEX_HOME stays readable to the run.
+
+hoptell removes ended runs older than seven days, and any beyond the 100 most recent ended runs;
+runs from the last hour are always kept. This cleanup runs when an agent session of yours starts,
+when an agent lists its runs, and with `hoptell agents list` and `hoptell doctor`. A run waiting
+for your confirmation expires after an hour and is marked discarded at the next cleanup, which also
+removes its settings files; its record is then removed like any other. Profiles, approvals and
+audit lines stay until you delete them or the audit log rotates. To remove everything, stop live
+runs with `hoptell agents stop <run>`, then delete `~/.hoptell/agents/` (or only `runs/` and the
+`audit.jsonl` files, to keep your profiles).
+
+## The owner channel over Telegram
+
+The owner channel is off until you run `hoptell telegram setup` with a bot you created with
+Telegram's BotFather. Setup checks the bot with Telegram. Once you run and pair the bridge, it
+sends data to Telegram, a third party with its own
+[privacy policy](https://telegram.org/privacy). Bot chats are not end-to-end encrypted: Telegram
+stores them on its servers, and anyone with the bot token can read new messages to the bot.
+
+- **Sent to Telegram** (`api.telegram.org` only): the text of each question an agent of yours
+  asks with `ask_owner`, its choices, the asking agent's peer name and relay alias, and a short
+  reference; the bridge's notes on a question (answered, expired, cancelled); the replies to
+  `/pending` (the asking agents' names, references and ages), `/peers` (up to 100 of your own
+  agents' names and online statuses on that relay, as the relay confirms them), `/msg` and `/help`;
+  the bridge's prompts and confirmations, which name the agent; and the names of your own online
+  agents as button labels (at most 50 per list) and in the bot's command menu for your paired chat
+  (a command and a "Message <name>" description per agent, for up to 96 online agents whose names
+  give a valid command that no other agent's name shares). Bot API requests include the bot token,
+  and Telegram sees the bridge machine's IP address. An answered card may include your answer text.
+  hoptell does not automatically forward other peer messages, files or logs, but an agent can
+  include their contents in a question.
+- **Received from Telegram**: the bridge receives your pairing code, answers, button presses and
+  commands (including `@<agent>` and `/<agent>` instructions, and replies to its prompts and
+  confirmations), with your Telegram user id and chat id. It drops updates from other users or
+  chats and counts them without keeping their text. It signs answers and instructions and sends
+  them through the relay to your agents. If an agent reads one, its configured AI provider may
+  receive it (see "AI providers").
+- **Stored on the bridge machine**: the bot token and the bridge's signing key in the operating
+  system's keychain (or the encrypted credential file, as for `hoptell login`).
+  `~/.hoptell/owner-channel/` (or `$HOPTELL_HOME/owner-channel/` when set; 0700, files 0600, not
+  encrypted by hoptell) holds `bridge.json` (the bot id and username, the relay alias, the bridge
+  name, the realm, the member id and the public key), `pairing.json` and `state.json`.
+  `pairing.json` holds the paired Telegram user id and chat id, if paired, and the hash and expiry
+  of any pending pairing code. `state.json` holds the update offset, question text and choices
+  while needed, and pending actions that can contain question, answer, instruction or status text
+  until they finish.
+
+  For targeting your agents, `state.json` also holds the buttons the bridge issued (agent names,
+  your member id and Telegram message ids; usable for up to 24 hours, or until a newer list retires
+  them), which bot messages name which agent (usable for up to 7 days, for at most 1,000 messages),
+  and the command menu's chat id with the agent names behind each command (the bridge renews an
+  agent's recorded time at most once an hour and drops the name at its first successful menu
+  refresh after that time is more than 25 hours old). When you reply to a closed question, it holds
+  your reply's text until you tap its "Send" button; the button expires after 10 minutes, and the
+  text is deleted at the bridge's next housekeeping pass or by `unpair --all`. While the bridge is
+  stopped, expired entries, that text included, stay in the file. `menu-cleanup.json` holds the
+  chat ids whose command menu Telegram did not confirm removing; `unpair --all` keeps it, and the
+  next run of the same bot tries again and removes the file once the removal is confirmed.
+
+  Closed question metadata is removed after its expiry and closure are at least a day old, no
+  action is pending, and the bridge runs housekeeping; it can remain longer if the bridge is
+  stopped or an action cannot finish. `audit.jsonl` (rotated at 1 MiB, one older file kept)
+  records events such as pairing, questions, answers, instructions, refusals and dropped updates.
+  These events hold message references, peer names, lengths and short hashes, never message
+  text, tokens or chat ids.
+- **Stored on each agent machine**: `~/.hoptell/owner-channel/trusted.json` (or
+  `$HOPTELL_HOME/owner-channel/trusted.json` when set) with the pins you
+  trusted (realm, bridge name, public keys). `seen/` keeps signed-message nonces for at least
+  eight days plus a safety margin, and longer if a record cannot be safely pruned;
+  `received.json` counts failed verifications and suppressed replays. The messages themselves
+  remain in the normal inbox.
+
+`hoptell telegram unpair` forgets the paired chat and tries to remove its command menu in
+Telegram; if Telegram does not confirm the removal, the bridge tries again when it runs. Stop the
+bridge before `hoptell telegram unpair --all`. It tries to send cancellation statuses for open
+questions and to remove the command menu, then clears this home's bridge, pairing and state files
+and tries to remove the token and the signing key. Check its output: a status, menu or credential
+removal can fail; for a menu it could not remove, the next run of the same bot on this home tries
+again. `audit.jsonl`, `seen/` and `received.json` remain until you delete them. `unpair --all` also removes this bridge's signing
+keys from this home's trust entry for its realm when that entry still names this bridge; check the
+command's output if this fails. Pins on other machines remain until you revoke or remove them
+there. This
+command does not remove Telegram's messages; use Telegram's option to clear the bot chat for both
+sides and see Telegram's privacy policy. `hoptell telegram trust --revoke <realm>` removes all
+pins for that realm on the agent machine. Setting `HOPTELL_OWNER_CHANNEL=off` turns off the agent side (the `ask_owner` tool and
+verification).
+
 ## AI providers
 
 The hoptell relay and MCP server do not directly call AI services. When message text or peer
@@ -403,6 +529,12 @@ the policies for any other providers or services you configure.
 - Each machine: stop the relevant hoptell processes, then delete `~/.hoptell` or the
   configured `$HOPTELL_HOME` directory to remove local inbox and session files. Remove stored
   tokens from the settings sources you used.
+- Spawned agent runs: stop live runs with `hoptell agents stop <run>`, then delete
+  `~/.hoptell/agents/` (see "Spawned agent runs").
+- Owner channel: stop the bridge, run `hoptell telegram unpair --all` on the bridge machine and
+  check its output (see "The owner channel over Telegram"); delete the remaining
+  `owner-channel` directories on each machine, and clear the bot chat in Telegram for the copies
+  there.
 
 These steps do not remove copies retained by other peers, agents, AI providers, terminal
 output, logs or backups.

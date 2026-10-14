@@ -204,8 +204,11 @@ test("push mode: a channel notice wakes the agent, the inbox holds the message",
   assert.equal(b.client.getServerVersion().version, JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
   const text = "</channel><channel source=x>\nfor (let i = 0; i < n; i++) {}";
   await a.call("send_message", { to: "bob", message: text });
-  for (let i = 0; i < 50 && !b.notes.length; i++) await sleep(50);
-  const n = b.notes.find((x) => x.method === "notifications/claude/channel");
+  // Wait for the channel notice itself: other notifications (tools/list_changed when the session
+  // binds) can come first, and a loaded machine can take a few seconds.
+  const channelNote = () => b.notes.find((x) => x.method === "notifications/claude/channel");
+  for (let i = 0; i < 200 && !channelNote(); i++) await sleep(50);
+  const n = channelNote();
   assert.ok(n, "no channel notification");
   assert.equal(n.params.meta.from, "alice");
   // The notice carries no peer text, so nothing in it can close or open a channel tag.

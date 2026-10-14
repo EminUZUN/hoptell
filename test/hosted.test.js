@@ -210,8 +210,9 @@ test("isolation: a session id with another tenant's token, or the same tenant's 
 
 test("deadlines: an SSE stream ends at its token's deadline (exp + the one skew)", async (t) => {
   const s = await setup(t);
-  // A token valid for 1 s past the 60 s skew already spent: exp = now - 59 s, deadline now + 1 s.
-  const short = await s.token("hanna-sub", { exp: -59 });
+  // A token valid for 3 s past the 60 s skew already spent: exp = now - 57 s, deadline now + 3 s
+  // (enough for the session and the stream to open on a loaded machine).
+  const short = await s.token("hanna-sub", { exp: -57 });
   const r = await s.raw("POST", "/mcp", { headers: { authorization: `Bearer ${short}` }, body: init() });
   const sid = r.headers.get("mcp-session-id");
   const t0 = Date.now();
@@ -219,7 +220,7 @@ test("deadlines: an SSE stream ends at its token's deadline (exp + the one skew)
   assert.equal(res.status, 200);
   await res.text().catch(() => {});
   const took = Date.now() - t0;
-  assert.ok(took < 5000, `closed at the deadline (${took} ms)`);
+  assert.ok(took < 7000, `closed at the deadline (${took} ms)`);
 });
 
 test("pre-auth limit: 30 failed requests per minute per client address, then 429", async (t) => {
