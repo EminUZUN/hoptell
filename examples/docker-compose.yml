@@ -4,7 +4,7 @@
 # The relay runs as the file's owner, so it can read the private file.
 services:
   hoptell:
-    image: ghcr.io/eminuzun/hoptell:latest # pin a version in production, e.g. :0.1.0
+    image: ghcr.io/eminuzun/hoptell:latest # in production, pin the version your clients run, e.g. :0.3.0
     restart: unless-stopped
     user: "${HOPTELL_UID:-1000}"
     ports:

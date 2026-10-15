@@ -84,7 +84,7 @@ test("a stopped engine's unacknowledged batch is shown again to the next session
   const second = await w.mcp("carol", ON);
   let out = "";
   assert.ok(await until(async () => /survives/.test((out = await second.call("read_inbox")))));
-  assert.match(out, /Shown again: it was not acknowledged in time/);
+  assert.match(out, /Shown again: an earlier read did not acknowledge it/);
 });
 
 test("backpressure: a full inbox declines, and the message arrives once room is freed, also from another process", async (t) => {

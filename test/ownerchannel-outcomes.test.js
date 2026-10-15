@@ -233,5 +233,5 @@ test("a bridge name the member token may not use stops the bridge with how to pi
   const { run } = bridgeOn(t, { home, telegram: fakeTelegram().client(), url, token: tokens.me, key: newKey(), name: "owner" });
   const r = await run;
   assert.equal(r.code, "refused");
-  assert.equal(r.message, 'the relay refused the bridge name owner: the bridge needs a member token, which may use only "<member>" or names that start with "<member>-" (4002)');
+  assert.equal(r.message, 'the relay refused the bridge name owner: the bridge needs a member token, which may use only "me" or names that start with "me-" (4002)');
 });

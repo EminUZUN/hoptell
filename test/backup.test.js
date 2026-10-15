@@ -135,7 +135,7 @@ test("a runtime without node:sqlite backup() refuses the backup", async (t) => {
   const original = sqlite.backup;
   sqlite.backup = undefined;
   t.after(() => (sqlite.backup = original));
-  await assert.rejects(backupRelay({ db: s.db, stateDir: s.state, dest: path.join(s.root, "none"), realm: s.realm }), /has no backup\(\)/);
+  await assert.rejects(backupRelay({ db: s.db, stateDir: s.state, dest: path.join(s.root, "none"), realm: s.realm }), /has no backup\(\); the relay.s backups need Node\.js 22\.16 or newer/);
   assert.equal(fs.existsSync(path.join(s.root, "none")), false);
 });
 

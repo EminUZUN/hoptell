@@ -18,7 +18,7 @@ import { RelayClient } from "../lib/client.js";
 import { agentsPaths, ensureAgentsDirs, readAudit, readProfile, withAgentsLock, writeApproved } from "../lib/agents.js";
 import { createRunFiles } from "../lib/agentruns.js";
 import { ENDED, newRunId, readRun, runPaths, signalChecked, sweep, updateRun } from "../lib/agentruns.js";
-import { discardPending, listAgents, spawnAgent, startConfirmed, stopAgent, supervisorEnv } from "../lib/agentspawn.js";
+import { agentTools, discardPending, listAgents, spawnAgent, startConfirmed, stopAgent, supervisorEnv } from "../lib/agentspawn.js";
 import { agentsCommand } from "../lib/agentscli.js";
 import * as decisions from "../lib/decisions.js";
 import { addClient, startMcpHttp } from "../lib/httpmcp.js";
@@ -101,6 +101,7 @@ async function spawnWorld(t, { profile = {}, entry = {}, approved = true } = {})
   t.after(() => owner.close());
   const links = new Map([["local", { wireName: "me-owner", peers: () => owner.list() }]]);
   const ctx = {
+    caller: "test-caller", // the spawning tools' capability (agentTools makes a random one)
     home: w.home,
     homedir: w.homedir,
     env: { PATH: process.env.PATH, HOME: w.homedir, HOPTELL_TOKEN: "never-for-a-run", HOPTELL_RELAY: "ws://never.example", OTHER_SECRET: "never-either" },
@@ -302,6 +303,10 @@ test("limits: concurrent spawns racing for the last slot (exactly one wins); the
   assert.equal((await spawnAgent(ctx, { profile: "second", task: "t", name: first.name })).error, "name_in_use");
   // The home's limit (HOPTELL_AGENTS_MAX).
   assert.equal((await spawnAgent({ ...ctx, agentsMax: 1 }, { profile: "second", task: "t" })).error, "limit_concurrent");
+  // An invalid HOPTELL_AGENTS_MAX refuses the spawn (it is not replaced by the default limit).
+  const invalidMax = await spawnAgent({ ...ctx, agentsMax: null, agentsMaxProblem: 'HOPTELL_AGENTS_MAX must be a whole number from 1 to 16, not "0"' }, { profile: "second", task: "t" });
+  assert.equal(invalidMax.error, "limit_concurrent");
+  assert.match(invalidMax.message, /HOPTELL_AGENTS_MAX must be a whole number from 1 to 16, not "0"; nothing was started/);
   // The hourly rate counts records, also ended ones, and holds for a new server (a new context).
   await updateRun(s.w.home, first.run, (r) => {
     r.state = "stopped";
@@ -355,7 +360,7 @@ test("confirmation: pending-confirmation, the view, a stale token after a profil
   assert.equal(readRun(s.w.home, r2.run).state, "running");
   const ev = readAudit(s.w.home).filter((e) => ["confirmed", "discarded"].includes(e.event)).map((e) => [e.event, e.run, e.surface]);
   assert.deepEqual(ev, [["discarded", r.run, "test"], ["confirmed", r2.run, "cli"]]);
-  await stopAgent(s.w.home, r2.run, "test");
+  await stopAgent(s.w.home, r2.run, "test", { caller: s.ctx.caller });
   // Expiry: refused once expired; the sweep discards it after an hour.
   const r3 = await spawnAgent(s.ctx, { profile: "codex-reviewer", task: "third" });
   await updateRun(s.w.home, r3.run, (x) => {
@@ -371,7 +376,7 @@ test("confirmation: pending-confirmation, the view, a stale token after a profil
   // A pending run stopped (stop_agent, hoptell agents stop) is discarded and its settings files go too.
   const r4 = await spawnAgent(s.ctx, { profile: "codex-reviewer", task: "fourth" });
   assert.equal(fs.existsSync(runPaths(s.w.home, r4.run).relays), true);
-  await stopAgent(s.w.home, r4.run, "test");
+  await stopAgent(s.w.home, r4.run, "test", { caller: s.ctx.caller });
   assert.equal(readRun(s.w.home, r4.run).state, "discarded");
   assert.equal(fs.existsSync(runPaths(s.w.home, r4.run).relays), false, "a stopped pending run's settings files are removed");
   // An expired run that another process moves on first (under the lock) is not claimed by the sweep.
@@ -449,7 +454,7 @@ test("confirmation: the start rechecks under the lock what the owner saw: profil
   const ok = await go(run);
   assert.equal(ok.error, undefined, ok.message);
   assert.equal(started, 1);
-  await stopAgent(s.w.home, run, "test");
+  await stopAgent(s.w.home, run, "test", { caller: s.ctx.caller });
 });
 
 test("confirmation: the CLI is checked again (version, help, digest) and bound to the run; the audit writes confirmed only after the start moved, confirm-refused otherwise", async (t) => {
@@ -505,7 +510,7 @@ test("confirmation: the CLI is checked again (version, help, digest) and bound t
   assert.equal(rec.cliVersionUntested, true);
   assert.deepEqual(events(run).map((e) => [e.event, e.error ?? e.decision, e.surface]), [["confirm-refused", "adapter_gate_unverified", "test"], ["confirmed", `spawn:${run}`, "test"]]);
   assert.equal(started, 1);
-  await stopAgent(s.w.home, run, "test");
+  await stopAgent(s.w.home, run, "test", { caller: s.ctx.caller });
 });
 
 test("the CLI file checked at the spawn is the one that runs: replaced before the supervisor starts it, the run fails cli_changed and nothing runs", async (t) => {
@@ -541,7 +546,7 @@ test("spawn: a Codex run outside a Git work tree is refused up front (cwd_not_gi
   execFileSync("git", ["init", "-q", plain], { stdio: "ignore" });
   const ok = await spawnAgent({ ...s.ctx, deps: { ...s.ctx.deps, start: fakeStart } }, { profile: "two-roots", task: "x", cwd: path.join(plain, "sub") });
   assert.equal(ok.error, undefined, ok.message);
-  await stopAgent(s.w.home, ok.run, "test");
+  await stopAgent(s.w.home, ok.run, "test", { caller: s.ctx.caller });
   for (const a of Object.values(JSON.parse(fs.readFileSync(new URL("./fixtures/agent-adapter-plans.json", import.meta.url), "utf8")))) assert.ok(!JSON.stringify(a).includes("--skip-git-repo-check"));
 });
 
@@ -558,18 +563,25 @@ test("an untested CLI version of a passed family starts with the warning: the ru
   assert.match(fs.readFileSync(runPaths(s.w.home, r.run).log, "utf8"), /warning: codex 0\.162\.9 is a version the adapter's tests have not covered/);
 });
 
-test("stop_agent and list_agents: a stop goes through the identity check; any run of the home", async (t) => {
+test("stop_agent and list_agents: a stop goes through the identity check; only the spawning session's runs", async (t) => {
   const s = await spawnWorld(t);
   const r = await spawnAgent(s.ctx, { profile: "codex-reviewer", task: "SLEEP" });
   assert.equal(r.error, undefined, r.message);
   assert.deepEqual((await listAgents(s.w.home)).map((x) => [x.run, x.state, x.spawner]), [[r.run, "running", "owner"]]);
-  const st = await stopAgent(s.w.home, r.run, "owner");
+  // Another session (another capability), none, or a record without one: refused, nothing signalled.
+  for (const caller of ["other-session", undefined]) {
+    const no = await stopAgent(s.w.home, r.run, "other", { caller });
+    assert.equal(no.error, "not_spawner", JSON.stringify(no));
+    assert.match(no.message, /was not started by this session; your user can stop it with hoptell agents stop r_/);
+  }
+  assert.equal(readRun(s.w.home, r.run).state, "running");
+  const st = await stopAgent(s.w.home, r.run, "owner", { caller: s.ctx.caller });
   assert.ok(["stopping", "stopped"].includes(st.state), st.state);
   const rec = await ended(s.w.home, r.run);
   assert.equal(rec.state, "stopped");
   assert.equal(rec.stoppedBy, "owner");
   assert.equal(sameIdentity(rec.agent), false);
-  assert.equal((await stopAgent(s.w.home, "r_0000000000000000", "owner")).error, "failed");
+  assert.equal((await stopAgent(s.w.home, "r_0000000000000000", "owner", { caller: s.ctx.caller })).error, "failed");
 });
 
 // ---- where the tools are registered ----------------------------------------------------------------
@@ -763,4 +775,49 @@ test("encryption required set during a run: the result is not sent; the record, 
   await agentsCommand({ args: ["result", r.run], home: s.w.home, env: {}, homedir: s.w.homedir, out: (l) => out.push(l), fail: (m) => assert.fail(m) });
   assert.match(out[0], /notes: .*requires end-to-end encryption.*; delivery: suppressed \(encryption_required\)/);
   assert.equal(out[1], `answer: WAIT:${gate}`);
+});
+
+test("a managed contacts policy that cannot be read: spawn_agent is refused (fail closed) and a running run's result is not sent", async (t) => {
+  const s = await scopedWorld(t);
+  writeEncryption(s.w.home, []);
+  fs.writeFileSync(contactsFile(s.w.home), "{invalid JSON", { mode: 0o600 });
+  const r = await spawnAgent(s.ctx, { profile: "codex-reviewer", task: "under a broken policy" });
+  assert.equal(r.error, "encryption_required", JSON.stringify(r));
+  assert.match(r.message, /^the contacts cannot be read \(.*contacts\.json is not valid JSON\), so the encryption policy for a run's plaintext result cannot be checked; nothing was started$/);
+  assert.deepEqual(await listAgents(s.w.home, { state: "all" }), [], "no record");
+  writeEncryption(s.w.home, []);
+  const gate = path.join(s.w.base, "go-broken");
+  const ok = await spawnAgent(s.ctx, { profile: "codex-reviewer", task: `WAIT:${gate}` });
+  assert.equal(ok.error, undefined, ok.message);
+  fs.writeFileSync(contactsFile(s.w.home), "{invalid JSON", { mode: 0o600 });
+  fs.writeFileSync(gate, "");
+  await ended(s.w.home, ok.run);
+  await sleep(300);
+  assert.equal(readRun(s.w.home, ok.run).delivery?.state, "suppressed");
+  assert.equal(s.inbox.some((m) => m.from === `me-${ok.name}`), false, "nothing reached the spawner");
+  assert.ok(readRun(s.w.home, ok.run).result.notes.some((n) => /not sent: the contacts cannot be read \(.*contacts\.json is not valid JSON\)/.test(n)));
+});
+
+test("stop_agent through the tools: each session's capability is its own; hoptell agents stop stops any run", async (t) => {
+  const s = await spawnWorld(t);
+  // Two owner sessions' tools over the same relay links (a stand-in for the engine's session).
+  const session = { links: [...s.ctx.links].map(([alias, l]) => ({ alias, engine: { link: { status: () => ({ name: l.wireName, realm: l.realm ? { id: l.realm } : null }), scope: () => ({ realm: l.realm, member: l.member }), list: l.peers } } })) };
+  const a = agentTools({ ...s.ctx, caller: undefined, session });
+  const b = agentTools({ ...s.ctx, caller: undefined, session });
+  const spawned = await a.call("spawn_agent", { profile: "codex-reviewer", task: "SLEEP" });
+  assert.equal(spawned.isError, undefined, spawned.content[0].text);
+  const { run } = JSON.parse(spawned.content[0].text);
+  assert.match(readRun(s.w.home, run).spawner.caller, /^[0-9a-f]{64}$/, "a digest, not the capability");
+  const other = await b.call("stop_agent", { run });
+  assert.equal(other.isError, true);
+  assert.match(other.content[0].text, /^not_spawner: run r_\w+ was not started by this session/);
+  assert.equal(readRun(s.w.home, run).state, "running", "nothing signalled");
+  const own = await a.call("stop_agent", { run });
+  assert.equal(own.isError, undefined, own.content[0].text);
+  assert.equal((await ended(s.w.home, run)).state, "stopped");
+  // A run recorded without a capability (spawned before this version): only the CLI stops it.
+  const old = await spawnAgent({ ...s.ctx, caller: undefined }, { profile: "codex-reviewer", task: "SLEEP" });
+  assert.equal((await a.call("stop_agent", { run: old.run })).isError, true);
+  await agentsCommand({ args: ["stop", old.run], home: s.w.home, env: {}, homedir: s.w.homedir, out: () => {}, fail: (m) => assert.fail(m) });
+  assert.equal((await ended(s.w.home, old.run)).state, "stopped");
 });

@@ -1,4 +1,5 @@
 import { test, after } from "node:test";
+import { ATTESTED } from "../lib/attested.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -1607,6 +1608,22 @@ test("references: the relay checks reply_to and logs references, never the text"
   assert.match(all, new RegExp(`forward attempt ref ${ack.message_id} delivery [0-9a-f-]{36} to bob`));
   assert.match(all, new RegExp(`receipt acknowledged ref ${ack.message_id} delivery [0-9a-f-]{36} by bob`));
   assert.doesNotMatch(all, /top secret/);
+});
+
+test("a decrypted message says it was encrypted and names its member by id, never the id as a name", () => {
+  const id = "m_pmcicdmuavcdpmzbwhxt2amnbm";
+  // As this machine checked it (lib/quarantine.js attest, from the message's e2ee receipt).
+  const m = { from: "xa", fromHost: "e2ee", text: "hi", ts: 0, sender: { member: { id, name: id }, auth: "member", realm: "r" }, e2ee: { device: "abcdefghijklmnopqrstuvwxya", kind: "text" }, [ATTESTED]: { owner: null, e2ee: true } };
+  const out = inbox.format(m);
+  assert.match(out, /\| from "xa" \(end-to-end encrypted\) \|/);
+  assert.doesNotMatch(out, /on e2ee/);
+  assert.match(out, new RegExp(`Sender: member ${id}, end-to-end encrypted by its device abcdefghijklmnopqrstuvwxya`));
+  assert.doesNotMatch(out, new RegExp(`member "${id}"`));
+  assert.match(inbox.format({ ...m, sender: { member: { id: "bad\nid" } } }), /Sender: unknown \(an encrypted message without a valid member id\)/);
+  // A stored mark nobody checked (no receipt, or an older record): shown as plaintext.
+  assert.match(inbox.format({ ...m, [ATTESTED]: undefined }), /from "xa" on e2ee [\s\S]*Sender: member "m_/);
+  // A plaintext message is unchanged.
+  assert.match(inbox.format({ ...m, e2ee: undefined, [ATTESTED]: undefined, fromHost: "lan", sender: { member: { id, name: "xa" }, auth: "member" } }), /from "xa" on lan [\s\S]*Sender: member "xa" \(m_/);
 });
 
 test("references: older relays and malformed metadata are reported honestly, never printed raw", async () => {

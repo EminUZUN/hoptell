@@ -56,7 +56,34 @@ and every client together; see "Upgrading" at the end of this entry.
   send-only connection. The relay accepts a send only while the name is held by the same member
   or shared-token identity. Sending this way requires a relay that supports the check.
 - When the relay refuses a name for a member token, the client, `hoptell doctor` and the
-  Telegram bridge now say which names are allowed (`<member>` or `<member>-...`).
+  Telegram bridge now say which names are allowed: the member's own name, or names that start
+  with it and `-` (the relay now tells a refused client its member's name).
+- `--help` or `-h` among a command's options (before a lone `--`) prints that command's help and
+  does nothing else. In `hoptell send`, the message text is not searched for options: a message
+  that mentions `--help` is sent, and only a message that is just `--help` or `-h` shows the help.
+  Before, some commands ran instead (`hoptell members revoke <name> --help`
+  removed the member, and `hoptell relay --help` could start a relay). `hoptell help <command>`,
+  and `help` as the first word of `agents`, `contacts`, `members`, `relay`, `telegram` and other
+  commands with subcommands, do the same. Commands now refuse options they do not know instead of
+  ignoring them. `hoptell --version` (or `-v`) prints the version. `hoptell help` now lists every
+  command and the relay's options.
+- `hoptell wait` now earns a reply allowance for the messages it prints, as an agent session
+  does: you can reply once to a message you received, even when the sender's grants do not let
+  you reach them.
+- `hoptell relay admin` views (`status`, `members`, `store` and the others) no longer create an
+  empty relay store in a directory without relay state: they say that no relay state is there.
+- `hoptell grants` refuses an invalid selector before the preview, not only when publishing.
+- `hoptell agents profile approve` refuses an invalid profile before it shows the Codex warning,
+  and refuses Codex profiles that cannot run on this hoptell (tmux mode, or headless mode with
+  the `workspace-write` sandbox).
+- `hoptell contacts show` no longer offers `allow` or `allow-once` for unencrypted messages from
+  a contact whose encryption is required, since those commands are refused.
+- A credential that cannot be saved in the OS keychain (for example `hoptell device enroll`)
+  now shows how to use the encrypted credential file instead.
+- Received encrypted messages are marked as end-to-end encrypted, and their Sender line names
+  the member's id as an id (not as its name).
+- A message shown again because an earlier read did not acknowledge it now says so, instead of
+  "not acknowledged in time".
 - `hoptell tmux`: the injector no longer presses Enter while Codex's transcript selection is
   open or when it cannot see its own notice in the prompt; a notice left in the prompt is
   submitted only on stable observations, and handed to you when you changed it. Fresh Codex
@@ -68,6 +95,39 @@ and every client together; see "Upgrading" at the end of this entry.
 - Fixed: `hoptell telegram run` exited with code 13 when the relay restarted; it now waits and
   reconnects.
 - Fixed: a relay backup whose first step met a database lock failed instead of being retried.
+- Fixed: when a managed `contacts.json` was missing, unreadable or invalid, outgoing sends
+  ignored its encryption policy and went out as plaintext, even to contacts whose encryption is
+  required. Agent sessions, `hoptell send`, the owner-channel bridge and spawned runs now refuse
+  sends and report the policy error; the bridge keeps answers until the file is fixed.
+- Fixed: after a relay restore that lost its access state, a send to a member that had not yet
+  published its grants again got a different answer from a send to an unknown name, so any
+  member could tell which names exist, hidden members included. A pending member now answers
+  `unknown peer`, matching an unknown name.
+- Fixed: in a new install, the owner's verified answers to `ask_owner` were held by contacts
+  until you allowed your own member. Signed owner-channel messages that the agent's machine
+  verified, sent by your own member, now reach the agent without a grant; blocks and a
+  `required` encryption policy still apply. The exception needs a receipt that the agent's
+  machine records when it verifies the message, and it checks the stored signature against the
+  key trusted now. `hoptell wait` no longer keeps a relay's claim that a new message was verified
+  or decrypted.
+- Fixed: on a relay that accepts both a shared token and member tokens, a protocol-1 client with
+  the shared token could take over a member's protocol-1 session of the same name, and the
+  reverse. A protocol-1 client now replaces only a session of the same member, or another session
+  using the shared token.
+- Fixed: when a members reload added a hosted member, existing shared-token connections could keep
+  that member's names. They are now disconnected, and their name reservations are released.
+- Fixed: messages stored by an older version could still show the "your owner" Sender line, or
+  count as end-to-end encrypted, because of a field that an older `hoptell wait` copied from the
+  relay. The owner-channel label and the encryption mark now require a receipt that this version
+  records when it verifies or decrypts a message, and the owner label also requires a stored
+  signature verified against a currently trusted key. Older records lose the label, and under a
+  `required` encryption policy their messages are held as plaintext.
+- Fixed: a device outside an encrypted conversation could learn from the relay's answers to its
+  sends whether the conversation's members allowed it or could not be checked. The relay now
+  checks that the sending device belongs to the conversation first, and gives a device outside it
+  an answer that does not depend on the members' access rules.
+- `stop_agent` stops only runs that the calling session started; `hoptell agents stop` still
+  stops any run.
 - The release workflow checks the package against the committed release-gate records before
   publishing.
 
@@ -156,7 +216,10 @@ and every client together; see "Upgrading" at the end of this entry.
 - Encrypted messages stay experimental until an independent review: an encrypted send's result
   says "encrypted (experimental, unreviewed)", and `hoptell doctor` says "encrypted messaging:
   experimental, not independently reviewed" whenever `HOPTELL_EXPERIMENTAL_E2EE` is set. An MLS
-  binding named by `HOPTELL_MLS_WASM` or `HOPTELL_MLS_DRIVER` always keeps that label.
+  binding named by `HOPTELL_MLS_WASM` or `HOPTELL_MLS_DRIVER` always keeps that label. No MLS
+  library is loaded by default. To try it, set `HOPTELL_MLS_WASM` to the binding shipped in the
+  package (`lib/mls/binding`, by absolute path) or to a wasm-bindgen build for Node.js; when a
+  binding cannot be loaded, the error says why. See "Encrypted messages" in the README.
 - Relay administration (`hoptell relay admin`) for the relay owner, on the relay host: views of
   members (whether each has a token and how it is stored, never the token), devices, the policy,
   grants summaries, revocations, metrics and the store's health, and an audit log of every change
@@ -300,6 +363,52 @@ and every client together; see "Upgrading" at the end of this entry.
   token used by two credentials.
 - `hoptell doctor` shows the relay realm, the member it signed in as, and whether
   the local relay profile agrees.
+- An option that takes a value is refused when the value is missing or empty (exit 2). Before, the
+  CLI silently used the option's default: for example, `hoptell local-relay install --port`
+  installed on port 7788, and `hoptell grants allow '*' --until` previewed a permanent allow. An
+  identity-provider subject that starts with `--` is given as `--subject=<subject>` (`members
+  link|unlink`, `mcp-hosted link|unlink`).
+- Invalid `hoptell relay` options and configuration files are rejected before the relay creates or
+  locks its state directory. This includes a `--wal-hard-limit` below the default soft limit
+  (256MiB) when `--wal-soft-limit` is not set. An invalid `--metrics-port` is refused before
+  the relay starts listening. `--transfer-quota` and `--transfer-member-quota` values are checked
+  even without `--experimental-e2ee`, and the relay says that they are ignored without it.
+- `hoptell wait` and `hoptell listen` now require `[seconds]` to be an integer from 1 to
+  2,147,483. Previously, zero and nonnumeric values used the default, while negative and
+  fractional values were accepted. Help and README now state the 300- and 3,600-second defaults.
+- `hoptell login` checks its options (`--mode`, `--store file`, `--client-credentials` with
+  `--client-id` and `--client-secret-file`, not with `--device`) before it reads or creates
+  anything or contacts the relay. If the relay offers no sign-in, `login` now says so instead of
+  "the relay answered 426".
+- `hoptell mcp-http --port` and `hoptell relay admin ui --port` refuse a value that is not a port
+  number with a clear message. `hoptell mcp-http client add` refuses an invalid `--name`, and
+  `client remove` on a home without clients says there is no such client.
+- Invalid `contacts` and `grants` arguments no longer create contacts files in a new home. With
+  device keys enabled, this includes missing required operands, invalid encryption modes, invalid
+  `contacts verify --how` values, and `contacts verify --yes` unless both `--how` and `--set` are
+  supplied. `list`, `send`, `grants`, `wait`, and `login` also leave a new home untouched when
+  `HOPTELL_RELAY` is missing, is not a URL, has an unsupported scheme, contains a fragment, or is a
+  `ws+unix:` URL with an empty path, or when `HOPTELL_PROFILE` is invalid. `login` also checks that
+  the URL is `wss://` (or loopback) first.
+- `list`, `send`, `grants`, and `wait` check `HOPTELL_PROTOCOL` and `HOPTELL_NAME` (and
+  `HOPTELL_ROLES` for `wait`) before they open the contacts, and refuse a `HOPTELL_AUTH` other
+  than `token` or `login`, as agent sessions do. Before, any other value meant `token`.
+- `hoptell relay admin backup --pages` now requires a whole number of at least 16. Previously, a
+  nonnumeric value could select the default on a running relay. `hoptell members add` refuses an
+  invalid name before it opens the relay's state, and `hoptell mcp --home` without `--run` is
+  refused.
+- `hoptell telegram` subcommands and `hoptell local-relay` refuse words and options they do not
+  take (such as `telegram pair --all`, or `local-relay status --purge`) instead of ignoring them.
+  `hoptell hook-header --help` prints its help.
+- A setting with a value it does not accept is no longer read silently as its default. The relay,
+  an agent session, or a command refuses to start for `HOPTELL_REQUIRE_MEMBERS`,
+  `HOPTELL_OWNER_APP`, `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_AUTH` and `HOPTELL_CREDENTIAL_STORE`,
+  and the message names the variable and the accepted values. Before, `HOPTELL_REQUIRE_MEMBERS=2`
+  allowed the shared token, and `HOPTELL_CREDENTIAL_STORE=vault` used the OS keychain. The on/off
+  switches take `1`, `true`, `on` or `yes`, and `0`, `false`, `off` or `no`, in any case. An invalid
+  `HOPTELL_AGENTS_MAX` (such as `0`) refuses spawning instead of allowing 4 runs. For
+  `HOPTELL_NOTIFY`, `HOPTELL_OWNER_CHANNEL` and `HOPTELL_ELICITATION`, a warning names the value
+  used instead. `hoptell doctor` lists these problems.
 
 ### Upgrading
 
@@ -315,6 +424,11 @@ and every client together; see "Upgrading" at the end of this entry.
   assigns session names.
 - Contacts: new installs hold senders without a grant until you decide; existing installs keep
   their behavior until `hoptell contacts init`.
+- Unread messages that a 0.2 session left in `~/.hoptell/inbox/<name>/` move once into the
+  storage of the first session that connects to an upgraded relay with that `HOPTELL_NAME`. They
+  are then shown and acknowledged like any other message, and the contacts decide who reaches
+  the agent. Sessions without `HOPTELL_NAME` had automatic names, so their messages stay where
+  they are (`hoptell doctor` counts them): read them with 0.2.2 before you upgrade.
 - The owner channel needs a relay of this version (`to_member`, `list_own`). The Mini App also
   needs `HOPTELL_OWNER_APP=on` on the relay and, when the bridge does not reach the relay at its
   public `wss://` address, `HOPTELL_APP_URL` on the bridge.

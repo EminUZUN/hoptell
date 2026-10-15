@@ -91,7 +91,9 @@ refused if that changed. An agent running as the same OS user can run the CLI, o
 edit the files, so none of these proves that a person decided. `hoptell ui` listens on
 127.0.0.1 only and accepts only its exact address as Host, its own Origin on forms, a single-use
 launch link and an in-memory session cookie; every form carries a token bound to the session and
-to the choices it offered. The question in the client (`HOPTELL_ELICITATION=read_inbox`, off by
+to the choices it offered. Browsers send a `127.0.0.1` cookie to every port on that address, so a
+local server that the browser visits during the session receives the cookie and could replay it;
+this is outside what the UI protects against. The question in the client (`HOPTELL_ELICITATION=read_inbox`, off by
 default) offers only `allow-once` and `later`, and a client may answer it automatically.
 
 ## Hardening checklist

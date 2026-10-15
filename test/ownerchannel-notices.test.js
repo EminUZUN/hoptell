@@ -14,6 +14,26 @@ import { fakeToken, sleep } from "./helpers.js";
 
 const verifyFor = (key, who) => (m) => sig.verifyEnvelope(m.text, { pin: pinOf(key), realm: REALM, sender: m.from, me: { name: who, member: ME } });
 const notes = (tg) => tg.sent.filter((s) => s.method === "sendMessage" && /^💬 /.test(s.params.text));
+/**
+ * Wait until `count()` reaches `target`, failing only when it stops growing for `stallMs`. The
+ * flushes below write the bridge's whole state durably (fsync) several times per note, by design
+ * (lib/ownerchannel.js save), so how long thousands of notes take depends on the disk and on what
+ * else runs on the machine; a fixed deadline measured that, not the bridge. A stall still fails,
+ * and so does any wait beyond `maxMs` overall.
+ */
+async function untilAll(count, target, what, { stallMs = 30_000, maxMs = 20 * 60_000 } = {}) {
+  let last = -1;
+  let since = Date.now();
+  const end = Date.now() + maxMs;
+  for (;;) {
+    const n = count();
+    if (n >= target) return;
+    if (n !== last) [last, since] = [n, Date.now()];
+    else if (Date.now() - since > stallMs) throw new Error(`timed out waiting for ${what}: stuck at ${n} of ${target}`);
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${n} of ${target} after ${maxMs / 60_000} minutes`);
+    await sleep(50);
+  }
+}
 const LOST = "I can't tell who that message was for. To answer a question, use /pending; to write to an agent, use /msg.";
 
 async function setup(t, opts = {}) {
@@ -238,7 +258,8 @@ test("route pressure: 1,600 notes while a question is open; its card still answe
   await until(() => s.tg.cards().length === 1, 4000, "card");
   const card = s.tg.cards()[0];
   for (let i = 0; i < 1600; i++) await inject(s.bridge, { from: "me-bob", text: `n${i}` });
-  await until(() => notes(s.tg).length === 1600, 60_000, "1600 notes");
+  await untilAll(() => notes(s.tg).length, 1600, "1600 notes");
+  assert.deepEqual(notes(s.tg).map((x) => x.params.text.split("\n").at(-1)), Array.from({ length: 1600 }, (_, i) => `n${i}`), "each note once, in order");
   assert.equal(Object.keys(s.bridge.state().notice_routes).length, MAX_NOTICE_ROUTES);
   const ns = notes(s.tg);
   s.tg.say("too old", { reply: s.tg.replyTo(ns[99]) });
@@ -257,7 +278,8 @@ test("a backlog after an outage: 2,000 notes flushed; the newest 1,500 accept re
   for (let i = 0; i < 2000; i++) await inject(s.bridge, { from: "me-bob", text: `b${i}` });
   assert.equal(s.bridge.state().outbox.length, 2000);
   s.tg.failNext.sendMessage = [];
-  await until(() => notes(s.tg).length === 2000, 90_000, "flushed");
+  await untilAll(() => notes(s.tg).length, 2000, "flushed");
+  assert.deepEqual(notes(s.tg).map((x) => x.params.text.split("\n").at(-1)), Array.from({ length: 2000 }, (_, i) => `b${i}`), "each note once, in order");
   const ns = notes(s.tg);
   assert.equal(ns.filter((x) => /sent again/.test(x.params.text)).length, 0, "an HTTP error is not a send: no copy is marked");
   const bob = await agent(t, s.url, s.tokens.me, "me-bob");

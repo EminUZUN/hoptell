@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { BIN } from "../lib/config.js";
 import { createAccess } from "../lib/access.js";
 import { backupRelay } from "../lib/backup.js";
@@ -185,6 +186,8 @@ export function summary(dir) {
   }
 }
 
+const CRASH_PRELOAD = fileURLToPath(new URL("./restore-crash-preload.mjs", import.meta.url));
+
 /** Run the CLI with an isolated environment (never the real state directory or settings). */
 export function cli(args, { stateDir, env = {} } = {}) {
   const dir = path.dirname(stateDir);
@@ -192,7 +195,9 @@ export function cli(args, { stateDir, env = {} } = {}) {
   if (!exists(envFile)) fs.writeFileSync(envFile, "");
   const e = { ...process.env, HOPTELL_ENV: envFile, XDG_CONFIG_HOME: path.join(dir, "xdg"), HOPTELL_STATE_DIR: stateDir, HOPTELL_TOKEN: "t".repeat(64), ...env };
   for (const k of ["HOPTELL_MEMBERS", "HOPTELL_POLICY", "HOPTELL_OIDC", "HOPTELL_EXPERIMENTAL_E2EE", "HOPTELL_RESTORE_TEST_CRASH", "HOPTELL_MLS_WASM"]) if (!(k in env)) delete e[k];
-  return new Promise((resolve) => execFile(process.execPath, [BIN, ...args], { env: e, timeout: 30_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.signal ?? err.code ?? 1) : 0, stdout, stderr })));
+  // A crash point (tests only) reaches the CLI through a preload, never through the environment alone.
+  const pre = env.HOPTELL_RESTORE_TEST_CRASH ? ["--import", CRASH_PRELOAD] : [];
+  return new Promise((resolve) => execFile(process.execPath, [...pre, BIN, ...args], { env: e, timeout: 30_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.signal ?? err.code ?? 1) : 0, stdout, stderr })));
 }
 
 /**

@@ -270,6 +270,30 @@ test("hoptell agents profiles and profile approve", async (t) => {
   assert.match(r.stderr, /invalid/);
   r = await run("profile", "approve");
   assert.equal(r.code, 2);
+  // An invalid codex profile is refused before the read-risk warning is shown.
+  writeProfile(w.home, profileDoc(w.work, { id: "codex-bad", sandbox: "full" }));
+  r = await run("profile", "approve", "codex-bad", "--accept-read-risk");
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /agent profile codex-bad is invalid/);
+  assert.doesNotMatch(r.stdout, /WARNING:/);
+  // Codex profiles that can never run on this hoptell (workspace-write headless, tmux) are not
+  // approved: refused before the warning, nothing recorded.
+  for (const [id, over, why] of [
+    ["codex-ww", { sandbox: "workspace-write" }, /codex in headless mode runs only with the arguments its gates passed with \(sandbox read-only\), not with sandbox workspace-write/],
+    ["codex-tmux", { modes: ["tmux"] }, /codex in tmux mode is not available yet/],
+  ]) {
+    writeProfile(w.home, profileDoc(w.work, { id, name: { prefix: id }, ...over }));
+    r = await run("profile", "approve", id, "--accept-read-risk");
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, new RegExp(`agent profile ${id} cannot run on this hoptell: `));
+    assert.match(r.stderr, why);
+    assert.doesNotMatch(r.stdout, /WARNING:/);
+    assert.equal(readApproved(w.home).profiles?.[id], undefined, `${id} is not approved`);
+  }
+  // A codex profile with a mode that can run is approved as before.
+  writeProfile(w.home, profileDoc(w.work, { id: "codex-both", name: { prefix: "codex-both" }, modes: ["headless", "tmux"] }));
+  r = await run("profile", "approve", "codex-both", "--accept-read-risk");
+  assert.equal(r.code, 0, r.stderr);
 });
 
 test("readProfile never creates the agents directory and reports a missing one", (t) => {

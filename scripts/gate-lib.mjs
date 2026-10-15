@@ -91,9 +91,11 @@ export const GROUPS = {
       "lib/agentspawn.js",
       "lib/apply.js",
       "lib/apptunnel.js",
+      "lib/attested.js",
       "lib/backup.js",
       "lib/broker.js",
       "lib/claims.js",
+      "lib/clihelp.js",
       "lib/composer.js",
       "lib/config.js",
       "lib/contacts.js",
@@ -177,7 +179,7 @@ export const DYNAMIC_LOADS = {
   "lib/mls/driver.js": { "import(pathToFileURL(file).href)": "HOPTELL_MLS_DRIVER, an owner-given module outside the package; always labeled experimental" },
   "lib/mls/openmls.js": {
     "require(`node:${name}`)": "the shipped glue's built-ins, only names on GLUE_BUILTINS, always with the node: prefix",
-    "require(wasmPath)": "HOPTELL_MLS_WASM, an owner-given binding outside the package; always labeled experimental",
+    "createRequire(file)": "HOPTELL_MLS_WASM, an owner-given binding evaluated as CommonJS with a require relative to its own file (loadBindingFrom); always labeled experimental",
   },
 };
 

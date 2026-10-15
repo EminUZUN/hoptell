@@ -365,6 +365,48 @@ test("reply allowance: only after local release, once per message, bound to the 
   assert.equal((await sendTo(bob3, "alice", "after a group deny", { reply_to: sent4.message_id })).ok, false);
 });
 
+test("reply allowance: hoptell wait earns it for a message it printed, not for one it held back", async (t) => {
+  const { execFile } = await import("node:child_process");
+  const { BIN } = await import("../lib/config.js");
+  const { existingInstall } = await import("./helpers.js");
+  const s = await setup(t, { policy: POLICY() });
+  const aliceCli = await s.connect("alice", "send");
+  await publish(aliceCli, { default: "deny", visible: "all", entries: [] });
+  const alice = await s.connect("alice");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-wait-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "empty.env"), "");
+  /** bob's `hoptell wait` in `home` (an existing install: its contacts let alice through). */
+  const wait = (home, secs = "10") =>
+    new Promise((resolve) => {
+      const env = { PATH: process.env.PATH, HOME: root, HOPTELL_ENV: path.join(root, "empty.env"), HOPTELL_HOME: home, HOPTELL_NOTIFY: "off", HOPTELL_RELAY: s.url, HOPTELL_TOKEN: tok("bob"), HOPTELL_NAME: "bob" };
+      execFile(process.execPath, [BIN, "wait", secs], { env, timeout: 20_000 }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }));
+    });
+  const bobCli = await s.connect("bob", "send");
+  const online = async () => {
+    for (let i = 0; i < 250; i++) {
+      if ((await alice.list()).some((p) => p.name === "bob" && p.online !== false)) return;
+      await sleep(20);
+    }
+    throw new Error("bob's hoptell wait did not come online");
+  };
+  let waiting = wait(existingInstall(path.join(root, "printed")));
+  await online();
+  const sent = await alice.rpc({ type: "send", to: "bob", text: "a question for the command line" });
+  const printed = await waiting;
+  assert.match(printed.stdout, /a question for the command line/, printed.stderr);
+  await sleep(100);
+  assert.equal((await sendTo(bobCli, "alice", "the answer", { reply_to: sent.message_id })).ok, true, "a printed message earns the reply");
+  // A fresh home's contacts hold alice back: nothing printed, no allowance.
+  waiting = wait(path.join(root, "fresh"), "3");
+  await online();
+  const sent2 = await alice.rpc({ type: "send", to: "bob", text: "held back" });
+  const held = await waiting;
+  assert.doesNotMatch(held.stdout, /held back/);
+  await sleep(100);
+  assert.equal((await sendTo(bobCli, "alice", "no answer", { reply_to: sent2.message_id })).ok, false, "a held message earns nothing");
+});
+
 test("reply allowance: a full queue does not use it", async (t) => {
   const s = await setup(t, { policy: POLICY() });
   const aliceCli = await s.connect("alice", "send");
@@ -960,7 +1002,7 @@ function pendingState(t, pending, grants = null) {
 const writePending = (dir, pending) => fs.writeFileSync(path.join(dir, "access", "restore.json"), JSON.stringify({ v: 1, restore: "0123456789abcdef", at: Date.now(), pending }));
 const pendingOf = (dir) => JSON.parse(fs.readFileSync(path.join(dir, "access", "restore.json"), "utf8")).pending;
 
-test("pending recipients: held at dispatch and retry at send, before an inactive realm's allow; a publish clears the mark", async (t) => {
+test("pending recipients: held at dispatch and refused at send as an unknown name, before an inactive realm's allow; a publish clears the mark", async (t) => {
   const s = await setup(t, { stateDir: pendingState(t, {}) });
   const bob = await s.connect("bob", "send");
   (await s.connect("alice")).close(); // known to the relay, now offline
@@ -974,7 +1016,8 @@ test("pending recipients: held at dispatch and retry at send, before an inactive
   assert.equal(s.access.active(), false, "no policy and no grants: the realm is inactive, and still the hold applies");
   const refused = await sendTo(bob, "alice", "new send");
   assert.equal(refused.ok, false);
-  assert.match(refused.error, /try again/);
+  assert.equal(refused.error, 'unknown peer "alice" (see list_peers)', "the same answer as an unknown name");
+  assert.equal((await sendTo(bob, "nosuch", "to nobody")).error, 'unknown peer "nosuch" (see list_peers)');
   assert.equal((await sendTo(bob, "carol", "to a member not pending")).ok, true);
   const got = [];
   const alice = await s.connect("alice", "peer", { got });
@@ -986,6 +1029,44 @@ test("pending recipients: held at dispatch and retry at send, before an inactive
   assert.deepEqual(pendingOf(s.stateDir), {});
   assert.ok(await until(() => got.some((m) => m.text === "queued before")), "released once alice published");
   void alice;
+});
+
+test("pending recipients after a restore: a new send answers as an unknown name or a hidden member that refuses the sender; a stale sender gets retry for every target", async (t) => {
+  const s = await setup(t, { policy: POLICY(), stateDir: pendingState(t, {}) });
+  const t0 = s.clock.t;
+  // carol hides from everyone and refuses bob; alice is a known member, offline.
+  const carolCli = await s.connect("carol", "send");
+  await publish(carolCli, { default: "deny", visible: "grantees", entries: [] });
+  (await s.connect("carol")).close();
+  (await s.connect("alice")).close();
+  await sleep(100);
+  writePending(s.stateDir, { [ID.alice]: null });
+  s.access.reloadRestore();
+  const bob = await s.connect("bob", "send");
+  for (const name of ["alice", "carol", "nosuch"]) {
+    const r = await sendTo(bob, name, "probe");
+    assert.equal(r.ok, false, name);
+    assert.equal(r.error, `unknown peer "${name}" (see list_peers)`, name);
+  }
+  // A sign-in whose claim view went stale: one answer for every target, pending or not.
+  const dave = await s.signIn("dave", { groups: [], iat: t0 }, "send");
+  s.clock.t = t0 + 400_000;
+  const answers = [];
+  for (const name of ["alice", "carol", "nosuch"]) answers.push((await sendTo(dave, name, "probe")).error);
+  assert.match(answers[0], /cannot check your access/);
+  assert.equal(new Set(answers).size, 1, "the same answer for all three");
+  // The decision itself, for each sender state: pending answers like an unknown name.
+  const pendingTo = { memberId: ID.alice, identity: null };
+  const unknownTo = { memberId: "unknown:nosuch", identity: null };
+  s.clock.t = t0;
+  assert.equal(s.access.decide({ memberId: ID.bob, identity: null }, pendingTo, { send: true }), "deny");
+  assert.equal(s.access.decide({ memberId: ID.bob, identity: null }, pendingTo), "hold", "dispatch still holds");
+  s.clock.t = t0 + 400_000;
+  const stale = { memberId: ID.dave, identity: `${IDP}|dave` };
+  assert.equal(s.access.decide(stale, pendingTo, { send: true }), s.access.decide(stale, unknownTo, { send: true }));
+  s.access.invalidate(`${IDP}|dave`, "sign-out");
+  assert.equal(s.access.decide(stale, pendingTo, { send: true }), "deny");
+  assert.equal(s.access.decide(stale, unknownTo, { send: true }), "deny");
 });
 
 test("pending recipients: a reply under an existing reply allowance is held; the allowance is neither consulted nor used", async (t) => {
@@ -1004,7 +1085,7 @@ test("pending recipients: a reply under an existing reply allowance is held; the
   s.access.reloadRestore();
   const held = await sendTo(bob, "alice", "answer", { reply_to: sent.message_id, op: op() });
   assert.equal(held.ok, false);
-  assert.match(held.error, /try again/);
+  assert.equal(held.error, 'unknown peer "alice" (see list_peers)');
   const allowances = JSON.parse(fs.readFileSync(path.join(s.stateDir, "access", "allowances.json"), "utf8")).entries;
   assert.equal(allowances.length, 1);
   assert.equal(allowances[0].used, null, "not consumed by the held reply");
@@ -1094,6 +1175,48 @@ async function encryptedToBob(s) {
   return { bob, bd, conversation, receive };
 }
 const apps = (got) => got.filter((m) => m.kind === "app").map((m) => m.from_member);
+
+test("send_e2ee from a device outside the group's roster: the same refusal whatever the gates say about the roster's members; a member still gets the gates' answer", async (t) => {
+  const s = await setup(t, { e2ee: true });
+  const realm = "e".repeat(32);
+  const blob = () => crypto.randomBytes(48).toString("base64");
+  const bob = await s.connect("bob", "send");
+  const bd = await fakeDevice(realm, ID.bob);
+  await bd.registerOn(bob);
+  await bd.attachOn(bob);
+  await bob.rpc({ type: "kp_upload", device: bd.device, packages: await bd.packages(2, Date.now() + 86_400_000) });
+  const alice = await s.connect("alice", "send");
+  const ad = await fakeDevice(realm, ID.alice);
+  await ad.registerOn(alice);
+  await ad.attachOn(alice);
+  const { reservation } = await alice.rpc({ type: "kp_take", request: "req-roster", device: ad.device, target: { member: ID.bob, device: bd.device } });
+  const group = crypto.randomBytes(16).toString("hex");
+  await alice.rpc({ type: "group_create", op: newOp(), device: ad.device, peer: ID.bob, group, epoch: 1, welcome: { recipients: [bd.device], mls: blob() }, kp_reservations: [reservation] });
+  // carol: a signed-in member with an attached device, not in alice and bob's conversation.
+  const carol = await s.connect("carol", "send");
+  const cd = await fakeDevice(realm, ID.carol);
+  await cd.registerOn(carol);
+  await cd.attachOn(carol);
+  const answer = (c, d, g = group) =>
+    c.rpc({ type: "send_e2ee", kind: "app", op: newOp(), device: d.device, group: g, mls: blob(), target: "bob" }).then(
+      (r) => ({ state: r.state }),
+      (e) => ({ code: e.code, error: e.message }),
+    );
+  await publish(bob, { default: "allow", visible: "all", entries: [] });
+  const open = await answer(carol, cd);
+  assert.equal(open.code, "not_member", JSON.stringify(open));
+  // bob's grants refuse carol: before the fix the gate answered not_allowed here, telling carol
+  // who is in the roster and what its member's grants say.
+  await publish(bob, { default: "allow", visible: "all", entries: [{ selector: `member:${ID.carol}`, action: "deny" }] });
+  assert.deepEqual(await answer(carol, cd), open);
+  await publish(bob, { default: "deny", visible: "all", entries: [] });
+  assert.deepEqual(await answer(carol, cd), open);
+  // A member of the group still meets the gates: refused while bob's grants refuse alice, accepted after.
+  const refused = await answer(alice, ad);
+  assert.equal(refused.code, "not_allowed", JSON.stringify(refused));
+  await publish(bob, { default: "allow", visible: "all", entries: [] });
+  assert.deepEqual(await answer(alice, ad), { state: "accepted" });
+});
 
 test("encrypted messages are rechecked at dispatch as their sender was signed in: a deny by the sender's provider groups drops a queued one", async (t) => {
   const s = await setup(t, { policy: POLICY({ groups: { suspended: { members: [], oidcGroups: [{ issuer: IDP, group: "suspended" }] } } }), e2ee: true });

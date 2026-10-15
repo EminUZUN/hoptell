@@ -65,6 +65,7 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       hostname: "testhost",
       barriers: { wake: null, reader: null },
       errors: {},
+      warnings: [],
     },
   );
   assert.ok(Object.isFrozen(s) && Object.isFrozen(s.relay) && Object.isFrozen(s.roles) && Object.isFrozen(s.errors));
@@ -75,10 +76,16 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
   assert.match(settingsFor({ HOPTELL_PUSH: "loud" }).errors.push, /HOPTELL_PUSH must be/);
   assert.match(settingsFor({ HOPTELL_RECEIPTS: "maybe" }).errors.receipts, /HOPTELL_RECEIPTS/);
   assert.match(settingsFor({ HOPTELL_LEASE_MINUTES: "0" }).errors.receipts, /HOPTELL_LEASE_MINUTES/);
-  // HOPTELL_AGENTS_MAX (design 7.1): live spawned runs per home, at most 16; anything else is 4.
+  // HOPTELL_AGENTS_MAX (design 7.1): live spawned runs per home, at most 16 (a larger value is
+  // lowered, with a warning); a value that is not a whole number of at least 1 refuses spawning.
   assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "40" }).agentsMax, 16);
+  assert.deepEqual(settingsFor({ HOPTELL_AGENTS_MAX: "40" }).warnings, ["HOPTELL_AGENTS_MAX is at most 16, not 40; using 16"]);
   assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "2" }).agentsMax, 2);
-  assert.equal(settingsFor({ HOPTELL_AGENTS_MAX: "zero" }).agentsMax, 4);
+  for (const v of ["zero", "0", "-1", "2.5"]) {
+    const bad = settingsFor({ HOPTELL_AGENTS_MAX: v });
+    assert.equal(bad.agentsMax, null, v);
+    assert.match(bad.errors.agentsMax, /HOPTELL_AGENTS_MAX must be a whole number from 1 to 16/);
+  }
   assert.equal(settingsFor({ HOPTELL_RECEIPTS: "OFF", HOPTELL_LEASE_MINUTES: "5" }).leaseMinutes, 5);
   const badRole = settingsFor({ HOPTELL_RELAY: "ws://x:1", HOPTELL_TOKEN: "t".repeat(20), HOPTELL_ROLES: "bad role" });
   assert.match(badRole.errors.relay, /role/);

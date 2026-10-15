@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { createEngine } from "../lib/engine.js";
 import { readSettings } from "../lib/settings.js";
 import { decide, encryptionMode, senderKey, validateContacts } from "../lib/contacts.js";
+import { ATTESTED } from "../lib/attested.js";
+import { e2eeReceipt } from "../lib/ownersig.js";
 import { openContacts } from "../lib/quarantine.js";
 import { openBound } from "../lib/session.js";
 import { openStore } from "../lib/store.js";
@@ -49,7 +51,9 @@ test("contacts: encryption entries per contact and per realm; validated; the con
   // Plaintext from a required contact is a policy violation, whatever the grants; decrypted is not.
   const granted = { ...doc, grants: [{ realm: R, member: BOB }] };
   assert.equal(decide(granted, senderKey(plain("x", BOB)), { realm: R, name: "s" }), "policy");
-  assert.equal(decide(granted, senderKey({ ...plain("x", BOB), e2ee: { device: "x" } }), { realm: R, name: "s" }), "allow");
+  assert.equal(decide(granted, senderKey({ ...plain("x", BOB), e2ee: { device: "x" }, [ATTESTED]: { owner: null, e2ee: true } }), { realm: R, name: "s" }), "allow");
+  // A stored mark alone (no check by this machine) is plaintext.
+  assert.equal(decide(granted, senderKey({ ...plain("x", BOB), e2ee: { device: "x" } }), { realm: R, name: "s" }), "policy");
   assert.equal(decide({ ...granted, blocks: [{ realm: R, member: BOB }] }, senderKey(plain("x", BOB)), { realm: R, name: "s" }), "block", "a block still wins");
 });
 
@@ -139,9 +143,15 @@ test("MII5: plaintext held before its contact became required, or adopted under 
     assert.equal((await st2.pendingEntries({ screen: c2.screenFor(s) })).length, 0);
     assert.equal((await st2.pendingEntries()).length, 0, "not even in the inbox");
   }
-  // Decrypted provenance (e2ee) is not a violation.
+  // Decrypted provenance (e2ee, with this machine's receipt) is not a violation.
   const enc = { ...plain("decrypted here"), e2ee: { device: "d" } };
-  assert.equal(c.screenFor(s)(enc), "ask");
+  assert.equal(c.screenFor(s)({ ...enc, e2ee: { ...enc.e2ee, receipt: e2eeReceipt(home, enc) } }), "ask");
+  // A record an older hoptell wait kept with a relay's "e2ee" field (no receipt), a receipt made on
+  // another home, or one for other content: plaintext, held as a policy violation.
+  assert.equal(c.screenFor(s)(enc), "policy", "no receipt");
+  assert.equal(c.screenFor(s)({ ...enc, e2ee: { ...enc.e2ee, receipt: e2eeReceipt(tmpDir(t), enc) } }), "policy", "another home's receipt");
+  assert.equal(c.screenFor(s)({ ...enc, text: "changed", e2ee: { ...enc.e2ee, receipt: e2eeReceipt(home, enc) } }), "policy", "another text");
+  assert.equal(c.screenFor(s)({ ...enc, e2ee: { device: "other", receipt: e2eeReceipt(home, enc) } }), "policy", "another device");
 });
 
 /** A home of `member` with an enrolled device (fake driver) for the relay of `w`, and its engine environment. */
@@ -175,6 +185,36 @@ test("an agent session: required sends encrypted end to end; the peer's session 
   assert.equal(w.relay.stats().queueItems, 0, "nothing went through the plaintext queue");
   const rows = [...w.db.all("SELECT frame FROM e2ee_queue").map((x) => x.frame), ...w.db.all("SELECT body FROM e2ee_payloads").map((x) => x.body)].join("");
   assert.ok(!rows.includes("secret plan"));
+});
+
+test("required at the receiver: a message this device decrypted is shown as encrypted (its receipt); a stored e2ee mark without one, as an older hoptell wait kept it, is held", async (t) => {
+  const w = await deviceRelay(t, { e2ee: true });
+  const bob = await homeOf(t, w, "bob", { contacts: policy("alice", [{ member: "alice", mode: "required" }]) });
+  const alice = await homeOf(t, w, "alice", { contacts: policy("bob", [{ member: "bob", mode: "required" }]) });
+  await new Promise((r) => setTimeout(r, 300)); // both attached their devices
+  const r = await alice.engine.call("send_message", { to: "bob", message: "decrypted here" });
+  assert.match(textOf(r), /encrypted \(experimental, unreviewed\)/);
+  const read = async () => {
+    const out = textOf(await bob.engine.call("read_inbox"));
+    const receipt = out.match(/Receipt: (r_[a-z2-7]{26})/)?.[1];
+    if (receipt) await bob.engine.call("ack_messages", { receipt });
+    return out;
+  };
+  let got = "";
+  assert.ok(await until(async () => /decrypted here/.test((got += await read()))), got);
+  assert.match(got, /\(end-to-end encrypted\)[\s\S]*Sender: member [^\n]*, end-to-end encrypted by its device/);
+  // Encrypted text that claims to be an owner envelope: checked as one (it fails), still encrypted.
+  await alice.engine.call("send_message", { to: "bob", message: '{"hoptell_owner":1}' });
+  got = "";
+  assert.ok(await until(async () => /hoptell_owner/.test((got += await read()))), got);
+  assert.match(got, /\(end-to-end encrypted\)[\s\S]*could not be verified \(malformed envelope/);
+  // A record with the relay's "e2ee" field and no receipt, as an older hoptell wait stored it.
+  const pipe = await openStore(bob.engine.session.store);
+  await pipe.append({ type: "message", id: crypto.randomUUID(), message_id: crypto.randomUUID(), from: "alice", fromHost: "relay", to: "bob", text: "claims encryption", ts: Date.now(), expires: Date.now() + 3_600_000, sender: { auth: "member", realm: w.realm, member: { id: w.members.alice.id, name: "alice" } }, e2ee: { device: "abcdefghijklmnopqrstuvwxya", kind: "text" } });
+  let after = "";
+  await until(async () => /waiting for your user's decision/.test((after += await read())), 3000);
+  assert.doesNotMatch(after, /claims encryption/, after);
+  assert.match(after, /1 message from 1 sender is waiting for your user's decision/, after);
 });
 
 test("required: no fallback; a relay without the e2ee capability (an older relay) carries no plaintext to that contact", async (t) => {

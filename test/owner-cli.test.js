@@ -70,8 +70,10 @@ test("setup: the token from standard input only, stored with the key in the cred
   assert.equal(s.printed().includes(SECRET), false);
   assert.equal(s.printed().includes(key.priv), false);
   assert.equal(fs.statSync(sig.channelPaths(s.home).bridge).mode & 0o777, 0o600);
-  // Not a token on standard input: refused. No argument or environment variable is read for it.
-  assert.equal(await s.cli(["setup", TOKEN], { stdin: "" }), 1);
+  // Not a token on standard input: refused. No argument or environment variable is read for it
+  // (an argument is a word setup does not take: a usage error, and the token is not printed).
+  assert.equal(await s.cli(["setup", TOKEN], { stdin: "" }), 2);
+  assert.equal(s.printed().includes(SECRET), false);
   assert.equal(await s.cli(["setup"], { stdin: "", env: { ...s.env, HOPTELL_TELEGRAM_TOKEN: TOKEN, TELEGRAM_BOT_TOKEN: TOKEN } }), 1);
   assert.match(s.printed(), /standard input does not hold a bot token/);
 });
@@ -81,17 +83,17 @@ test("setup: a bridge name the member token may not use says how to pick one", a
   const relays = path.join(s.home, "relays.json");
   fs.writeFileSync(relays, JSON.stringify({ version: 1, relays: [{ alias: "local", url: s.url, tokenEnv: "ME_TOKEN" }] }), { mode: 0o600 });
   assert.equal(await s.cli(["setup"], { stdin: TOKEN }), 1);
-  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name owner: the bridge needs a member token, which may use only "<member>" or names that start with "<member>-"; e\.g\. hoptell telegram setup --name <member>-owner \(4002\)$/m);
+  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name owner: the bridge needs a member token, which may use only "me" or names that start with "me-"; e\.g\. hoptell telegram setup --name me-owner \(4002\)$/m);
   assert.equal(readBridgeConfig(s.home), null);
   // A wrong namePrefix in the relay entry comes first in the name: that is where it is fixed.
   fs.writeFileSync(relays, JSON.stringify({ version: 1, relays: [{ alias: "local", url: s.url, tokenEnv: "ME_TOKEN", namePrefix: "old-" }] }), { mode: 0o600 });
   assert.equal(await s.cli(["setup", "--name", "me-owner"], { stdin: TOKEN }), 1);
-  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name old-me-owner: the bridge needs a member token, which may use only "<member>" or names that start with "<member>-"; set namePrefix to "<member>-" in relay entry "local" \(4002\)$/m);
+  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name old-me-owner: the bridge needs a member token, which may use only "me" or names that start with "me-"; set namePrefix to "me-" in relay entry "local" \(4002\)$/m);
   // An existing bridge keeps its name: then only the rule is given.
   fs.writeFileSync(relays, JSON.stringify({ version: 1, relays: [{ alias: "local", url: s.url, tokenEnv: "ME_TOKEN", namePrefix: "me-" }] }), { mode: 0o600 });
   assert.equal(await s.cli(["setup"], { stdin: TOKEN }), 0, s.printed());
   assert.equal(await s.cli(["setup"], { stdin: TOKEN, env: { ...s.env, ME_TOKEN: s.tokens.bob } }), 1);
-  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name me-owner: the bridge needs a member token, which may use only "<member>" or names that start with "<member>-" \(4002\)$/m);
+  assert.match(s.printed(), /ERR hoptell telegram: the relay refused the bridge name me-owner: the bridge needs a member token, which may use only "bob" or names that start with "bob-" \(4002\)$/m);
 });
 
 test("setup: a webhook stops it; a new token for the same bot replaces it, keeping key and pins; another bot needs unpair --all", async (t) => {
@@ -201,6 +203,11 @@ test("staged key rotation: key next, trust --add, key commit; the bridge signs w
   assert.equal(sig.verifyEnvelope(m.text, { pin: onlyNew, realm: REALM, sender: m.from, me: { name: "me-alice", member: ME } }).ok, true);
   await bridge.stop();
   await running;
+  // A removal with a word or option it does not take, or two actions at once, is refused before anything changes.
+  for (const extra of [["--remove-key", oldId, "extra"], ["--remove-key", oldId, "--add"], ["--remove-key", oldId, "--revoke", REALM], ["--revoke", REALM, "--all"], ["--revoke", REALM, "extra"], ["--revoke", REALM, "--add"], ["--revoke", REALM, "--realm", REALM]]) {
+    assert.equal(await telegramCommand(["trust", ...extra], { home: agentHome, env: {}, out: () => {}, err: () => {} }), 2, extra.join(" "));
+    assert.equal(sig.pinFor(agentHome, REALM).keys.length, 2, `${extra.join(" ")}: nothing was removed`);
+  }
   assert.equal(await telegramCommand(["trust", "--remove-key", oldId], { home: agentHome, env: {}, out: () => {}, err: () => {} }), 0);
   assert.equal(sig.pinFor(agentHome, REALM).keys.length, 1);
   assert.equal(await telegramCommand(["trust", "--revoke", REALM], { home: agentHome, env: {}, out: () => {}, err: () => {} }), 0);

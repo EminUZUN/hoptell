@@ -209,7 +209,7 @@ test("doctor follows the label rule: reviewed only for a matching shipped bindin
   assert.match(text, /warn +encrypted messaging: shipped binding .* does not match reviewed digests/);
   text = await run({}, { dir });
   assert.match(text, EXPERIMENTAL);
-  assert.match(text, /is not loaded: this build has no reviewed digests/);
+  assert.match(text, /which this build does not load by default \(no reviewed digests\)\. To try it, labeled experimental, set HOPTELL_MLS_WASM=/);
   assert.match(await run({}, { dir: path.join(home, "none"), reviewed: REVIEWED }), EXPERIMENTAL);
   assert.match(await run({}, undefined), EXPERIMENTAL);
   // Without the flag, nothing about encrypted messaging.

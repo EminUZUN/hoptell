@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { createEngine } from "../lib/engine.js";
 import { readSettings } from "../lib/settings.js";
 import { RelayClient } from "../lib/client.js";
@@ -101,6 +102,17 @@ test("receive side (unchanged): own-member plaintext under required is held as a
   await sleep(500);
   const held = await readAll(s.engine);
   assert.equal(/plaintext from my own member|a verified owner answer/.test(held), false, held);
+  // hoptell contacts show offers no allow commands that would be refused: only block.
+  const { execFileSync } = await import("node:child_process");
+  const { BIN } = await import("../lib/config.js");
+  fs.writeFileSync(path.join(s.home, "empty.env"), "");
+  const cli = (...args) => execFileSync(process.execPath, [BIN, "contacts", ...args], { env: { PATH: process.env.PATH, HOME: s.home, HOPTELL_HOME: s.home, HOPTELL_ENV: path.join(s.home, "empty.env"), HOPTELL_NOTIFY: "off" }, encoding: "utf8" });
+  const id = /^(q_[a-z2-7]{16})\s/m.exec(cli("list"))?.[1];
+  assert.ok(id);
+  const shown = cli("show", id);
+  assert.match(shown, /unencrypted, and this contact's encryption is required: they can only be blocked, or released after hoptell contacts encryption m_\S+ preferred\|off/);
+  assert.match(shown, /hoptell contacts block /);
+  assert.doesNotMatch(shown, /hoptell contacts allow/);
   writePolicy(s.home, OVERRIDE);
   await s.mallory.client.send("me-alice", "after the override");
   let seen = "";
