@@ -269,7 +269,9 @@ export async function agent(t, url, token, name) {
 
 /** A bridge on `home` with the fake client; returns {bridge, run (the start promise)}. */
 export function bridgeOn(t, { home, telegram, url, token, key, name = "me-owner", ...opts }) {
-  const bridge = createBridge({ home, telegram, relay: { url, token }, alias: "local", namePrefix: "me-", name, key, botId: BOT_ID, appKey: APP_KEY, pollTimeout: 1, tickMs: 60_000, retryMs: 100, ...opts });
+  // The test relay is ws://127.0.0.1: the app's public origin is given, as HOPTELL_APP_URL would.
+  const appUrl = `https://127.0.0.1:${new URL(url).port}`;
+  const bridge = createBridge({ home, telegram, relay: { url, token }, alias: "local", namePrefix: "me-", name, key, botId: BOT_ID, appKey: APP_KEY, appUrl, pollTimeout: 1, tickMs: 60_000, retryMs: 100, ...opts });
   const run = bridge.start();
   t.after(() => bridge.stop());
   return { bridge, run };

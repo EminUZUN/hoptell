@@ -83,8 +83,9 @@ If the MCP entry sets `HOPTELL_HOME`, run `HOPTELL_HOME=<same value> hoptell hoo
 
 ## Quick start
 
-Requirements: Node.js 22+, plus tmux 3.2+ to wake Codex/terminal agents. Supported on macOS
-and Linux; on Windows only the relay and polling tools work.
+Requirements: Node.js 22+ (a relay needs 22.13+, and 22.16+ for online backups), plus tmux 3.2+
+to wake Codex/terminal agents. Supported on macOS and Linux; on Windows only the relay and
+polling tools work.
 
 ### 1. Install (every machine)
 
@@ -1178,7 +1179,13 @@ search, and your open questions. Turn it on with `hoptell telegram app --on` (wi
 stopped), then open it from `📱 Open the app` under `/msg`, `/agents` and `/pending`, or with
 `/app`. Your phone loads the app from your hoptell server, so it must be able to reach that server.
 For a company server, connect to the company network or VPN. It needs a relay whose operator has
-turned the app on (`HOPTELL_OWNER_APP=on`; the relay must be served over HTTPS).
+turned the app on (`HOPTELL_OWNER_APP=on`; the relay must be served over HTTPS). If
+`HOPTELL_APP_URL` is unset, the app's link uses the relay's address when the bridge connects with
+`wss://` and a host name. If the bridge connects another way, for example with `ws://` to the
+relay's private address, set `HOPTELL_APP_URL` in the bridge's environment to the relay's public
+HTTPS address, such as `HOPTELL_APP_URL=https://hoptell.example.com`. Restart the bridge after
+changing this setting. Without a usable address the bot shows no app button, and `/app` explains
+what to set.
 
 - Sends from the app ask for a tap in the chat first: the message appears in the chat with
   `Send to <agent>` and `Cancel`, and nothing reaches the agent until you tap Send. Unsent drafts
@@ -1305,6 +1312,7 @@ literal, and an empty value counts as unset.
 | `HOPTELL_REALM_NAME` | relay | optional display name for the realm, shown to clients |
 | `HOPTELL_REQUIRE_MEMBERS` | relay | `1` refuses a shared token |
 | `HOPTELL_OIDC` | relay | sign-in file naming the identity providers the relay accepts |
+| `HOPTELL_APP_URL` | owner-channel bridge | the public HTTPS address where Telegram opens the bridge's app, e.g. `https://hoptell.example.com` (no path, query string, fragment, or credentials); needed when the bridge's relay URL is `ws://` or an IP address |
 | `HOPTELL_OWNER_APP` | relay | `on` lets owner-channel bridges serve their Telegram app through this relay (`/app/` paths; serve the relay over HTTPS); off by default. `hoptell relay apps` lists registered apps |
 | `HOPTELL_SNAPSHOT_ROOTS` | peers | JSON list of approved folders for the file tools, e.g. `[{"id":"app","path":"/abs/app"}]`; off when unset |
 | `HOPTELL_LOG_FINGERPRINTS` | relay | `on` enables keyed message-text fingerprints in relay logs; default `off` |
@@ -1401,7 +1409,9 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). How hoptell handles d
 - Hook delivery depends on Claude Code's `FileChanged` hook and `asyncRewake` option. It was
   tested with the Claude Code terminal app; the VS Code extension and Desktop app are untested.
   One hoptell MCP server per Claude Code process can use it; a second one uses the listener.
-- No built-in TLS, persistence, message history or web UI, by design: the relay stays small.
+- No built-in TLS and no message history, by design: the relay stays small. Plaintext messages
+  are kept only in memory. The relay's state directory holds its own state and, with the
+  experimental encrypted messages, encrypted messages and transfers (see [PRIVACY.md](PRIVACY.md)).
 - The file tools (`send_file`, `verify_snapshot`, `send_review_set`, `verify_review_set`,
   `send_transfer`) and `hoptell apply` need macOS or Linux. Windows peers can still
   receive and review snapshots.

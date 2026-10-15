@@ -464,16 +464,16 @@ test("labels: an alias colliding with an agent's name shows the full form; wire 
 test("host check: a name now held from another host asks first on every send without a new prompt; Send once; a later move warns again", async (t) => {
   const s = await setup(t);
   const mac = await agent(t, s.url, s.tokens.me, "me-claude-mac");
-  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "emin-mbp" });
-  s.hosts.set("me-claude-mac", "emin-mbp");
+  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "sam-mbp" });
+  s.hosts.set("me-claude-mac", "sam-mbp");
   s.tg.say("@claude-mac first");
   await fromOwner(mac, "first");
   const ownMsg = s.tg.updates.at(-1).message;
   await until(() => s.tg.calls("setMessageReaction").length === 1, 4000, "👍");
   // The name moves: a reply to the owner's own message (a route) is not sent; the bot asks.
-  s.hosts.set("me-claude-mac", "emin-linux");
+  s.hosts.set("me-claude-mac", "sam-linux");
   s.tg.say("second", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const warn = await next(s.tg, /^Main \(claude-mac\) is now running on emin-linux, not emin-mbp\. Send anyway\?$/, 0);
+  const warn = await next(s.tg, /^Main \(claude-mac\) is now running on sam-linux, not sam-mbp\. Send anyway\?$/, 0);
   assert.deepEqual(rows(warn).map((r) => r.map((b) => b.text)), [["Send", "Send and remember"], ["Cancel"]]);
   await sleep(200);
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 1, "nothing sent");
@@ -482,7 +482,7 @@ test("host check: a name now held from another host asks first on every send wit
   const pick = await next(s.tg, /^Your agents: /, 0);
   assert.ok(sessionButtons(pick).some((b) => b.text === "Main?"));
   tap(s.tg, pick, sessionButtons(pick).find((b) => b.text === "Main?"));
-  await next(s.tg, /^Main\? \(claude-mac\)\nOnline · on emin-linux/, 0, "details");
+  await next(s.tg, /^Main\? \(claude-mac\)\nOnline · on sam-linux/, 0, "details");
   // Send: once, for the host it warned about.
   tap(s.tg, warn, button(warn, "Send"));
   await fromOwner(mac, "second");
@@ -492,20 +492,20 @@ test("host check: a name now held from another host asks first on every send wit
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 2, "once");
   // The baseline did not change: the next reply asks again.
   s.tg.say("third", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const warn2 = await next(s.tg, /is now running on emin-linux, not emin-mbp/, 1);
+  const warn2 = await next(s.tg, /is now running on sam-linux, not sam-mbp/, 1);
   // Before the tap the name moves again: Send warns again instead of sending.
-  s.hosts.set("me-claude-mac", "emin-third");
+  s.hosts.set("me-claude-mac", "sam-third");
   tap(s.tg, warn2, button(warn2, "Send"));
-  await next(s.tg, /is now running on emin-third, not emin-mbp/, 0, "warned again");
+  await next(s.tg, /is now running on sam-third, not sam-mbp/, 0, "warned again");
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 2);
   // Send and remember: the new host becomes the baseline; an older warning then sends without asking.
   s.tg.say("fourth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const w4 = await next(s.tg, /is now running on emin-third, not emin-mbp/, 1);
+  const w4 = await next(s.tg, /is now running on sam-third, not sam-mbp/, 1);
   s.tg.say("fifth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const w5 = await next(s.tg, /is now running on emin-third, not emin-mbp/, 2);
+  const w5 = await next(s.tg, /is now running on sam-third, not sam-mbp/, 2);
   tap(s.tg, w4, button(w4, "Send and remember"));
   await fromOwner(mac, "fourth");
-  assert.equal(peopleOf(s.home)["me-claude-mac"].alias_host, "emin-third");
+  assert.equal(peopleOf(s.home)["me-claude-mac"].alias_host, "sam-third");
   s.tg.say("sixth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
   await fromOwner(mac, "sixth");
   tap(s.tg, w5, button(w5, "Cancel"));
@@ -518,8 +518,8 @@ test("host check: a name now held from another host asks first on every send wit
 test("host check at dispatch: a send waiting on the relay is checked when it goes out, not when it was made", async (t) => {
   const s = await setup(t);
   const mac = await agent(t, s.url, s.tokens.me, "me-claude-mac");
-  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "emin-mbp" });
-  s.hosts.set("me-claude-mac", "emin-mbp");
+  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "sam-mbp" });
+  s.hosts.set("me-claude-mac", "sam-mbp");
   s.tg.say("/msg");
   const pick = await next(s.tg, /^Who should get your message\?$/, 0);
   tap(s.tg, pick, sessionButtons(pick)[0]);
@@ -529,9 +529,9 @@ test("host check at dispatch: a send waiting on the relay is checked when it goe
   s.tg.say("go", { reply: s.tg.replyTo(prompt) });
   await until(() => s.bridge.state().outbox.some((e) => e.steps.some((x) => x.t === "send" && x.host_check)), 4000, "waiting");
   // … meanwhile the name moves; when the relay answers again, the send asks first.
-  s.hosts.set("me-claude-mac", "emin-linux");
+  s.hosts.set("me-claude-mac", "sam-linux");
   s.shape.failList = false;
-  await next(s.tg, /is now running on emin-linux, not emin-mbp/, 0, "checked at dispatch");
+  await next(s.tg, /is now running on sam-linux, not sam-mbp/, 0, "checked at dispatch");
   await sleep(200);
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 0);
 });
@@ -674,8 +674,8 @@ test("signals of an earlier owner are dropped, never written over the new owner'
 test("host check: a re-pair while the host is being checked retires the send; nothing goes out under the new pairing", async (t) => {
   const s = await setup(t);
   const mac = await agent(t, s.url, s.tokens.me, "me-claude-mac");
-  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "emin-mbp" });
-  s.hosts.set("me-claude-mac", "emin-mbp");
+  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "sam-mbp" });
+  s.hosts.set("me-claude-mac", "sam-mbp");
   s.tg.say("@claude-mac first");
   await fromOwner(mac, "first");
   const own = s.tg.updates.at(-1).message;
@@ -711,8 +711,8 @@ test("host check: a policy that becomes required while the host is being checked
   writePolicy(home, null); // managed, no encryption policy: the bridge runs
   const s = await setup(t, { home });
   const mac = await agent(t, s.url, s.tokens.me, "me-claude-mac");
-  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "emin-mbp" });
-  s.hosts.set("me-claude-mac", "emin-mbp");
+  await setPeople(s.home, ["me-claude-mac"], { alias: "Main", alias_host: "sam-mbp" });
+  s.hosts.set("me-claude-mac", "sam-mbp");
   s.tg.say("@claude-mac first");
   await fromOwner(mac, "first");
   const own = s.tg.updates.at(-1).message;

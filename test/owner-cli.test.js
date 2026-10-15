@@ -640,6 +640,9 @@ test("app: --on needs a relay that serves it; --status, --off and --rotate; the 
   // Turned on two minutes ago, so initData made now is past its 60-second margin.
   assert.equal(await s.cli(["app", "--on"], { now: () => Date.now() - 120_000 }), 0);
   assert.match(s.printed(), /The app is on\. Start the bridge, then send \/app in the chat\./);
+  // The test relay is ws://127.0.0.1: no public origin can be derived from it.
+  assert.match(s.printed(), /Warning: Telegram can't open the app at the relay's address: the relay URL is ws:\/\/, not wss:\/\/\. With this command's environment, the bot cannot show an app button\. Set HOPTELL_APP_URL in the bridge's environment/);
+  s.env.HOPTELL_APP_URL = "https://Hoptell.Example.com:443/";
   const id = JSON.parse(fs.readFileSync(sig.channelPaths(s.home).state, "utf8")).app.id;
   assert.match(id, /^[a-z2-7]{26}$/);
   let bridge = null;
@@ -655,6 +658,7 @@ test("app: --on needs a relay that serves it; --status, --off and --rotate; the 
   s.lines.length = 0;
   await s.cli(["app", "--status"]);
   assert.match(s.printed(), /The app is on\./);
+  assert.match(s.printed(), /With this command's environment, the app uses https:\/\/hoptell\.example\.com\./);
   await bridge.stop();
   await running;
   assert.equal(await s.cli(["app", "--rotate"]), 0);

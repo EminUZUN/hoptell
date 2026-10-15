@@ -1,6 +1,75 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-15)
+
+This release adds a large set of features and changes the relay protocol. Upgrade the relay
+and every client together; see "Upgrading" at the end of this entry.
+
+- Agent spawning: an agent session can start another agent on the same machine for one task,
+  within limits you set in a profile (`~/.hoptell/agents/profiles/<id>.json`, schema
+  `schema/agent-profile.schema.json`). New MCP tools: `spawn_agent`, `list_agents` and
+  `stop_agent`. Only Codex in headless mode with its `read-only` sandbox is enabled, on the tested
+  Codex 0.162.1 build; other CLIs and modes are refused. A profile is used only while its content
+  is exactly what you approved. List profiles with `hoptell agents profiles`. To approve a Codex
+  profile from the CLI, read the warning and run `hoptell agents profile approve <id>
+  --accept-read-risk`; `hoptell ui` also shows the warning before approval. The warning says that
+  a run uses your account and may read its files, including relay tokens. Runs can wait for your
+  confirmation (`hoptell agents confirm <run> --start|--discard`), and `hoptell agents list`,
+  `stop` and `result` manage them. A run gets its own hoptell MCP server with six tools, excluding
+  `spawn_agent` and `ask_owner`. Codex can still create its own sub-agents in `plain` mode;
+  hardening mode turns them off. See "Spawning agents" in the README.
+- Optional path-deny hardening for spawned Codex runs (`"codex": {"headlessMode": "hardening"}`
+  in the profile, Codex 0.162.1 only): Codex's OS sandbox is asked to deny reads of the hoptell
+  home, your relays file, the token files it names, and CODEX_HOME. It is hardening, not
+  containment; the default mode stays `plain`.
+- The owner channel over Telegram: agents can ask you a question with the new `ask_owner` tool,
+  and you can answer and send them instructions from a Telegram chat with your own bot. A single
+  bridge process (`hoptell telegram setup`, `run`, `pair`) serves your agents on every machine
+  through the relay, as a peer of your own member. Each agent machine trusts the bridge's signing
+  key with `hoptell telegram trust '<pin>'`; only messages signed with a trusted key are shown as
+  yours. You can pick an agent with buttons, reply to its messages, use `/msg`, `/agents`,
+  `/pending` and menu shortcuts for eligible favourites, and agents can send you short notes with
+  `send_message`. Favourites, names and hidden agents are kept on the bridge machine. An answer
+  or instruction from the owner channel never approves a hoptell decision or a CLI permission
+  prompt. Telegram is a third party and bot chats are not end-to-end encrypted: see "The owner
+  channel over Telegram" in the README and PRIVACY.md. It is off until you set it up, and
+  `HOPTELL_OWNER_CHANNEL=off` hides `ask_owner` on an agent machine.
+- `hoptell telegram identity` previews the bot's name and descriptions; `--apply` updates them
+  after confirmation. With `--apply`, `--photo <file.jpg>` uploads a profile photo and
+  `--remove-photo` removes it, also after confirmation.
+- An optional Mini App for the owner channel, off by default: your agents grouped by computer,
+  with search, and your open questions. The relay operator turns it on with
+  `HOPTELL_OWNER_APP=on` (the relay must be served over HTTPS), and the bridge owner with
+  `hoptell telegram app --on`. Messages drafted in the app are sent only after a tap in the chat,
+  and settings changed there can be undone. When the bridge reaches the relay at a private
+  address or over `ws://`, set `HOPTELL_APP_URL` in the bridge's environment to the relay's
+  public HTTPS address.
+- Direct sends can name the recipient's member (`to_member`); the relay checks it when the
+  message is accepted and again before every delivery. The relay can also list the sessions of
+  the caller's own member (`list_own`). The owner channel needs both.
+- Under an encryption policy of `required` for your own member, features that send plaintext
+  between your own sessions now refuse instead of sending: `ask_owner` answers
+  `encryption_required`, `spawn_agent` refuses and a run's result is not sent (`hoptell agents
+  result <run>` still prints it), and `hoptell telegram run` exits with code 78.
+- A second process waiting for a session name already in use (for example, another MCP process
+  for the same Codex session) can now send messages and list peers through a short-lived
+  send-only connection. The relay accepts a send only while the name is held by the same member
+  or shared-token identity. Sending this way requires a relay that supports the check.
+- When the relay refuses a name for a member token, the client, `hoptell doctor` and the
+  Telegram bridge now say which names are allowed (`<member>` or `<member>-...`).
+- `hoptell tmux`: the injector no longer presses Enter while Codex's transcript selection is
+  open or when it cannot see its own notice in the prompt; a notice left in the prompt is
+  submitted only on stable observations, and handed to you when you changed it. Fresh Codex
+  sessions' `»` prompt glyph is recognized.
+- Relays under systemd: a `DynamicUser` state directory (a symlink) is accepted, the owner app's
+  files are written where it resolves, and the relay and `hoptell relay admin` read the members
+  file from systemd's `LoadCredential` copy. The admin socket's path length is checked before
+  the relay listens.
+- Fixed: `hoptell telegram run` exited with code 13 when the relay restarted; it now waits and
+  reconnects.
+- Fixed: a relay backup whose first step met a database lock failed instead of being retried.
+- The release workflow checks the package against the committed release-gate records before
+  publishing.
 
 - Encrypted messages (experimental): when a member has a registered device that remains unrevoked,
   a new device needs approval from an active device of the member or from the relay owner. Run
@@ -188,7 +257,8 @@
   aggregate counts, sizes and ages and binds to 127.0.0.1 by default.
 - `hoptell doctor --relay-check` sends a test message to a temporary receiver and
   reports the elapsed time for connection setup, delivery and acknowledgement.
-- Node.js 22 or newer is required. CI runs on Node.js 22 and 24.
+- Node.js 22 or newer is required (a relay needs 22.13 or newer, see "Upgrading"). CI runs on
+  Node.js 22 and 24.
 - The README documents the observed client behavior and configurations.
 - Peer names are leased (relay protocol 2). While a session is online, another
   connection cannot take its name. When a session's connection drops, other
@@ -230,6 +300,24 @@
   token used by two credentials.
 - `hoptell doctor` shows the relay realm, the member it signed in as, and whether
   the local relay profile agrees.
+
+### Upgrading
+
+- Clients need Node.js 22 or newer. A relay needs Node.js 22.13 or newer to start, and 22.16 or
+  newer for online backups (`hoptell relay admin backup`); Node.js 24 also works.
+- Upgrade the relay and the clients together. Clients of this version use relay protocol 2
+  (leased names) and fall back to protocol 1 with an older relay.
+  With the experimental encrypted messages, an older client cannot attach as a device to an
+  upgraded relay, and devices registered before the upgrade should be reviewed with
+  `hoptell device list`.
+- Per-member tokens (`hoptell members`) are needed for the owner channel and recommended
+  everywhere; `--require-members` refuses the shared token. Without `HOPTELL_NAME`, the relay now
+  assigns session names.
+- Contacts: new installs hold senders without a grant until you decide; existing installs keep
+  their behavior until `hoptell contacts init`.
+- The owner channel needs a relay of this version (`to_member`, `list_own`). The Mini App also
+  needs `HOPTELL_OWNER_APP=on` on the relay and, when the bridge does not reach the relay at its
+  public `wss://` address, `HOPTELL_APP_URL` on the bridge.
 
 ## 0.2.2 (2026-10-08)
 

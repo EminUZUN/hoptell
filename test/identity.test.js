@@ -165,3 +165,60 @@ test("member ids: generated format, legacy ids, and refused collisions", async (
   t.after(() => relay.close());
   assert.throws(() => relay.reload([{ name: "alice", token: same }, { name: "bob", token: same }]), /also used by/);
 });
+
+test("a relay whose state directory is a symlink (systemd DynamicUser) records owner app ids, and its admin commands work there", { skip: !posix }, async (t) => {
+  const { RelayClient } = await import("../lib/client.js");
+  const { execFile } = await import("node:child_process");
+  const base = path.dirname(tmp(t));
+  const real = path.join(base, "private", "hoptell");
+  fs.mkdirSync(real, { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.join(base, "private"), 0o700);
+  const link = path.join(base, "hoptell");
+  fs.symlinkSync(real, link);
+  const empty = path.join(base, "empty.env");
+  fs.writeFileSync(empty, "");
+  const members = path.join(base, "members.json");
+  const env = { ...process.env, HOPTELL_ENV: empty, HOPTELL_TOKEN: "", HOPTELL_STATE_DIR: link, HOPTELL_MEMBERS: members, HOPTELL_OWNER_APP: "on", XDG_CONFIG_HOME: path.join(base, "xdg") };
+  for (const k of ["HOPTELL_POLICY", "HOPTELL_OIDC", "HOPTELL_EXPERIMENTAL_E2EE"]) delete env[k];
+  const cli = (args) => new Promise((resolve) => execFile(process.execPath, [BIN, ...args], { env, timeout: 30_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: stdout + stderr })));
+  // A members change is recorded in the audit log under the symlinked state directory.
+  const added = await cli(["members", "add", "me"]);
+  assert.equal(added.code, 0, added.out);
+  const token = added.out.match(/shown only now:\s+(\S+)/)?.[1];
+  assert.ok(token, "the new member's token is printed");
+
+  const p = spawn(process.execPath, [BIN, "relay", "--host", "127.0.0.1", "--port", "0"], { env });
+  let out = "";
+  p.stdout.on("data", (d) => (out += d));
+  p.stderr.on("data", (d) => (out += d));
+  const exited = new Promise((r) => p.on("exit", r));
+  t.after(() => p.exitCode === null && p.signalCode === null && p.kill("SIGKILL"));
+  for (let i = 0; i < 100 && !/listening on [^\n]*:(\d+)/.test(out) && p.exitCode === null; i++) await new Promise((r) => setTimeout(r, 50));
+  const port = Number(out.match(/listening on [^\n]*:(\d+)/)?.[1]);
+  assert.ok(port, out);
+
+  const c = new RelayClient({ url: `ws://127.0.0.1:${port}`, token, name: "me-owner", reconnect: false });
+  await c.start().ready(5000);
+  const app = "abcdefghijklmnopqrstuvwxyz";
+  const r = await c.rpc({ type: "app_register", app });
+  assert.equal(r.state, "on");
+  c.close();
+  assert.ok(fs.existsSync(path.join(real, "apps.json")), "apps.json is written in the resolved directory");
+  // The running relay answers on its admin socket through the symlinked path.
+  const online = await cli(["relay", "admin", "status"]);
+  assert.equal(online.code, 0, online.out);
+  p.kill("SIGTERM");
+  await exited;
+  assert.doesNotMatch(out, /could not be written|not a plain directory/, out);
+  assert.ok(!fs.existsSync(path.join(real, "relay.lock")), "the lock is released on exit");
+
+  // With the relay stopped, the offline commands take the same lock and see the same files.
+  const apps = await cli(["relay", "apps"]);
+  assert.equal(apps.code, 0, apps.out);
+  assert.match(apps.out, new RegExp(`^${app}  on  member `, "m"));
+  const retired = await cli(["relay", "apps", "--retire", app.slice(0, 6)]);
+  assert.equal(retired.code, 0, retired.out);
+  assert.match((await cli(["relay", "apps"])).out, new RegExp(`^${app}  retired`, "m"));
+  const offline = await cli(["relay", "admin", "status"]);
+  assert.equal(offline.code, 0, offline.out);
+});
