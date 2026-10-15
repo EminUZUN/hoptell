@@ -1,24 +1,24 @@
 {
   "attestations": [
     {
-      "finished": "2026-10-14T21:47:33Z",
-      "image": "sha256:5248a43594f9ed79d335f69db69f0c75d25d8828d87935099bff83594c465d0e",
+      "finished": "2026-10-15T14:36:30Z",
+      "image": "sha256:037e0f5df4143730c69276e9a9cf02ddbcea4148e33afcddadf1f0aef018323a",
       "outputs": {
         "glue": "d619769c26acaa1584ea14990fd08d975736441953689a932eaace802151b893",
         "glueUnwrapped": "4904b18804ae0814a3b809dba6879dcadb73b9076bd0d64744443f3305046de5",
         "wasm": "6af5d7041c07ca48abf725651ed154fd9a8e52d487ee8a60c63a09bb090c1f82"
       },
-      "started": "2026-10-14T21:46:08Z"
+      "started": "2026-10-15T14:35:16Z"
     },
     {
-      "finished": "2026-10-14T21:48:54Z",
-      "image": "sha256:5248a43594f9ed79d335f69db69f0c75d25d8828d87935099bff83594c465d0e",
+      "finished": "2026-10-15T14:37:45Z",
+      "image": "sha256:037e0f5df4143730c69276e9a9cf02ddbcea4148e33afcddadf1f0aef018323a",
       "outputs": {
         "glue": "d619769c26acaa1584ea14990fd08d975736441953689a932eaace802151b893",
         "glueUnwrapped": "4904b18804ae0814a3b809dba6879dcadb73b9076bd0d64744443f3305046de5",
         "wasm": "6af5d7041c07ca48abf725651ed154fd9a8e52d487ee8a60c63a09bb090c1f82"
       },
-      "started": "2026-10-14T21:47:33Z"
+      "started": "2026-10-15T14:36:30Z"
     }
   ],
   "binding": {
@@ -30,7 +30,7 @@
   "image": {
     "base": "rust:1.99.0-bookworm@sha256:b36c246742b4d323472588f789601be34eb4af053255e2af53969078ee8dcec7",
     "dockerfile": "efaa1630e99a9c5866e36e3cbf336bdcd50f8943299eed3e51f390e679d6f25c",
-    "id": "sha256:5248a43594f9ed79d335f69db69f0c75d25d8828d87935099bff83594c465d0e",
+    "id": "sha256:037e0f5df4143730c69276e9a9cf02ddbcea4148e33afcddadf1f0aef018323a",
     "node": "node:22.22.1-bookworm-slim@sha256:af5818e10f6294a719b4314f34ec03d8e8ad8f571a8d23742418790e6ebb5c90"
   },
   "javascript": "identity",
@@ -39,7 +39,7 @@
     "glueUnwrapped": "4904b18804ae0814a3b809dba6879dcadb73b9076bd0d64744443f3305046de5",
     "wasm": "6af5d7041c07ca48abf725651ed154fd9a8e52d487ee8a60c63a09bb090c1f82"
   },
-  "reviewedInputs": "9ae3faf74565b4c6c4df880791e4204268bf0113a6a8842e71544c4e23372648",
+  "reviewedInputs": "8e3129e2ee363f515dd687dc21d5d64b5f0a12af48943c2161543ac320b163be",
   "toolchain": {
     "rust": "1.99.0",
     "wasmBindgen": "0.2.129"

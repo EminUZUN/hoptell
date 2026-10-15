@@ -5,13 +5,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { telegramCommand } from "../lib/ownerchannelcli.js";
-import { readBridgeConfig, readPairing, readRun, runState } from "../lib/ownerchannel.js";
+import { IDENTITY } from "../lib/ownertexts.js";
+import { readAudit, readBridgeConfig, readPairing, readRun, runState } from "../lib/ownerchannel.js";
 import { processIdentity } from "../lib/host.js";
 import { doctor } from "../lib/doctor.js";
 import * as sig from "../lib/ownersig.js";
-import { BOT_ID, ME, OWNER_CHAT, REALM, agent, fakeTelegram, ownerRelay, paired, tmpHome, until } from "./owner-helpers.js";
+import { BOT_ID, ME, OWNER_CHAT, REALM, agent, appClient, fakeTelegram, initData, ownerRelay, paired, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
 const TOKEN = `${BOT_ID}:${crypto.randomBytes(26).toString("base64url")}`;
@@ -22,8 +25,8 @@ function fakeKeychain() {
   return { items, kind: "test keychain", available: () => true, set: (a, v) => (items.set(a, v), true), get: (a) => items.get(a) ?? null, remove: (a) => items.delete(a) };
 }
 
-async function setup(t, { webhook = "" } = {}) {
-  const { url, tokens } = await ownerRelay(t);
+async function setup(t, { webhook = "", ownerApp = false } = {}) {
+  const { url, tokens, http } = await ownerRelay(t, { ownerApp });
   const home = tmpHome(t);
   const tg = fakeTelegram({ webhook });
   const keychain = fakeKeychain();
@@ -49,7 +52,7 @@ async function setup(t, { webhook = "" } = {}) {
       drainMs: 3000,
       ...extra,
     });
-  return { url, tokens, home, tg, keychain, lines, cli, env, factories, printed: () => lines.join("\n") };
+  return { url, http, tokens, home, tg, keychain, lines, cli, env, factories, printed: () => lines.join("\n") };
 }
 
 test("setup: the token from standard input only, stored with the key in the credential store; the pin is printed and trusted here", async (t) => {
@@ -436,4 +439,230 @@ test("unpair removes the chat's command menu; a deletion Telegram does not confi
   await until(() => bridge.state().menu.delete.length === 0, 4000, "confirmed");
   await bridge.stop();
   await running;
+});
+
+test("identity: shows the bot's profile texts and what would change; --apply asks for yes, sets only what differs; never the token", async (t) => {
+  const s = await setup(t);
+  assert.equal(await s.cli(["setup"], { stdin: `${TOKEN}\n` }), 0, s.printed());
+  const sets = () => ["setMyName", "setMyDescription", "setMyShortDescription"].flatMap((m) => s.tg.calls(m));
+  s.tg.profile.short_description = IDENTITY.short_description; // already as proposed
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity"]), 0, s.printed());
+  const shown = s.printed();
+  assert.match(shown, /^OUT The profile texts of @owner_test_bot:$/m);
+  assert.match(shown, /^OUT Name: would change\n {2}now: owner test bot\n {2}new: hoptell$/m);
+  assert.match(shown, /^OUT Short description \(the profile's about text\): unchanged\n/m);
+  assert.match(shown, /^OUT Description \(shown in an empty chat\): would change\n {2}now: \(empty\)\n {2}new: This bot connects you/m);
+  assert.match(shown, /^OUT Profile photo: not changed \(to set one: --photo <file\.jpg>; to remove it: --remove-photo\)$/m);
+  assert.match(shown, /To set them: hoptell telegram identity --apply/);
+  assert.equal(sets().length, 0, "nothing set without --apply");
+  // --apply without "yes": nothing changes (also from a stream).
+  assert.equal(await s.cli(["identity", "--apply"], { stdin: "y\n" }), 1);
+  assert.equal(await s.cli(["identity", "--apply"], { stdin: Readable.from(["no\n"]) }), 1);
+  assert.equal(await s.cli(["identity", "--apply"], { stdin: "" }), 1);
+  assert.equal(sets().length, 0);
+  assert.match(s.printed(), /^OUT Apply these changes to @owner_test_bot\? Type yes to continue:$/m);
+  assert.match(s.printed(), /^OUT Nothing was changed\.$/m);
+  // yes: the two that differ are set; the third is not touched.
+  assert.equal(await s.cli(["identity", "--apply"], { stdin: Readable.from(["yes\n"]) }), 0, s.printed());
+  assert.deepEqual(sets().map((c) => c.method).sort(), ["setMyDescription", "setMyName"]);
+  assert.deepEqual([s.tg.profile.name, s.tg.profile.description, s.tg.profile.short_description], [IDENTITY.name, IDENTITY.description, IDENTITY.short_description]);
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity", "--apply"]), 0);
+  assert.match(s.printed(), /Nothing to change\./);
+  assert.equal(sets().length, 2, "nothing more set");
+  // A Telegram error is reported without the token; the bridge never sets profile texts.
+  s.tg.failNext.getMyName = [401];
+  assert.equal(await s.cli(["identity"]), 1);
+  assert.equal(s.printed().includes(SECRET), false);
+  assert.equal(await s.cli(["identity", "--bogus"]), 2);
+  assert.equal(/\bsetMy(Name|Description|ShortDescription)\b/.test(fs.readFileSync(new URL("../lib/ownerchannel.js", import.meta.url), "utf8")), false, "the bridge never sets them");
+});
+
+test("identity --photo: a JPG of at most 2 MB, checked before anything is asked; uploaded only after yes; --remove-photo; the audit never names the file", async (t) => {
+  const s = await setup(t);
+  assert.equal(await s.cli(["setup"], { stdin: `${TOKEN}\n` }), 0, s.printed());
+  s.tg.profile = { ...s.tg.profile, ...IDENTITY }; // the texts are already as proposed
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-photo-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const jpg = path.join(dir, "icon.jpg");
+  const bytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(3000)]);
+  fs.writeFileSync(jpg, bytes);
+  const uploads = () => s.tg.calls("setMyProfilePhoto");
+  // Shown, not applied.
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity", "--photo", jpg]), 0, s.printed());
+  assert.equal(s.printed().includes(`OUT Profile photo: would be set from ${jpg} (3 KB)`), true, s.printed());
+  assert.match(s.printed(), /^OUT To apply, run the same command with --apply\.$/m);
+  assert.equal(uploads().length, 0);
+  // Without yes: nothing uploaded.
+  assert.equal(await s.cli(["identity", "--apply", "--photo", jpg], { stdin: "no\n" }), 1);
+  assert.equal(uploads().length, 0);
+  // yes: uploaded once, the texts untouched (already as proposed).
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity", "--apply", "--photo", jpg], { stdin: "yes\n" }), 0, s.printed());
+  assert.equal(uploads().length, 1);
+  assert.deepEqual(s.tg.profile.photo, bytes);
+  assert.match(s.printed(), /^OUT Set: Profile photo\.$/m);
+  assert.equal(["setMyName", "setMyDescription", "setMyShortDescription"].flatMap((m) => s.tg.calls(m)).length, 0);
+  // --remove-photo.
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity", "--remove-photo"]), 0);
+  assert.match(s.printed(), /^OUT Profile photo: would be removed$/m);
+  assert.equal(await s.cli(["identity", "--apply", "--remove-photo"], { stdin: "yes\n" }), 0, s.printed());
+  assert.equal(s.tg.calls("removeMyProfilePhoto").length, 1);
+  assert.equal(s.tg.profile.photo, null);
+  assert.match(s.printed(), /^OUT Removed: Profile photo\.$/m);
+  const audits = readAudit(s.home).filter((e) => e.event === "identity");
+  assert.deepEqual(audits.map((e) => e.photo), ["set", "removed"]);
+  assert.equal(JSON.stringify(readAudit(s.home)).includes(dir), false, "the audit never names the file");
+  // Refused before any Telegram call: not a JPG, too large, missing, a directory, both options, no value.
+  const png = path.join(dir, "icon.png");
+  fs.writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const big = path.join(dir, "big.jpg");
+  fs.writeFileSync(big, Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(2 * 1024 * 1024)]));
+  const gets = () => s.tg.calls("getMyName").length;
+  const before = gets();
+  s.lines.length = 0;
+  assert.equal(await s.cli(["identity", "--photo", png]), 1);
+  assert.match(s.printed(), /the photo must be a JPG file/);
+  assert.equal(await s.cli(["identity", "--photo", big]), 1);
+  assert.match(s.printed(), /the photo is too large: 2049 KB; the limit is 2 MB/);
+  assert.equal(await s.cli(["identity", "--photo", path.join(dir, "missing.jpg")]), 1);
+  assert.match(s.printed(), /cannot read the photo: ENOENT/);
+  assert.equal(await s.cli(["identity", "--photo", dir]), 1);
+  assert.match(s.printed(), /the photo is not a file/);
+  assert.equal(await s.cli(["identity", "--photo", jpg, "--remove-photo"]), 2);
+  assert.equal(await s.cli(["identity", "--photo"]), 2);
+  assert.equal(gets(), before, "nothing was asked of Telegram");
+  assert.equal(uploads().length, 1);
+  assert.equal(s.printed().includes(SECRET), false);
+  assert.equal(/\b(setMyProfilePhoto|removeMyProfilePhoto)\b/.test(fs.readFileSync(new URL("../lib/ownerchannel.js", import.meta.url), "utf8")), false, "the bridge never sets the photo");
+});
+
+test("fav, unfav, alias and sessions: people.json from the bridge machine's CLI; unpair keeps it, unpair --all deletes it", async (t) => {
+  const s = await setup(t);
+  await s.cli(["setup"], { stdin: TOKEN });
+  const said = () => s.lines.slice(-1)[0];
+  assert.equal(await s.cli(["fav", "alice"]), 1);
+  assert.equal(said(), "ERR hoptell telegram: The owner channel is not paired yet: run hoptell telegram pair first.");
+  paired(s.home);
+  await agent(t, s.url, s.tokens.me, "me-alice");
+  await agent(t, s.url, s.tokens.me, "me-bob");
+  assert.equal(await s.cli(["fav", "alice"]), 0, s.printed());
+  assert.equal(said(), "OUT ★ alice is a favourite.");
+  assert.equal(await s.cli(["alias", "alice", "Main"]), 0, s.printed());
+  assert.equal(said(), 'OUT me-alice is now shown as "Main".');
+  const people = (await import("../lib/ownerpeople.js")).readPeople(s.home, { member: ME, owner: 5550001 }).sessions;
+  assert.equal(people["me-alice"].alias, "Main");
+  assert.equal(typeof people["me-alice"].alias_host, "string", "the host the relay reports now");
+  // Each settings change raises the revision and names its writer (design 7.4, section 7).
+  assert.equal(people["me-alice"].rev, 2);
+  assert.match(people["me-alice"].last_op, /^cli:[0-9a-f]{16}$/);
+  for (const [bad, text] of [
+    ["bob", "That name is already used by another agent. Pick another."],
+    ["me-alice", "That name is already used by another agent. Pick another."],
+    ["alice", "That name is already used by another agent. Pick another."],
+    ["@x", 'Names can be 1 to 24 characters and can\'t start with @, / or an emoji, or contain "·". Pick another.'],
+  ]) {
+    assert.equal(await s.cli(["alias", "bob", bad === "bob" ? "Main" : bad]), 1, bad);
+    if (bad !== "bob") assert.equal(said(), `ERR hoptell telegram: ${text}`, bad);
+  }
+  assert.equal(said(), 'ERR hoptell telegram: Names can be 1 to 24 characters and can\'t start with @, / or an emoji, or contain "·". Pick another.');
+  assert.equal(await s.cli(["unfav", "me-alice"]), 0);
+  assert.equal(said(), "OUT Main (alice) is no longer a favourite.");
+  assert.equal(await s.cli(["sessions"]), 0);
+  assert.equal(said(), 'OUT me-alice  alias "Main"');
+  assert.equal(await s.cli(["alias", "alice", "--clear"]), 0);
+  assert.equal(said(), "OUT The custom name for me-alice has been removed.");
+  assert.equal(await s.cli(["fav", "bob"]), 0);
+  assert.equal(await s.cli(["sessions"]), 0);
+  assert.equal(said(), "OUT me-bob  ★");
+  assert.equal(s.printed().includes(String(OWNER_CHAT)), false, "never a chat id");
+  assert.equal(s.printed().includes(SECRET), false);
+  // Plain unpair keeps it (the same user pairing again keeps their favourites); --all deletes it.
+  assert.equal(await s.cli(["unpair"]), 0);
+  assert.ok(fs.existsSync((await import("../lib/ownerpeople.js")).peoplePath(s.home)));
+  paired(s.home);
+  assert.equal(await s.cli(["unpair", "--all"]), 0, s.printed());
+  assert.equal(fs.existsSync((await import("../lib/ownerpeople.js")).peoplePath(s.home)), false);
+});
+
+test("alias without the relay: checked against this machine's list only, and said so", async (t) => {
+  const s = await setup(t);
+  await s.cli(["setup"], { stdin: TOKEN });
+  paired(s.home);
+  const env = { ...s.env, ME_TOKEN: "wrong-token-xxxxxxxxxxxxxxxxxxxxxxxx" };
+  assert.equal(await telegramCommand(["alias", "alice", "Main"], { home: s.home, env, out: (x) => s.lines.push(`OUT ${x}`), err: (x) => s.lines.push(`ERR ${x}`), signals: false }), 0, s.printed());
+  assert.ok(s.lines.includes("OUT (Could not reach the relay; checked against this machine's list only.)"));
+  assert.equal(s.lines.at(-1), 'OUT me-alice is now shown as "Main".');
+});
+
+test("CLI: two names given at once: exactly one wins; a change waiting for the lock writes nothing after an unpair", async (t) => {
+  const s = await setup(t);
+  await s.cli(["setup"], { stdin: TOKEN });
+  paired(s.home);
+  await agent(t, s.url, s.tokens.me, "me-alice");
+  await agent(t, s.url, s.tokens.me, "me-bob");
+  const codes = await Promise.all([s.cli(["alias", "alice", "Main"]), s.cli(["alias", "bob", "main"])]);
+  assert.deepEqual(codes.sort(), [0, 1], s.printed());
+  const { readPeople, peoplePath } = await import("../lib/ownerpeople.js");
+  const sessions = readPeople(s.home, { member: ME, owner: 5550001 }).sessions;
+  assert.equal(Object.values(sessions).filter((e) => e.alias?.toLowerCase() === "main").length, 1);
+  assert.ok(s.lines.includes("ERR hoptell telegram: That name is already used by another agent. Pick another."));
+  // A change waiting for the lock while the owner unpairs: nothing is written.
+  const { tryLock } = await import("../lib/locks.js");
+  const release = tryLock(`${peoplePath(s.home)}.lock`);
+  assert.equal(typeof release, "function");
+  const waiting = s.cli(["fav", "bob"]);
+  await sleep(200);
+  assert.equal(await s.cli(["unpair"]), 0);
+  release();
+  assert.equal(await waiting, 1);
+  assert.equal(s.lines.at(-1).startsWith("ERR hoptell telegram: The owner channel's pairing changed while this command was running, so nothing was saved."), true, s.printed());
+  paired(s.home);
+  assert.equal(readPeople(s.home, { member: ME, owner: 5550001 }).sessions["me-bob"]?.fav, undefined);
+});
+
+test("app: --on needs a relay that serves it; --status, --off and --rotate; the bridge opens sessions with the key derived from its token", async (t) => {
+  const old = await setup(t);
+  await old.cli(["setup"], { stdin: TOKEN });
+  assert.equal(await old.cli(["app", "--on"]), 1);
+  assert.match(old.printed(), /The hoptell server can't serve the app yet\. Its operator needs to update it and turn on HOPTELL_OWNER_APP\./);
+  assert.equal(await old.cli(["app", "--on", "--off"]), 2);
+
+  const s = await setup(t, { ownerApp: true });
+  await s.cli(["setup"], { stdin: TOKEN });
+  paired(s.home);
+  s.lines.length = 0;
+  assert.equal(await s.cli(["app", "--status"]), 0);
+  assert.match(s.printed(), /The app has never been turned on\./);
+  // Turned on two minutes ago, so initData made now is past its 60-second margin.
+  assert.equal(await s.cli(["app", "--on"], { now: () => Date.now() - 120_000 }), 0);
+  assert.match(s.printed(), /The app is on\. Start the bridge, then send \/app in the chat\./);
+  const id = JSON.parse(fs.readFileSync(sig.channelPaths(s.home).state, "utf8")).app.id;
+  assert.match(id, /^[a-z2-7]{26}$/);
+  let bridge = null;
+  const running = s.cli(["run"], { onBridge: (b) => (bridge = b) });
+  await until(() => bridge?.appAvailable(), 6000, "the app registered");
+  // While the bridge runs, the app cannot be changed from the CLI.
+  assert.equal(await s.cli(["app", "--off"]), 1);
+  assert.match(s.printed(), /the bridge is running/);
+  // initData signed with the bot's token opens a session (the bridge holds only the derived key).
+  const app = appClient(s.http, id);
+  const o = await app.open(initData({}, TOKEN));
+  assert.equal(o.status, 200, o.body);
+  s.lines.length = 0;
+  await s.cli(["app", "--status"]);
+  assert.match(s.printed(), /The app is on\./);
+  await bridge.stop();
+  await running;
+  assert.equal(await s.cli(["app", "--rotate"]), 0);
+  const st = JSON.parse(fs.readFileSync(sig.channelPaths(s.home).state, "utf8")).app;
+  assert.notEqual(st.id, id);
+  assert.deepEqual(st.retire, [id]);
+  assert.equal(await s.cli(["app", "--off"]), 0);
+  assert.equal(JSON.parse(fs.readFileSync(sig.channelPaths(s.home).state, "utf8")).app.on, false);
+  assert.ok(readAudit(s.home).some((e) => e.event === "app" && e.action === "rotate"));
+  assert.ok(!s.printed().includes(SECRET), "never the token");
 });

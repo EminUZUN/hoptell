@@ -90,6 +90,7 @@ export const GROUPS = {
       "lib/agentscli.js",
       "lib/agentspawn.js",
       "lib/apply.js",
+      "lib/apptunnel.js",
       "lib/backup.js",
       "lib/broker.js",
       "lib/claims.js",
@@ -122,9 +123,14 @@ export const GROUPS = {
       "lib/metrics.js",
       "lib/notices.js",
       "lib/oidc.js",
+      "lib/ownerapp.js",
+      "lib/ownerappauth.js",
+      "lib/ownerapppage.js",
       "lib/ownerchannel.js",
       "lib/ownerchannelcli.js",
+      "lib/ownerpeople.js",
       "lib/ownersig.js",
+      "lib/ownertexts.js",
       "lib/profiles.js",
       "lib/realm.js",
       "lib/records.js",
@@ -146,6 +152,12 @@ export const GROUPS = {
       // not imported but run: lib/files.js starts it as a child process (spawn of process.execPath
       // with its path) for every guarded read, a transfer's capture included
       "lib/read-helper.mjs",
+      // not imported but read: lib/ownerapppage.js reads these at bridge start and serves them as
+      // the owner app's page (design 7.4)
+      "lib/miniapp/app.css",
+      "lib/miniapp/app.js",
+      "lib/miniapp/index.html",
+      "lib/miniapp/tg.js",
       // the Node dependencies loaded on this path
       "package.json",
       "package-lock.json",

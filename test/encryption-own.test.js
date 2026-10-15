@@ -166,7 +166,7 @@ test("an outbox send prepared before the policy became required: refused for goo
   assert.ok(readAudit(home).some((e) => e.event === "refused" && e.reason === "encryption_required" && e.kind === "answer" && e.q === q));
   await sleep(200);
   assert.equal(alice.got.some((m) => m.from === "me-owner" && JSON.parse(m.text).kind === "answer"), false, "nothing sent");
-  const told = () => tg.sent.filter((x) => /requires end-to-end encryption/.test(x.params.text ?? ""));
+  const told = () => tg.sent.filter((x) => x.method !== "editMessageText" && /require end-to-end encryption/.test(x.params.text ?? "")); // (the closed card names the reason too)
   assert.equal(told().length, 1, "the owner was told once");
   // Two questions that expire: their statuses are refused too; one general notice for both.
   const q2 = await alice.ask("Expiring one?");
@@ -178,7 +178,7 @@ test("an outbox send prepared before the policy became required: refused for goo
   assert.deepEqual([q2, q3].map((x) => bridge.state().questions[x].status), ["expired", "expired"]);
   assert.equal(readAudit(home).filter((e) => e.event === "refused" && e.reason === "encryption_required" && e.kind === "status").length, 2);
   assert.equal(told().length, 2, "one more notice, for both statuses");
-  assert.match(told()[1].params.text, /explicit off entry for your own member/);
+  assert.match(told()[1].params.text, /^Messages to your agents are paused: .*For details, run hoptell telegram status on the computer running this bot\.$/);
   assert.equal(alice.got.filter((m) => m.from === "me-owner").length, 0, "no status was sent either");
 });
 

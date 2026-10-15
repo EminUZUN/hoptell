@@ -30,6 +30,11 @@ async function scenario(t, crashAt) {
   };
   const current = () => b?.bridge ?? a.bridge;
   await until(() => a.bridge.leading() || crashed, 4000, "leader");
+  if (crashed && !b) {
+    // A crash at start (the first pairing's reconcile write): the next run takes over.
+    await restart();
+    await until(() => b.bridge.leading(), 4000, "leader after restart");
+  }
   const alice = await agent(t, url, tokens.me, "me-alice");
   const q = await alice.ask("Which one?", { choices: ["postgres", "sqlite"] });
   await until(() => tg.cards().length || crashed, 4000, "card or crash");
@@ -44,9 +49,9 @@ async function scenario(t, crashAt) {
   const finished = () => {
     try {
       const s = current().state();
-      // The later answer finds the question answered, or (a reply to a card re-sent after a crash)
-      // is told to use the newest card.
-      const late = tg.texts().includes("Already answered.") || tg.texts().some((x) => /^This question was already answered\. Send your text to me-alice as a new instruction\?$/.test(x)) || tg.texts().some((x) => /no longer tracked; answer the newest card/.test(x)) || tg.sent.some((x) => x.method === "answerCallbackQuery" && x.params.text === "Already answered");
+      // The later answer finds the question answered, or (a reply to a copy whose message id was
+      // never recorded, before a crash) is told the bridge cannot tell who it was for.
+      const late = tg.texts().includes("This question is already answered. Send your text to alice as a new message?") || tg.texts().includes("I can't tell who that message was for. To answer a question, use /pending; to write to an agent, use /msg.") || tg.sent.some((x) => x.method === "answerCallbackQuery" && x.params.text === "Already answered.");
       return s.questions[q]?.status === "answered" && s.outbox.length === 0 && s.offset >= 3 && late;
     } catch {
       return false;
@@ -63,7 +68,7 @@ async function scenario(t, crashAt) {
   assert.equal(new Set(answers.map((x) => x.nonce)).size, 1, "a redone send carries the same nonce");
   assert.equal(answers[0].text, "postgres", "the first answer wins");
   assert.ok(tg.cards().length <= 2);
-  if (tg.cards().length === 2) assert.match(tg.cards()[1].params.text, /^\(re-sent\) /);
+  if (tg.cards().length === 2) assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice asks \(sent again, the first copy may not have arrived\):\n/);
   await a.bridge.stop();
   await b?.bridge.stop();
   return { seq, crashed };
@@ -154,7 +159,7 @@ test("a question redelivered under the same reference (crash before the relay ac
   await sleep(300);
   const s = b.bridge.state();
   assert.equal(tg.cards().length, 1, "no second card");
-  assert.equal(tg.cards()[0].params.text.startsWith("(re-sent)"), false);
+  assert.equal(tg.cards()[0].params.text.includes("sent again"), false);
   assert.deepEqual(Object.keys(s.questions), [q]);
   assert.equal(s.recent.length, 1, "no second quota use");
   assert.equal(alice.got.length, 0, "no status");

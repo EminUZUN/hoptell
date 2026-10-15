@@ -9,7 +9,7 @@ import { startRelay } from "../lib/relay.js";
 import { RelayClient } from "../lib/client.js";
 import * as sig from "../lib/ownersig.js";
 import { CONFIRM_MS, MENU_HOLD_MS, STATIC_COMMANDS, TARGET_MS, cleanLabel, commandOf, fit, readAudit } from "../lib/ownerchannel.js";
-import { BOT_ID, ME, OWNER_CHAT, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, tmpHome, until } from "./owner-helpers.js";
+import { BOT_ID, ME, OWNER_CHAT, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, setPeople, tmpHome, until } from "./owner-helpers.js";
 import { fakeToken, sleep } from "./helpers.js";
 
 const verifyFor = (key, who) => (m) => sig.verifyEnvelope(m.text, { pin: pinOf(key), realm: REALM, sender: m.from, me: { name: who, member: ME } });
@@ -87,29 +87,31 @@ test("the relay's list attests `own` (cap list_own): a shared-token peer holding
 
 // ---- feature 1: buttons --------------------------------------------------------------------------
 
-test("/peers: one button per own online agent (the bridge, other members and offline agents excluded); tap, prompt, reply: a signed instruction", async (t) => {
+test("/msg: one button per own online agent (the bridge, other members and offline agents excluded); tap, prompt, reply: a signed instruction", async (t) => {
   const s = await setup(t);
   const alice = await agent(t, s.url, s.tokens.me, "me-alice");
   await agent(t, s.url, s.tokens.me, "me-bob");
   await agent(t, s.url, s.tokens.bob, "bob-x");
-  s.tg.say("/peers");
-  await until(() => s.tg.last(/^Your agents on local:/), 4000, "list");
-  const list = s.tg.last(/^Your agents on local:/);
-  assert.match(list.params.text, /• me-alice\n• me-bob/);
-  assert.equal(list.params.text.includes("bob-x"), false);
-  assert.equal(list.params.text.includes("me-owner"), false);
+  s.tg.say("/msg");
+  await until(() => s.tg.last(/^Who should get your message\?/), 4000, "list");
+  const list = s.tg.last(/^Who should get your message\?/);
+  assert.equal(list.params.text, "Who should get your message?");
   const buttons = buttonsOf(list);
-  assert.deepEqual(buttons.map((b) => b.text), ["alice", "bob"]);
-  for (const b of buttons) {
+  assert.deepEqual(
+    buttons.map((b) => b.text),
+    ["alice", "bob", "🔍 Search"],
+    "the bridge, other members' agents and offline agents get no button",
+  );
+  for (const b of buttons.slice(0, 2)) {
     assert.match(b.callback_data, /^t:[a-z2-7]{10}$/);
     assert.equal(b.callback_data.includes("alice"), false, "no name in the data");
   }
   assert.equal(list.params.disable_notification, true);
   assert.deepEqual(list.params.link_preview_options, { is_disabled: true });
   s.tg.press(list, 0);
-  await until(() => s.tg.last(/^✏️ Message to me-alice/), 4000, "prompt");
-  const prompt = s.tg.last(/^✏️ Message to me-alice/);
-  assert.equal(prompt.params.text, "✏️ Message to me-alice (local): reply to this message with your text.");
+  await until(() => s.tg.last(/^✏️ Message to alice/), 4000, "prompt");
+  const prompt = s.tg.last(/^✏️ Message to alice/);
+  assert.equal(prompt.params.text, "✏️ Message to alice. Write it below.");
   assert.deepEqual(prompt.params.reply_markup, { force_reply: true, input_field_placeholder: "Message to alice" });
   const acks = s.tg.calls("answerCallbackQuery");
   assert.equal(acks.length, 1, "the tap is answered");
@@ -121,11 +123,12 @@ test("/peers: one button per own online agent (the bridge, other members and off
   const v = verifyFor(s.key, "me-alice")(m);
   assert.equal(v.ok, true, v.reason);
   assert.equal(v.env.kind, "instruction");
-  await until(() => s.tg.texts().includes("Sent to me-alice."), 4000, "confirmation");
-  // Feature 2: a reply to the confirmation continues with the same agent.
-  const sentMsg = s.tg.last(/^Sent to me-alice\.$/);
-  assert.deepEqual(sentMsg.params.reply_parameters?.allow_sending_without_reply, true);
-  s.tg.say("and then deploy", { reply: s.tg.replyTo(sentMsg) });
+  // A 👍 on the owner's message, which becomes its route: replying to it continues with the agent.
+  await until(() => s.tg.calls("setMessageReaction").length === 1, 4000, "👍");
+  const ownMsg = s.tg.updates.at(-1).message;
+  assert.equal(s.tg.calls("setMessageReaction")[0].params.message_id, ownMsg.message_id);
+  assert.equal(s.tg.texts().some((x) => /^Sent to/.test(x)), false);
+  s.tg.say("and then deploy", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
   await fromOwner(alice, "and then deploy");
   // Audit: names and lengths, never the text.
   const audit = JSON.stringify(readAudit(s.home));
@@ -140,17 +143,18 @@ test("/msg: buttons for online agents; a newer list retires the older one, whose
   s.tg.say("/msg");
   await until(() => s.tg.last(/^Who should get your message\?/));
   const first = s.tg.last(/^Who should get your message\?/);
+  assert.equal(first.params.text, "Who should get your message?");
   s.tg.say("/msg");
   await until(() => s.tg.calls("editMessageReplyMarkup").some((c) => c.params.message_id === first.message_id), 4000, "older list retired");
   const second = s.tg.last(/^Who should get your message\?/);
   assert.notEqual(second.message_id, first.message_id);
   s.tg.press(first, 0);
-  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is out of date; send /peers again."));
+  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is old. Open a new one with /msg."));
   s.tg.press(second, 0);
-  await until(() => s.tg.last(/^✏️ Message to me-alice/));
+  await until(() => s.tg.last(/^✏️ Message to alice/));
   // The live id pressed on another message (the first list) is refused too.
   s.tg.press(first, 0, { data: buttonsOf(second)[0].callback_data });
-  await until(() => s.tg.calls("answerCallbackQuery").filter((c) => c.params.text === "This list is out of date; send /peers again.").length === 2);
+  await until(() => s.tg.calls("answerCallbackQuery").filter((c) => c.params.text === "This list is old. Open a new one with /msg.").length === 2);
   // Nobody online: no buttons; that newer list still retires the older one.
   const s2 = await setup(t);
   const bob = await agent(t, s2.url, s2.tokens.me, "me-bob");
@@ -160,28 +164,32 @@ test("/msg: buttons for online agents; a newer list retires the older one, whose
   bob.client.close();
   await until(async () => !(await s2.bridge.relay.list()).some((p) => p.name === "me-bob" && p.online), 4000, "bob offline");
   s2.tg.say("/msg");
-  await until(() => s2.tg.texts().some((x) => /^None of your agents on local is online\./.test(x)));
+  await until(() => s2.tg.texts().includes("None of your agents is online right now. To leave a message for one, write @name and your message; it waits until the agent is back."));
   await until(() => s2.tg.calls("editMessageReplyMarkup").some((c) => c.params.message_id === populated.message_id), 4000, "retired");
-  assert.deepEqual(s2.bridge.state().targets, {});
+  assert.deepEqual(
+    Object.values(s2.bridge.state().targets).map((x) => x.kind),
+    ["search"],
+    "only Search: bob is offline and not a favourite",
+  );
   s2.tg.press(populated, 0);
-  await until(() => s2.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is out of date; send /peers again."));
+  await until(() => s2.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is old. Open a new one with /msg."));
 });
 
 test("target buttons expire after 24 hours; unknown data is answered; a foreign user's or chat's tap is dropped and not answered", async (t) => {
   const s = await setup(t);
   await agent(t, s.url, s.tokens.me, "me-alice");
   s.tg.say("/peers");
-  await until(() => s.tg.last(/^Your agents on local:/));
-  const list = s.tg.last(/^Your agents on local:/);
+  await until(() => s.tg.last(/^Your agents:/));
+  const list = s.tg.last(/^Your agents:/);
   s.tg.press(list, 0, { from: 777, chat: 777 });
   s.tg.press(list, 0, { chat: 888 });
   await until(() => s.bridge.state().drops.foreign_callback === 2);
   assert.equal(s.tg.calls("answerCallbackQuery").length, 0, "not answered: the bot does not reveal itself");
   s.tg.press(list, 0, { data: "garbage" });
-  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This card is not tracked."));
+  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This question is no longer open."));
   s.clock.skew = TARGET_MS + 1000;
   s.tg.press(list, 0);
-  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is out of date; send /peers again."));
+  await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "This list is old. Open a new one with /msg."));
   await s.bridge.tick();
   assert.deepEqual(s.bridge.state().targets, {}, "expired targets are pruned");
 });
@@ -197,7 +205,7 @@ test("without the relay's list_own cap: no buttons and no agent commands, the st
   const s = await setup(t, { relay: r, bridge: { clientFactory, namePrefix: "" } });
   await agent(t, s.url, s.tokens.me, "me-alice");
   await agent(t, s.url, s.tokens.bob, "bob-x");
-  const notice = "The relay local cannot confirm which agents are yours, so they are not listed and there are no buttons; it needs an upgrade. Meanwhile, send @<name> <text>.";
+  const notice = "I can't list your agents: the hoptell server needs an update. You can still write @name followed by your message.";
   s.tg.say("/peers");
   await until(() => s.tg.texts().includes(notice));
   s.tg.say("/msg");
@@ -206,7 +214,7 @@ test("without the relay's list_own cap: no buttons and no agent commands, the st
   await s.bridge.menuCheck();
   assert.deepEqual(lastMenu(s.tg), STATIC_COMMANDS.map((c) => c.command));
   s.tg.say("/alice hi");
-  await until(() => s.tg.texts().some((x) => /^Agent commands need a newer relay/.test(x)));
+  await until(() => s.tg.texts().filter((x) => x === notice).length === 3);
 });
 
 // ---- feature 2: replies ---------------------------------------------------------------------------
@@ -224,12 +232,13 @@ test("a reply to a closed card asks first; the confirm button sends once, is bou
   tg.press(card, 0);
   await fromOwner(alice, "yes");
   tg.say("also bump the version", { reply: tg.replyTo(card) });
-  await until(() => tg.last(/^This question was already answered\./));
-  const confirm = tg.last(/^This question was already answered\./);
-  assert.equal(confirm.params.text, "This question was already answered. Send your text to me-alice as a new instruction?");
-  const [button] = buttonsOf(confirm);
+  await until(() => tg.last(/^This question is already answered\./));
+  const confirm = tg.last(/^This question is already answered\./);
+  assert.equal(confirm.params.text, "This question is already answered. Send your text to alice as a new message?");
+  const [[button, cancel]] = confirm.params.reply_markup.inline_keyboard;
   assert.equal(button.text, "Send to alice");
   assert.match(button.callback_data, /^c:[a-z2-7]{10}$/);
+  assert.deepEqual(cancel, { text: "Cancel", callback_data: `x:${button.callback_data.slice(2)}` });
   // The offer is audited with the agent and the ids only, never the text.
   const offers = readAudit(home).filter((e) => e.event === "confirm_offered");
   assert.equal(offers.length, 1);
@@ -250,8 +259,8 @@ test("a reply to a closed card asks first; the confirm button sends once, is bou
   tg.press(confirm, 0);
   const m = await fromOwner(alice, "also bump the version");
   assert.equal(verifyFor(key, "me-alice")(m).env.kind, "instruction");
-  await until(() => tg.calls("editMessageText").some((c) => c.params.message_id === confirm.message_id && c.params.text === "Sent to me-alice as a new instruction."));
-  assert.ok(tg.calls("answerCallbackQuery").some((c) => c.params.text === "Sent"));
+  await until(() => tg.calls("editMessageText").some((c) => c.params.message_id === confirm.message_id && c.params.text === "Sent to alice."));
+  assert.ok(tg.calls("answerCallbackQuery").some((c) => c.params.text === "Sent."));
   // Once: a second tap finds nothing.
   tg.press(confirm, 0);
   await until(() => tg.calls("answerCallbackQuery").filter((c) => c.params.text === "This button has expired.").length === 2);
@@ -259,7 +268,7 @@ test("a reply to a closed card asks first; the confirm button sends once, is bou
   assert.equal(alice.got.filter((x) => x.from === "me-owner").length, 2);
   assert.equal(JSON.stringify(bridge.state()).includes("also bump the version"), false, "the text is gone from state");
   // The edited confirmation is a route: a reply to it continues with the agent.
-  tg.say("thanks", { reply: { message_id: confirm.message_id, text: "Sent to me-alice as a new instruction." } });
+  tg.say("thanks", { reply: { message_id: confirm.message_id, text: "Sent to alice." } });
   await fromOwner(alice, "thanks");
 });
 
@@ -272,8 +281,8 @@ test("a confirm button expires after 10 minutes, and its text goes with it", asy
   s.tg.press(card, 1);
   await fromOwner(alice, "b");
   s.tg.say("secret-ish follow up", { reply: s.tg.replyTo(card) });
-  await until(() => s.tg.last(/^This question was already answered\./));
-  const confirm = s.tg.last(/^This question was already answered\./);
+  await until(() => s.tg.last(/^This question is already answered\./));
+  const confirm = s.tg.last(/^This question is already answered\./);
   assert.ok(JSON.stringify(s.bridge.state()).includes("secret-ish follow up"));
   s.clock.skew = CONFIRM_MS + 1000;
   await s.bridge.tick();
@@ -286,18 +295,18 @@ test("a confirm button expires after 10 minutes, and its text goes with it", asy
 test("replies: to a refusal it retries that agent; to an untracked message it says so; never a name from the message text", async (t) => {
   const s = await setup(t);
   s.tg.say("@nobody hello");
-  await until(() => s.tg.last(/no reachable agent named me-nobody/));
-  const refusal = s.tg.last(/no reachable agent named me-nobody/);
+  await until(() => s.tg.last(/^Not sent: there is no agent called nobody right now\.$/));
+  const refusal = s.tg.last(/^Not sent: there is no agent called nobody right now\.$/);
   const route = s.bridge.state().routes[String(refusal.message_id)];
   assert.deepEqual([route.name, route.kind], ["me-nobody", "refused"]);
   const nobody = await agent(t, s.url, s.tokens.me, "me-nobody");
   s.tg.say("hello again", { reply: s.tg.replyTo(refusal) });
   await fromOwner(nobody, "hello again");
-  // A bot message the bridge never routed, whose text names an agent: not tracked.
+  // A bot message the bridge never routed, whose text names an agent: nothing is sent.
   s.tg.say("/help");
-  await until(() => s.tg.last(/^hoptell owner channel\./));
-  s.tg.say("to alice", { reply: { message_id: s.tg.last(/^hoptell owner channel\./).message_id, text: "Sent to me-alice." } });
-  await until(() => s.tg.texts().includes("This message is not tracked; use /msg or @<name> <text>."));
+  await until(() => s.tg.last(/^How this works:/));
+  s.tg.say("to alice", { reply: { message_id: s.tg.last(/^How this works:/).message_id, text: "Sent to alice." } });
+  await until(() => s.tg.texts().includes("I can't tell who that message was for. To answer a question, use /pending; to write to an agent, use /msg."));
   // Routes expire after 7 days.
   s.clock.skew = 8 * 86400_000;
   await s.bridge.tick();
@@ -315,22 +324,24 @@ test("the menu: chat scope, static commands then one per agent; unchanged lists 
   assert.deepEqual(first.params.commands, STATIC_COMMANDS);
   const alice = await agent(t, s.url, s.tokens.me, "me-alice");
   await agent(t, s.url, s.tokens.me, "me-Big-Bot");
+  await agent(t, s.url, s.tokens.me, "me-carol");
+  await setPeople(s.home, ["me-alice", "me-Big-Bot"]);
   await s.bridge.menuCheck();
-  assert.deepEqual(lastMenu(s.tg), ["pending", "peers", "msg", "help", "alice", "big_bot"]);
-  assert.equal(menuCalls(s.tg).at(-1).params.commands.at(-1).description, "Message me-Big-Bot");
+  assert.deepEqual(lastMenu(s.tg), ["msg", "agents", "pending", "help", "alice", "big_bot"], "favourites only");
+  assert.equal(menuCalls(s.tg).at(-1).params.commands.at(-1).description, "Message Big-Bot");
   await s.bridge.menuCheck();
   assert.equal(menuCalls(s.tg).length, 2, "the same list is not registered again");
   s.tg.say("/alice");
-  await until(() => s.tg.last(/^✏️ Message to me-alice/));
+  await until(() => s.tg.last(/^✏️ Message to alice/));
   s.tg.say("/alice@owner_test_bot check the logs");
   await fromOwner(alice, "check the logs");
   s.tg.say("/alice  look again ");
   await fromOwner(alice, "look again");
   s.tg.say("/zed hi");
-  await until(() => s.tg.texts().some((x) => /^Unknown command\.\n\nhoptell owner channel\./.test(x)));
+  await until(() => s.tg.texts().includes("I don't know /zed. Tap the menu button or send /help."));
   // Not by normalising the received text: /ALICE is not /alice.
   s.tg.say("/ALICE hi");
-  await until(() => s.tg.texts().filter((x) => /^Unknown command\./.test(x)).length === 2);
+  await until(() => s.tg.texts().includes("I don't know /ALICE. Tap the menu button or send /help."));
   assert.ok(JSON.stringify(readAudit(s.home)).includes('"menu"'));
 });
 
@@ -343,10 +354,11 @@ test("collisions: Alice/alice and my-bot/my_bot get no command, also for 24 hour
   const a1 = await agent(t, s.url, s.tokens.me, "me-my-bot");
   await agent(t, s.url, s.tokens.me, "me-my_bot");
   await agent(t, s.url, s.tokens.me, "me-carol");
+  await setPeople(home, ["me-my_bot", "me-carol"]);
   await s.bridge.menuCheck();
-  assert.deepEqual(lastMenu(tg), ["pending", "peers", "msg", "help", "carol"]);
+  assert.deepEqual(lastMenu(tg), ["msg", "agents", "pending", "help", "carol"]);
   tg.say("/my_bot hi");
-  await until(() => tg.texts().includes("/my_bot is ambiguous now; use @<name> <text> or /msg."));
+  await until(() => tg.texts().includes("/my_bot fits more than one agent right now. Pick one with /msg."));
   // One leaves: still ambiguous (the hold), also after a restart.
   a1.client.close();
   await sleep(100);
@@ -355,11 +367,11 @@ test("collisions: Alice/alice and my-bot/my_bot get no command, also for 24 hour
   const { bridge } = bridgeOn(t, { home, telegram: tg.client("b"), url: r.url, token: r.tokens.me, key, now: () => Date.now() + clock.skew });
   await until(() => bridge.leading());
   tg.say("/my_bot again");
-  await until(() => tg.texts().filter((x) => x === "/my_bot is ambiguous now; use @<name> <text> or /msg.").length === 2);
+  await until(() => tg.texts().filter((x) => x === "/my_bot fits more than one agent right now. Pick one with /msg.").length === 2);
   // After the hold (24 h after it was last seen, plus the hourly renewal), only me-my_bot is left.
   clock.skew = MENU_HOLD_MS + 3600_000 + 1000;
   await bridge.menuCheck();
-  assert.deepEqual(lastMenu(tg), ["pending", "peers", "msg", "help", "carol", "my_bot"]);
+  assert.deepEqual(lastMenu(tg), ["msg", "agents", "pending", "help", "carol", "my_bot"]);
 });
 
 test("a colliding agent that comes online between two checks makes the command ambiguous at once; a failed refresh refuses", async (t) => {
@@ -372,16 +384,17 @@ test("a colliding agent that comes online between two checks makes the command a
   };
   const s = await setup(t, { bridge: { clientFactory } });
   const carol = await agent(t, s.url, s.tokens.me, "me-carol");
+  await setPeople(s.home, ["me-carol"]);
   await s.bridge.menuCheck();
   assert.ok(lastMenu(s.tg).includes("carol"));
   s.tg.say("/carol one");
   await fromOwner(carol, "one");
   await agent(t, s.url, s.tokens.me, "me-Carol"); // no menu check in between
   s.tg.say("/carol two");
-  await until(() => s.tg.texts().includes("/carol is ambiguous now; use @<name> <text> or /msg."));
+  await until(() => s.tg.texts().includes("/carol fits more than one agent right now. Pick one with /msg."));
   failList = true;
   s.tg.say("/carol three");
-  await until(() => s.tg.texts().includes("Could not check your agents now; try again, or use @<name> <text>."));
+  await until(() => s.tg.texts().includes("I couldn't reach the hoptell server just now. Please try again in a moment."));
   await sleep(100);
   assert.equal(carol.got.filter((x) => x.from === "me-owner").length, 1);
 });
@@ -404,15 +417,16 @@ test("the tracking bound fails closed: a full history blocks a colliding command
   assert.equal(st.zed, undefined, "not tracked: no command");
   assert.deepEqual(lastMenu(s.tg), STATIC_COMMANDS.map((c) => c.command));
   s.tg.say("/alice hi");
-  await until(() => s.tg.texts().includes("/alice is ambiguous now; use @<name> <text> or /msg."));
+  await until(() => s.tg.texts().includes("/alice fits more than one agent right now. Pick one with /msg."));
   s.tg.say("/zed hi");
-  await until(() => s.tg.texts().some((x) => /^Unknown command\./.test(x)));
+  await until(() => s.tg.texts().includes("I don't know /zed. Tap the menu button or send /help."));
 });
 
-test("at most 100 commands: the static four, then agents by name", async (t) => {
+test("at most 100 commands: the static four, then favourites by name", async (t) => {
   const s = await setup(t);
   const names = Array.from({ length: 98 }, (_, i) => `me-a${String(i).padStart(3, "0")}`);
   for (const n of names) await agent(t, s.url, s.tokens.me, n);
+  await setPeople(s.home, names);
   await s.bridge.menuCheck();
   const cmds = lastMenu(s.tg);
   assert.equal(cmds.length, 100);
@@ -459,17 +473,18 @@ test("every text has no link preview and no parse_mode; replies use reply_parame
   s.tg.say("a".repeat(3500), { reply: s.tg.replyTo(card) });
   await until(() => s.tg.calls("editMessageText").length === 1);
   const edit = s.tg.calls("editMessageText")[0];
-  assert.equal(edit.params.text.length, 4096);
-  assert.ok(edit.params.text.endsWith("…"));
+  // No echo of the answer: a 3,000-character question with a 3,500-character answer stays whole.
+  assert.ok(edit.params.text.length < 4096, String(edit.params.text.length));
+  assert.equal(edit.params.text, `✅ Question 1 · alice asked:\n${"q".repeat(3000)}\n\nAnswered (your reply is below).`);
   s.tg.say("@alice hi");
   s.tg.say("/pending");
-  await until(() => s.tg.texts().includes("No open questions."));
+  await until(() => s.tg.texts().includes("No questions are waiting for you."));
   for (const c of s.tg.sent.filter((x) => x.method === "sendMessage" || x.method === "editMessageText")) {
     assert.deepEqual(c.params.link_preview_options, { is_disabled: true }, c.params.text.slice(0, 40));
     assert.equal(c.params.parse_mode, undefined);
     assert.equal("reply_to_message_id" in c.params, false);
   }
-  assert.ok(s.tg.last(/^No open questions\.$/).params.reply_parameters.message_id > 0);
+  assert.ok(s.tg.last(/^No questions are waiting for you\.$/).params.reply_parameters.message_id > 0);
 });
 
 test("429: the outbox waits retry_after before trying again", async (t) => {
@@ -477,6 +492,6 @@ test("429: the outbox waits retry_after before trying again", async (t) => {
   s.tg.failNext.sendMessage = [429]; // the fake's retry_after is 1 s
   const at = Date.now();
   s.tg.say("/help");
-  await until(() => s.tg.last(/^hoptell owner channel\./), 5000, "help after the wait");
+  await until(() => s.tg.last(/^How this works:/), 5000, "help after the wait");
   assert.ok(Date.now() - at >= 900, `waited ${Date.now() - at} ms`);
 });

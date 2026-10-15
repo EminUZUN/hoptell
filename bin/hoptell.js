@@ -74,6 +74,11 @@ Usage:
   hoptell relay broker-reset --yes [--state-dir <dir>]
                                             with the relay stopped: a new broker refresh key; every broker
                                             sign-in ends (after the key was lost or damaged)
+  hoptell relay apps [--retire <id prefix> | --purge <id prefix>] [--state-dir <dir>]
+                                            with the relay stopped: the Mini App ids of owner channel bridges;
+                                            --retire blocks an id for good; --purge deletes it, which frees
+                                            its URL for anyone (old Telegram buttons could then open another
+                                            bridge's app)
   hoptell relay admin status|members|devices|policy|grants|revocations|metrics|store|audit|reload|checkpoint
                 | backup <dir> | restore <dir>|--resume|--abort | devices reinstate <member> <device> | ui
                                             the relay owner's views and controls (on the relay host); see
@@ -150,7 +155,7 @@ Usage:
                                             EXPERIMENTAL: save a staged transfer to a path you choose
                                             (never replaces a file without --overwrite)
   hoptell telegram setup [--relay <alias>] [--name owner]   the owner channel (a Telegram bot; token on stdin)
-  hoptell telegram pair | run | status | unpair [--all]   (run exits 78 when the encryption policy refuses it: do not restart on 78)
+  hoptell telegram pair | run | status | identity [--apply] | unpair [--all]   (run exits 78 when the encryption policy refuses it: do not restart on 78)
   hoptell telegram trust '<pin>' [--add] | --remove-key <key id> | --revoke <realm id>
   hoptell telegram key next | key commit    rotate the bridge's signing key (bridge stopped)
   hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
@@ -725,6 +730,35 @@ try {
         console.log(`Broker sign-in reset: a new refresh key, ${n} sign-in${n === 1 ? "" : "s"} ended.`);
         break;
       }
+      if (args[0] === "apps") {
+        // The owner channel's Mini App ids (design 7.4, section 2), with the relay stopped (the state lock).
+        const { appsAdmin } = await import("../lib/apptunnel.js");
+        const dir = stateDirOf();
+        const retire = opt("--retire");
+        const purge = opt("--purge");
+        if (retire && purge) fail("use --retire or --purge, not both", 2);
+        const { lockStateDir: lockDir } = await import("../lib/realm.js");
+        let release;
+        try {
+          release = lockDir(dir);
+        } catch (e) {
+          fail(`${e.message}; stop the relay first`);
+        }
+        try {
+          if (retire) console.log(`Retired: ${appsAdmin.retire(dir, retire).slice(0, 6)}… (it answers 404 and can never be registered again).`);
+          else if (purge) console.log(`Deleted: ${appsAdmin.purge(dir, purge).slice(0, 6)}…. Its URL is free now: any bridge may register it again.`);
+          else {
+            const rows = appsAdmin.list(dir);
+            if (!rows.length) console.log("No app ids.");
+            for (const r of rows) console.log(`${r.id}  ${r.state}  member ${r.member}  ${r.name}${r.registered ? `  since ${new Date(r.registered).toISOString()}` : ""}`);
+          }
+        } catch (e) {
+          release();
+          fail(e.message);
+        }
+        release();
+        break;
+      }
       const { startRelay } = await import("../lib/relay.js");
       const port = Number(opt("--port", process.env.HOPTELL_PORT || 7777));
       if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
@@ -840,7 +874,10 @@ try {
           return {};
         }
       };
-      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
+      // The owner channel's Mini App (design 7.4): off unless HOPTELL_OWNER_APP=on.
+      const ownerApp = (await import("../lib/apptunnel.js")).ownerAppEnabled(process.env.HOPTELL_OWNER_APP);
+      if (ownerApp) log("owner app: /app/ is served for registered owner channel bridges (HOPTELL_OWNER_APP=on)");
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, ownerApp: ownerApp ? { stateDir: stateDirectory } : null, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
       // The relay admin (design 4.4): its operations over this store, served on the admin socket.
       const { createAdmin, startAdminSocket, COUNTS_EVERY_MS } = await import("../lib/admin.js");
       admin = createAdmin({
@@ -1005,6 +1042,22 @@ try {
         }
       }
       const c = await connect("send");
+      // To this relay's owner channel (design 7.3, 2.6): text by name, plaintext, to the own member.
+      const ownersig = await import("../lib/ownersig.js");
+      ownersig.armOwnerBackstop(home(), c);
+      let guarded;
+      try {
+        const policy = (await contactsOf()).currentPolicy();
+        guarded = ownersig.ownerSendGuard({ home: home(), client: c, to, policy: () => policy });
+      } catch (e) {
+        c.close();
+        fail(e.message);
+      }
+      if (guarded) {
+        console.log(`${describeAck(to, await c.send(to, words.join(" "), ttl, replyTo, { toMember: guarded.toMember }), ttl, replyTo)}\n${ownersig.OWNER_SEND_NOTE}`);
+        c.close();
+        break;
+      }
       // The contacts' encryption policy (design 3.3, 4.3), as in agent sessions: the CLI sends
       // plaintext only, so a contact (or a fan-out recipient) whose messages must be encrypted
       // gets nothing, never plaintext.

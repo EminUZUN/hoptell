@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { Crash, readPairing, newPairingCode } from "../lib/ownerchannel.js";
 import { RelayClient } from "../lib/client.js";
 import * as sig from "../lib/ownersig.js";
-import { BOT_ID, ME, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, tmpHome, until } from "./owner-helpers.js";
+import { BOT_ID, OWNER_CHAT, ME, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
 /** A relay client whose sends to the names in `refuse` are refused by "the relay" for good. */
@@ -48,14 +48,14 @@ test("a card in flight when the bridge stops: the lock waits for it, its result 
   assert.equal(tg.cards().length, 1);
   const s = a.bridge.state();
   assert.equal(s.questions[q].status, "pending", "the late result was not applied");
-  assert.equal(s.questions[q].tg_message_id, null);
+  assert.deepEqual(s.questions[q].copies, [], "no copy recorded");
   assert.equal(s.outbox.length, 1);
   // The next run on this home re-sends the card and opens the question with its message id.
   const c = bridgeOn(t, { home, telegram: tg.client("c"), url, token: tokens.me, key });
   await until(() => tg.cards().length === 2, 4000, "re-sent");
-  assert.match(tg.cards()[1].params.text, /^\(re-sent\) /);
+  assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice asks \(sent again, the first copy may not have arrived\):\n/);
   await until(() => c.bridge.state().questions[q].status === "open", 4000, "open");
-  assert.equal(c.bridge.state().questions[q].tg_message_id, tg.cards()[1].message_id);
+  assert.deepEqual(c.bridge.state().questions[q].copies, [{ chat: OWNER_CHAT, id: tg.cards()[1].message_id }]);
 });
 
 test("an edit in flight when the claim is lost: aborted, the step not marked done; redone after the claim returns, the answer sent once", async (t) => {
@@ -102,8 +102,9 @@ test("a refused send replaces the success steps: no `Sent to`, no answered card,
   await until(() => bridge.leading(), 4000, "leader");
   // An instruction the relay refuses.
   tg.say("@me-ghost hello");
-  await until(() => tg.texts().some((x) => /^Not sent: no reachable agent named me-ghost\.$/.test(x)), 4000, "refusal");
+  await until(() => tg.texts().includes("Not sent: there is no agent called ghost right now."), 4000, "refusal");
   assert.equal(tg.texts().some((x) => /^Sent to /.test(x)), false);
+  assert.equal(tg.calls("setMessageReaction").length, 0, "no 👍");
   // A button answer whose asker the relay now refuses.
   const alice = await agent(t, url, tokens.me, "me-alice");
   const q1 = await alice.ask("Button?", { choices: ["a", "b"] });
@@ -117,16 +118,17 @@ test("a refused send replaces the success steps: no `Sent to`, no answered card,
   const s = bridge.state();
   assert.deepEqual([s.questions[q1].status, s.questions[q2].status], ["undelivered", "undelivered"]);
   const acks = tg.sent.filter((x) => x.method === "answerCallbackQuery").map((x) => x.params.text);
-  assert.deepEqual(acks, ["Not sent: no reachable agent named me-alice."]);
+  assert.deepEqual(acks, ["Not sent: there is no agent called alice right now."]);
   const edits = tg.sent.filter((x) => x.method === "editMessageText").map((x) => x.params.text);
   assert.equal(edits.length, 2);
-  assert.ok(edits.every((x) => /your answer could not be delivered/.test(x) && !/answered:/.test(x)));
-  assert.ok(tg.texts().some((x) => x === "Not sent: no reachable agent named me-alice."), "the reply gets a refusal message");
+  assert.ok(edits.every((x) => /^⚠️ Question \d · alice asked:\n(Button|Reply)\?\n\nYour answer could not be delivered: there is no agent called alice right now\.$/.test(x)), edits.join(" | "));
+  assert.ok(tg.texts().some((x) => x === "Not sent: there is no agent called alice right now."), "the reply gets a refusal message");
+  assert.equal(tg.calls("setMessageReaction").length, 0, "no 👍");
   assert.equal(alice.got.filter((m) => m.from === "me-owner").length, 0);
   // A later tap on the closed card says so and sends nothing.
   tg.press(c1, 1);
   await until(() => tg.sent.filter((x) => x.method === "answerCallbackQuery").length === 2, 4000, "late tap");
-  assert.equal(tg.sent.filter((x) => x.method === "answerCallbackQuery").at(-1).params.text, "This question is undelivered.");
+  assert.equal(tg.sent.filter((x) => x.method === "answerCallbackQuery").at(-1).params.text, "Your answer couldn't be delivered, so this question is closed.");
 });
 
 test("a card Telegram refuses for good (400, 403) closes Q as undeliverable and sends exactly one status; a retryable error keeps the card pending", async (t) => {
@@ -189,7 +191,7 @@ test("a crash after pairing.json is written but before the update is committed: 
   const b = bridgeOn(t, { home, telegram: tg.client("b"), url, token: tokens.me, key });
   await until(() => b.bridge.state().offset === 2, 4000, "committed after the restart");
   await sleep(100);
-  assert.equal(tg.texts().filter((x) => /^Paired with hoptell/.test(x)).length, 1, "acknowledged once");
+  assert.equal(tg.texts().filter((x) => /^You're connected\. /.test(x)).length, 1, "acknowledged once");
   assert.equal(b.bridge.state().drops.pairing_code_wrong ?? 0, 0, "not counted as a wrong try");
   // A wrong try given again after a crash is counted once.
   const c2 = await newPairingCode(home, BOT_ID);
@@ -221,7 +223,7 @@ test("a paired home: the paired record names its update; an unrelated /start is 
   await until(() => bridge.leading(), 4000, "leader");
   tg.say("/start");
   await until(() => bridge.state().offset === 2, 4000, "handled");
-  assert.equal(tg.texts().some((x) => /^Paired with hoptell/.test(x)), false);
+  assert.equal(tg.texts().some((x) => /^You're connected\. /.test(x)), false);
 });
 
 test("a bridge name the member token may not use stops the bridge with how to pick one", async (t) => {

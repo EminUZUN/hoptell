@@ -8,12 +8,17 @@ import { RelayClient } from "../lib/client.js";
 import { boundedFetch, createVerifier, discoveryDocument } from "../lib/oidc.js";
 import { startRelay } from "../lib/relay.js";
 import { startProvider } from "./fixtures/oidc-provider.mjs";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { sleep } from "./helpers.js";
 
 const REALM = "c".repeat(32);
 const ALICE = "m_aaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-async function setup(t, { provider = {}, issuer = {}, verifierOptions = {}, config = {} } = {}) {
+async function setup(t, { provider = {}, issuer = {}, verifierOptions = {}, config = {}, relayOptions = {} } = {}) {
   const p = await startProvider({ clients: { "hoptell-cli": {}, "hoptell-relay": { secret: "relay-secret" } }, ...provider });
   t.after(() => p.close());
   const cfg = {
@@ -42,7 +47,7 @@ async function setup(t, { provider = {}, issuer = {}, verifierOptions = {}, conf
   };
   const verifier = await createVerifier(cfg, { jwksCooldownMs: 500, ...verifierOptions });
   const members = [{ name: "alice", id: ALICE, oidc: [{ issuer: p.issuer, subject: "user-1" }] }];
-  const relay = await startRelay({ host: "127.0.0.1", port: 0, members, realm: { id: REALM }, oidc: { verifier, config: cfg, discovery: discoveryDocument(cfg, REALM) }, log: () => {} });
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members, realm: { id: REALM }, oidc: { verifier, config: cfg, discovery: discoveryDocument(cfg, REALM) }, log: () => {}, ...relayOptions });
   t.after(() => relay.close());
   const signIn = (o = {}) => async () => ({ issuer: p.issuer, token: await p.issue(o), expiresAt: Date.now() + 300_000 });
   return { p, cfg, relay, verifier, url: `ws://127.0.0.1:${relay.port}`, http: `http://127.0.0.1:${relay.port}`, signIn };
@@ -340,4 +345,45 @@ test("a token with more than 100 groups is refused, never cut short (group claim
 test("a token with a group name longer than 255 characters is refused, never cut short", async (t) => {
   const { p, verifier } = await setup(t);
   await assert.rejects(verifier.verify(p.issuer, await handmade(p, { groups: ["a".repeat(256)] })), (e) => e.code === "bad_token" && /longer than 255/.test(e.message));
+});
+
+test("the owner app: a signed-in bridge past its deadline or freshness bound is sent no app request, even before its timer runs", async (t) => {
+  const get = (base, p) =>
+    new Promise((resolve, reject) => {
+      http.get(`${base}${p}`, (res) => (res.resume(), res.on("end", () => resolve(res.statusCode)))).on("error", reject);
+    });
+  const appId = () => [...crypto.randomBytes(26)].map((x) => "abcdefghijklmnopqrstuvwxyz234567"[x & 31]).join("");
+  const cases = [
+    // An introspected token: its freshness bound (the last provider answer + the delay).
+    { name: "alice-fresh", opts: { provider: { opaque: true }, issuer: { validation: "introspection", requiredClaims: { typ: "Bearer" } }, config: { maxRevocationDelaySeconds: 30 } }, skip: 31_000 },
+    // A JWT: its deadline (the token's expiry).
+    { name: "alice-exp", opts: {}, skip: 3600_000 },
+  ];
+  for (const c of cases) {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-app-oidc-"));
+    t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
+    const { url, http: base, signIn } = await setup(t, { ...c.opts, relayOptions: { ownerApp: { stateDir } } });
+    const b = new RelayClient({ url, name: c.name, reconnect: false, signIn: signIn() });
+    t.after(() => b.close());
+    await b.start().ready();
+    const reqs = [];
+    b.on("app_req", (m) => {
+      reqs.push(m);
+      b.frame({ type: "app_res", rid: m.rid, status: 200, mime: "text/html", body: "page" });
+    });
+    const id = appId();
+    assert.equal((await b.rpc({ type: "app_register", app: id })).state, "on");
+    assert.equal(await get(base, `/app/${id}/`), 200);
+    assert.equal(reqs.length, 1);
+    const real = Date.now;
+    Date.now = () => real() + c.skip; // past the bound; the timers have not run
+    const closed = new Promise((r) => b.ws.once("close", (code) => r(code)));
+    try {
+      assert.equal(await get(base, `/app/${id}/`), 503, c.name);
+      assert.equal(reqs.length, 1, `${c.name}: nothing forwarded`);
+      assert.equal(await closed, 4003);
+    } finally {
+      Date.now = real;
+    }
+  }
 });

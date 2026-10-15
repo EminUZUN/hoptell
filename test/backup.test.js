@@ -138,3 +138,70 @@ test("a runtime without node:sqlite backup() refuses the backup", async (t) => {
   await assert.rejects(backupRelay({ db: s.db, stateDir: s.state, dest: path.join(s.root, "none"), realm: s.realm }), /has no backup\(\)/);
   assert.equal(fs.existsSync(path.join(s.root, "none")), false);
 });
+
+/**
+ * The rejection node:sqlite's backup() gives when its first step meets a lock: a raw database
+ * whose write transaction stays open until the backup settles (no timing assumption). Null when
+ * this runtime retries such a step instead (the backup then completes once the write ends).
+ */
+async function firstStepLockedRejection() {
+  const raw = new DatabaseSync(":memory:");
+  try {
+    raw.exec("CREATE TABLE t (x BLOB)");
+    raw.exec("BEGIN IMMEDIATE");
+    raw.prepare("INSERT INTO t VALUES (randomblob(4000))").run();
+    const job = createRequire(import.meta.url)("node:sqlite").backup(raw, ":memory:").then(() => null, (e) => e);
+    const settled = await Promise.race([job, new Promise((r) => setTimeout(() => r("pending"), 3000))]);
+    raw.exec("ROLLBACK");
+    return settled === "pending" ? await job : settled;
+  } finally {
+    raw.close();
+  }
+}
+
+test("node:sqlite's rejection for a first step that met a lock is retried, and the backup succeeds", async (t) => {
+  const real = await firstStepLockedRejection();
+  if (real) assert.deepEqual([real.code, real.errcode, real.message], ["ERR_SQLITE_ERROR", 0, "not an error"], "the rejection lib/relaydb.js retries");
+  else t.diagnostic("this runtime retries a first step that met a lock; the rejection is simulated");
+  const s = await store(t, { rows: 500 });
+  const sqlite = createRequire(import.meta.url)("node:sqlite");
+  const original = sqlite.backup;
+  let calls = 0;
+  sqlite.backup = (...args) => (++calls === 1 ? Promise.reject(real ?? Object.assign(new Error("not an error"), { code: "ERR_SQLITE_ERROR", errcode: 0 })) : original(...args));
+  t.after(() => (sqlite.backup = original));
+  const dest = path.join(s.root, "retried");
+  const r = await backupRelay({ db: s.db, stateDir: s.state, dest, realm: s.realm, config: { members: s.members } });
+  assert.equal(calls, 2);
+  assert.equal(readBackup(dest).manifest.schema.name, "relay");
+  assert.ok(r.pages > 0);
+});
+
+test("a backup that cannot start: bounded tries, each into an empty destination, then a clear error; other errors are not retried", async (t) => {
+  const s = await store(t);
+  const sqlite = createRequire(import.meta.url)("node:sqlite");
+  const original = sqlite.backup;
+  t.after(() => (sqlite.backup = original));
+  const sizes = [];
+  // Node's rejection when the first step meets SQLITE_BUSY or SQLITE_LOCKED.
+  sqlite.backup = async (_db, dest) => {
+    sizes.push(fs.statSync(dest).size);
+    fs.writeFileSync(dest, "partial");
+    fs.writeFileSync(`${dest}-journal`, "x");
+    throw Object.assign(new Error("not an error"), { code: "ERR_SQLITE_ERROR", errcode: 0, errstr: "not an error" });
+  };
+  const dest = path.join(s.root, "busy");
+  await assert.rejects(backupRelay({ db: s.db, stateDir: s.state, dest, realm: s.realm }), /^Error: the relay database stayed busy; the backup did not start after 20 tries; try again$/);
+  assert.equal(sizes.length, 20);
+  assert.deepEqual([...new Set(sizes)], [0], "every try starts from an empty destination");
+  assert.equal(fs.existsSync(dest), false, "the partial folder is removed");
+  // Any other SQLite error fails at once.
+  let tries = 0;
+  sqlite.backup = async () => {
+    tries++;
+    throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
+  };
+  await assert.rejects(backupRelay({ db: s.db, stateDir: s.state, dest: path.join(s.root, "io"), realm: s.realm }), /disk I\/O error/);
+  assert.equal(tries, 1);
+  // The store closes normally afterwards (no backup is counted as still running).
+  assert.doesNotThrow(() => s.db.stat());
+});

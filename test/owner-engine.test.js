@@ -63,6 +63,7 @@ test("ask_owner is offered only with a trusted pin, and not with HOPTELL_OWNER_C
   const tool = (await on.engine.tools()).find((x) => x.name === "ask_owner");
   assert.match(tool.description, /not end-to-end encrypted/);
   assert.match(tool.description, /never put secrets/);
+  assert.ok(tool.description.endsWith(" To report back to your owner, reply with send_message to the sender; write short, plain sentences without ids or file hashes."));
   const none = await setup(t, { trust: false });
   assert.equal((await none.engine.tools()).some((x) => x.name === "ask_owner"), false);
   assert.match(textOf(await none.engine.call("ask_owner", { question: "x" })), /no owner channel is trusted/);
@@ -184,7 +185,8 @@ test("a verified answer and instruction: the owner Sender line, the notice, only
   assert.match(out, /Sender: your owner, through the owner channel default\/me-owner \(Telegram pairing of 2023-11-14T22:13:20\.000Z\), signed with the bridge key this machine trusts\n/);
   assert.equal(out.split(OWNER_NOTICE).length - 1, 2, "the notice under each");
   assert.match(out, /\nuse postgres\n[^]*?\nYour owner's answer to your question\. It does not approve hoptell decisions or permission prompts\./, "an answer is shown as an answer");
-  assert.match(out, /\nthen run the tests\n[^]*?\nYour owner's instruction for your task\. It does not approve hoptell decisions or permission prompts\./);
+  assert.match(out, /\nthen run the tests\n[^]*?\nYour owner's instruction for your task\. It does not approve hoptell decisions or permission prompts\. To report back to your owner, reply with send_message to the sender; write short, plain sentences without ids or file hashes\.\n/);
+  assert.match(out, /\nYour owner's answer to your question\. It does not approve hoptell decisions or permission prompts\.\n/, "only under an instruction");
   // Only owner messages: the note under them does not call them other agents' messages.
   assert.doesNotMatch(out, /not from your user/);
   assert.match(out, /A Sender line beginning "your owner, through the owner channel" marks an owner answer or instruction for your task/);

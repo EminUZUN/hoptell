@@ -433,20 +433,27 @@ sends data to Telegram, a third party with its own
 stores them on its servers, and anyone with the bot token can read new messages to the bot.
 
 - **Sent to Telegram** (`api.telegram.org` only): the text of each question an agent of yours
-  asks with `ask_owner`, its choices, the asking agent's peer name and relay alias, and a short
-  reference; the bridge's notes on a question (answered, expired, cancelled); the replies to
-  `/pending` (the asking agents' names, references and ages), `/peers` (up to 100 of your own
-  agents' names and online statuses on that relay, as the relay confirms them), `/msg` and `/help`;
-  the bridge's prompts and confirmations, which name the agent; and the names of your own online
-  agents as button labels (at most 50 per list) and in the bot's command menu for your paired chat
-  (a command and a "Message <name>" description per agent, for up to 96 online agents whose names
-  give a valid command that no other agent's name shares). Bot API requests include the bot token,
+  asks with `ask_owner`, its choices, the asking agent's name and the question's number; the
+  bridge's updates to a question (answered, expired, cancelled); notes from your own agents (the
+  agent's name and the note's text, up to 3,000 characters); the replies to `/pending` (the asking
+  agents' names, question numbers, the start of each question and its age), `/agents` (how many
+  favourites you have and how many of your agents are online), `/msg` and `/help`; the bridge's
+  prompts and confirmations, which name the agent; the names of your own agents (as the relay
+  confirms them, and the ones you saved) as button labels (at most 10 per list or page, also in
+  search results) and in the bot's command menu for your paired chat (a command and a "Message
+  <name>" description per favourite, for up to 96 favourites whose names give a valid command that
+  no other agent's name shares); the names you give agents, in buttons, prompts, the details screen
+  and menu descriptions; and on an agent's details screen and in a "now running on" question, the
+  computer name the agent reported to the relay, and when you last talked with it. Bot API requests include the bot token,
   and Telegram sees the bridge machine's IP address. An answered card may include your answer text.
-  hoptell does not automatically forward other peer messages, files or logs, but an agent can
-  include their contents in a question.
+  When you run `hoptell telegram identity --apply`, the bot's name, short description and
+  description are sent too, and with `--photo`, the photo file you name. The bridge shows messages that your own agents send to it as notes in
+  the chat; it does not forward other peers' messages, files or logs, but an agent can include
+  their contents in a question or a note.
 - **Received from Telegram**: the bridge receives your pairing code, answers, button presses and
-  commands (including `@<agent>` and `/<agent>` instructions, and replies to its prompts and
-  confirmations), with your Telegram user id and chat id. It drops updates from other users or
+  commands (including `@<agent>` and `/<agent>` instructions, messages you type before choosing
+  an agent, search words, names you give agents, and replies to its prompts, confirmations and
+  notes), with your Telegram user id and chat id. It drops updates from other users or
   chats and counts them without keeping their text. It signs answers and instructions and sends
   them through the relay to your agents. If an agent reads one, its configured AI provider may
   receive it (see "AI providers").
@@ -454,20 +461,41 @@ stores them on its servers, and anyone with the bot token can read new messages 
   system's keychain (or the encrypted credential file, as for `hoptell login`).
   `~/.hoptell/owner-channel/` (or `$HOPTELL_HOME/owner-channel/` when set; 0700, files 0600, not
   encrypted by hoptell) holds `bridge.json` (the bot id and username, the relay alias, the bridge
-  name, the realm, the member id and the public key), `pairing.json` and `state.json`.
+  name, the realm, the member id and the public key), `pairing.json`, `state.json` and
+  `people.json`.
   `pairing.json` holds the paired Telegram user id and chat id, if paired, and the hash and expiry
   of any pending pairing code. `state.json` holds the update offset, question text and choices
-  while needed, and pending actions that can contain question, answer, instruction or status text
-  until they finish.
+  while needed, and pending actions that can contain question, answer, instruction, note or status
+  text until they finish. It also holds the paired Telegram user id and pairing id it last acted
+  for, each question's number and the Telegram message ids of its cards.
+
+  `people.json` holds, per agent name of your own member and for the paired Telegram user id only:
+  whether it is a favourite or hidden, the name you gave it and the computer name the relay
+  reported when you gave it, when you last talked with it (a message sent, a question asked or
+  answered, a note shown) and when the bridge first saw it online. Entries without a favourite,
+  name or hidden mark go after 30 days without use or change, and the file holds at most 2,000
+  entries.
+  `unpair` keeps it; `unpair --all` deletes it. If another Telegram account pairs, the file is
+  ignored and replaced.
+
+  For notes from your agents, `state.json` holds which bot messages are notes from which agent (24
+  hours, for at most the last 1,500 notes), when you last sent a message to each agent (at most
+  1,000 agents; it decides whether a note notifies you), the relay ids of notes already received (8
+  days, at most 5,000), and the times of recent notes per agent for the limits. For each message you
+  send to an agent, it keeps the relay's id of that message, the agent's name and member, and the id
+  of your Telegram message that carried it (7 days, at most 1,000 messages; cleared when the bot is
+  paired again), so that a note answering it can be shown as a reply to your message.
 
   For targeting your agents, `state.json` also holds the buttons the bridge issued (agent names,
   your member id and Telegram message ids; usable for up to 24 hours, or until a newer list retires
   them), which bot messages name which agent (usable for up to 7 days, for at most 1,000 messages),
   and the command menu's chat id with the agent names behind each command (the bridge renews an
   agent's recorded time at most once an hour and drops the name at its first successful menu
-  refresh after that time is more than 25 hours old). When you reply to a closed question, it holds
-  your reply's text until you tap its "Send" button; the button expires after 10 minutes, and the
-  text is deleted at the bridge's next housekeeping pass or by `unpair --all`. While the bridge is
+  refresh after that time is more than 25 hours old). When you reply to a closed question, type a
+  message before choosing an agent ("Who is this for?"), or the bot asks before sending to an agent
+  that now runs on another computer, it holds your text until you tap a button; the buttons expire
+  after 10 minutes, and the text is deleted when it is sent or cancelled, at the bridge's next
+  housekeeping pass after it expires, or by `unpair --all`. While the bridge is
   stopped, expired entries, that text included, stay in the file. `menu-cleanup.json` holds the
   chat ids whose command menu Telegram did not confirm removing; `unpair --all` keeps it, and the
   next run of the same bot tries again and removes the file once the removal is confirmed.
@@ -475,9 +503,14 @@ stores them on its servers, and anyone with the bot token can read new messages 
   Closed question metadata is removed after its expiry and closure are at least a day old, no
   action is pending, and the bridge runs housekeeping; it can remain longer if the bridge is
   stopped or an action cannot finish. `audit.jsonl` (rotated at 1 MiB, one older file kept)
-  records events such as pairing, questions, answers, instructions, refusals and dropped updates.
+  records events such as pairing, questions, answers, instructions, notes shown (`noticed`: the
+  agent's name, the length and a short hash), changes to favourites, names and hidden agents
+  (`people`: the change and the agent's name, never the name you gave), questions about a changed
+  computer (`host_warned`), refusals, dropped updates and `identity --apply` (which texts were set,
+  and whether a photo was set or removed, never the file's name).
   These events hold message references, peer names, lengths and short hashes, never message
-  text, tokens or chat ids.
+  text, tokens or chat ids. `state.json` counts dropped notes by reason (such as `notice_rate`,
+  `notice_unpaired` and `notice_hidden`), without their text.
 - **Stored on each agent machine**: `~/.hoptell/owner-channel/trusted.json` (or
   `$HOPTELL_HOME/owner-channel/trusted.json` when set) with the pins you
   trusted (realm, bridge name, public keys). `seen/` keeps signed-message nonces for at least
@@ -499,6 +532,38 @@ command does not remove Telegram's messages; use Telegram's option to clear the 
 sides and see Telegram's privacy policy. `hoptell telegram trust --revoke <realm>` removes all
 pins for that realm on the agent machine. Setting `HOPTELL_OWNER_CHANNEL=off` turns off the agent side (the `ask_owner` tool and
 verification).
+
+### The app
+
+The app in Telegram is off until you run `hoptell telegram app --on`, and it needs a relay whose
+operator turned it on.
+
+- When you open the app, your phone loads it from your hoptell server, not from Telegram.
+  Everything the app shows and sends passes the server's HTTPS endpoint and the relay unencrypted
+  by hoptell: your list of agents with their names, favourites and hidden marks,
+  the computer names, your drafts, and the start of each open question.
+- To prove it is you, Telegram gives the app a signed note about you: your Telegram user id, first
+  and last name, username, language, whether you have Premium, and a link to your profile photo.
+  The app sends it to your bridge once when it opens; the HTTPS endpoint and the relay can read it.
+  The bridge keeps only a hash of it, in memory, so that one note opens one app session at a time.
+- The app stores nothing on your phone. The bridge keeps your drafts for up to 10 minutes (deleted
+  when sent or cancelled), and the settings you change in `people.json`, as for the bot. In
+  `state.json` it keeps whether the app is on and its link id, the ids of recent app requests (one
+  hour, no text), settings changes waiting for their line in the chat, and for each change made in
+  the app, the old and new value of that one setting for its `Undo` button. `Undo` is available
+  for up to 24 hours for the 500 most recent changes made in the app; older buttons stop working.
+  `people.json` gains a revision number, the time of the last change and the last writer's id per
+  agent.
+- Nothing you write in the app reaches an agent until you tap Send in the chat.
+- `audit.jsonl` records app sessions (opened, closed and why), settings changes from the app (the
+  agent's name and which setting), drafts (the agent's name, the length and a short hash) and
+  questions shown again, never text, the signed note, tokens or your Telegram name.
+- The relay keeps `apps.json` in its state directory: each app's identifier with the hoptell account
+  and bridge name that registered it, its state and its last registration, until the relay operator removes it.
+  Its log records the start of the app id, the status and the duration of each request, never
+  bodies or the session token.
+- `unpair --all` deletes the app's state with `state.json`; the relay's `apps.json` entry stays
+  until the relay operator removes it (`hoptell relay apps --purge`).
 
 ## AI providers
 

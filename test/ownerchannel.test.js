@@ -26,7 +26,7 @@ test("a question without choices: a ForceReply card, answered by a reply, verifi
   assert.equal(card.params.chat_id, OWNER_CHAT);
   assert.equal(card.params.parse_mode, undefined, "plain text");
   assert.deepEqual(card.params.reply_markup.force_reply, true);
-  assert.equal(card.params.text, `❓ me-alice (local) asks:\nDeploy to staging now?\n— reply to this message to answer · ref ${q.slice(0, 8)}`);
+  assert.equal(card.params.text, "❓ Question 1 · alice asks:\nDeploy to staging now?\n\nReply to this message to answer.");
   tg.say("yes, go ahead", { reply: tg.replyTo(card) });
   const m = await alice.waitFor((x) => x.from === "me-owner");
   assert.equal(m.reply_to, q);
@@ -35,7 +35,10 @@ test("a question without choices: a ForceReply card, answered by a reply, verifi
   assert.equal(v.env.kind, "answer");
   assert.equal(v.env.text, "yes, go ahead");
   assert.equal(v.env.q, q);
-  await until(() => tg.sent.some((s) => s.method === "editMessageText" && /answered: yes, go ahead/.test(s.params.text)), 4000, "card edited");
+  await until(() => tg.sent.some((s) => s.method === "editMessageText" && s.params.text === "✅ Question 1 · alice asked:\nDeploy to staging now?\n\nAnswered (your reply is below)."), 4000, "card edited");
+  // No echo of the answer; a 👍 on the owner's reply instead of a message.
+  assert.equal(tg.sent.some((s) => JSON.stringify(s.params).includes("go ahead")), false);
+  await until(() => tg.calls("setMessageReaction").length === 1, 4000, "👍");
   const st = bridge.state();
   assert.equal(st.questions[q].status, "answered");
   assert.equal(st.questions[q].payload, null, "the payload is deleted when the question closes");
@@ -70,13 +73,14 @@ test("a question with choices: buttons, callback_data within 64 bytes, answered 
   tg.press(card, 1);
   const m = await alice.waitFor((x) => x.from === "me-owner");
   assert.equal(verifyFor(key, "me-alice")(m).env.text, "sqlite");
-  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "Answer sent"));
+  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "Sent."));
+  await until(() => tg.sent.some((s) => s.method === "editMessageText" && s.params.text === "✅ Question 1 · alice asked:\nWhich database?\n\nYou chose: sqlite"));
   // A late tap, and a later reply, find it answered.
   tg.press(card, 0);
-  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "Already answered"));
+  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "Already answered."));
   // A later reply to the answered card is not sent at once: a button asks first (design v5).
   tg.say("postgres after all", { reply: tg.replyTo(card) });
-  await until(() => tg.texts().includes("This question was already answered. Send your text to me-alice as a new instruction?"));
+  await until(() => tg.texts().includes("This question is already answered. Send your text to alice as a new message?"));
   await sleep(200);
   assert.equal(alice.got.filter((x) => x.from === "me-owner").length, 1, "only the first answer reaches the agent");
 });
@@ -97,25 +101,27 @@ test("instructions: @name reaches the owner's own agent, signed; @all is refused
   assert.equal(v.env.kind, "instruction");
   assert.equal(v.env.text, "please run the tests");
   assert.deepEqual(v.env.to, { name: "me-alice", member: ME });
-  await until(() => tg.texts().includes("Sent to me-alice."));
+  await until(() => tg.calls("setMessageReaction").length === 1, 4000, "👍");
+  assert.deepEqual(tg.calls("setMessageReaction")[0].params.reaction, [{ type: "emoji", emoji: "👍" }]);
+  assert.equal(tg.texts().some((x) => /^Sent to/.test(x)), false, "a reaction, not a message");
   // A name that starts with "role" is a name, not a role.
   const rolesBot = await agent(t, url, tokens.me, "me-roles-bot");
   tg.say("@roles-bot check the build");
   const rb = await rolesBot.waitFor((x) => x.from === "me-owner");
   assert.equal(verifyFor(key, "me-roles-bot")(rb).env.text, "check the build");
-  await until(() => tg.texts().includes("Sent to me-roles-bot."));
+  await until(() => tg.calls("setMessageReaction").length === 2, 4000, "👍");
   tg.say("@all stop everything");
-  await until(() => tg.texts().some((x) => /^Send to one agent: @<name> <text>\. @all is not supported; other @words are treated as agent names, not roles\.$/.test(x)));
+  await until(() => tg.texts().includes("Messages go to one agent at a time. Write @name and your message, or use /msg."));
   tg.say("@nobody hello");
-  await until(() => tg.texts().some((x) => /no reachable agent named me-nobody/.test(x)));
+  await until(() => tg.texts().includes("Not sent: there is no agent called nobody right now."));
   tg.say("x".repeat(3501));
-  await until(() => tg.texts().some((x) => /limited to 3500/.test(x)));
+  await until(() => tg.texts().includes("Too long to send: 3,501 characters, the limit is 3,500. Please shorten or split it."));
   tg.say("just chatting");
-  await until(() => tg.texts().filter((x) => /^hoptell owner channel\./.test(x)).length >= 1);
+  await until(() => tg.texts().includes("Who is this for?"), 4000, "the picker for a held text");
   tg.say("/pending");
-  await until(() => tg.texts().includes("No open questions."));
+  await until(() => tg.texts().includes("No questions are waiting for you."));
   tg.say("/peers");
-  await until(() => tg.texts().some((x) => /Your agents on local:\n• me-alice/.test(x)));
+  await until(() => tg.texts().includes("Your agents: 0 favourites, 2 online."), 4000, "/peers, a synonym of /agents");
   assert.equal(alice.got.filter((x) => x.from === "me-owner").length, 1, "nothing else was forwarded");
 });
 
@@ -138,13 +144,13 @@ test("pairing: a one-time code binds one user and private chat; wrong codes, exp
   await until(() => readPairing(home).paired);
   assert.deepEqual([readPairing(home).paired.user_id, readPairing(home).paired.chat_id], [42, 42]);
   assert.match(readPairing(home).paired.id, /^p_[a-z2-7]{16}$/);
-  await until(() => tg.texts().some((x) => /^Paired with hoptell/.test(x)));
+  await until(() => tg.texts().some((x) => /^You're connected\. /.test(x)));
   // Single use: the same code again does nothing; the earlier user is not the owner.
   tg.say(`/start ${code}`, { from: 43, chat: 43 });
   tg.say("/help", { from: OWNER_USER, chat: OWNER_CHAT });
   await until(() => bridge.state().offset === 6);
   assert.equal(readPairing(home).paired.user_id, 42);
-  assert.equal(tg.texts().filter((x) => /^hoptell owner channel/.test(x)).length, 0);
+  assert.equal(tg.texts().filter((x) => /^How this works:/.test(x)).length, 0);
   // Five wrong codes void a code; an expired code is void.
   const c2 = await newPairingCode(home, BOT_ID, now);
   for (let i = 0; i < PAIR_WRONG_MAX; i++) tg.say(`/start BAD${i}XXXX`, { from: 50 + i, chat: 50 + i });
@@ -176,7 +182,7 @@ test("pairing: the code is matched without regard to case; wrong tries still cou
   tg.say(`/start   ${mixed}  `, { from: 42, chat: 42 });
   await until(() => readPairing(home).paired);
   assert.deepEqual([readPairing(home).paired.user_id, readPairing(home).paired.chat_id], [42, 42]);
-  await until(() => tg.texts().some((x) => /^Paired with hoptell/.test(x)));
+  await until(() => tg.texts().some((x) => /^You're connected\. /.test(x)));
 });
 
 test("updates from another user, a group or another chat are dropped silently and counted", async (t) => {
@@ -339,10 +345,10 @@ test("expiry: the card is edited and the asker gets a signed `expired` status; a
   assert.equal(v.ok, true, v.reason);
   assert.equal(v.env.kind, "status");
   assert.match(v.env.text, /^expired: /);
-  assert.ok(tg.sent.some((s) => s.method === "editMessageText" && /expired unanswered/.test(s.params.text)));
+  assert.ok(tg.sent.some((s) => s.method === "editMessageText" && /^⌛ Question 1 · alice asked:\n.*\n\nNo answer in time, so this question is closed\. Reply to send your answer as a new message\.$/s.test(s.params.text)));
   // A reply after expiry is not forwarded.
   tg.say("too late", { reply: tg.replyTo(tg.cards()[0]) });
-  await until(() => tg.texts().some((x) => /^This question has expired\. Send your text to me-alice as a new instruction\?$/.test(x)));
+  await until(() => tg.texts().some((x) => /^This question has expired\. Send your text to alice as a new message\?$/.test(x)));
   assert.equal(alice.got.length, 1);
   // A question that arrives past its expires_at: an `expired` status, no card.
   await alice.ask("old one", { now: Date.now() + skew - 400_000, expiresIn: 300 });

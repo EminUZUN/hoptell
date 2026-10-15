@@ -29,6 +29,12 @@ const stdin = () => {
   }
 };
 const hold = () => setInterval(() => {}, 1000);
+// Written whole or not at all: a test polls for the file and reads it at once, and a plain
+// writeFileSync can be seen created but still empty (Number("") is 0, a pid never readable).
+const writePid = (file, text) => {
+  fs.writeFileSync(`${file}.tmp`, String(text));
+  fs.renameSync(`${file}.tmp`, file);
+};
 switch (mode) {
   case "echo":
     process.stdout.write(`answer: ${stdin()}`);
@@ -71,7 +77,7 @@ switch (mode) {
   case "orphan-exit": {
     const c = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
     c.unref();
-    fs.writeFileSync(arg, String(c.pid));
+    writePid(arg, c.pid);
     process.stdout.write("partial answer");
     if (mode === "orphan") hold();
     else setTimeout(() => process.exit(0), 2500);
@@ -80,7 +86,7 @@ switch (mode) {
   case "orphan-wait": {
     const c = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
     c.unref();
-    fs.writeFileSync(arg, String(c.pid));
+    writePid(arg, c.pid);
     process.stdout.write("partial answer");
     const go = process.argv[4];
     setInterval(() => fs.existsSync(go) && process.exit(0), 100);
@@ -94,8 +100,7 @@ switch (mode) {
       c.unref();
       pids.push(c.pid);
     }
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(pids));
-    fs.renameSync(`${file}.tmp`, file);
+    writePid(file, JSON.stringify(pids));
     process.stdout.write("partial answer");
     hold();
     break;

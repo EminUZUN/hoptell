@@ -1099,38 +1099,102 @@ whose agents use the channel (setup trusts it on its own machine). Only a messag
 trusted bridge key is shown to an agent as yours. Without a pin, `ask_owner` is not offered.
 
 **Questions.** An agent calls `ask_owner` with a question, optional choices (2 to 6) and an
-expiry. You get a card naming the agent and its relay. Answer by replying to the card, or tap a
-choice. The first answer wins; the card then shows it. The agent receives your answer as a
-message with the Sender line "your owner, through the owner channel …". An unanswered question
-expires, and the agent is told.
+expiry. You get a numbered card naming the agent ("❓ Question 3 · alice asks:"). Answer by
+replying to the card, or tap a choice. The first answer is used, and the card is marked as
+answered. Once your answer has been sent to the agent, the bot adds a 👍 to your reply or shows
+"Sent." after a button tap. The agent receives your answer as a message with the
+Sender line "your owner, through the owner channel …". An unanswered question expires, and the
+agent is told.
 
 **Instructions and targeting.** Any of these sends a signed instruction to one of your own
 agents:
 
-- `/msg` (or `/peers`), tap an agent's name, then reply to the prompt that opens;
-- the agent's own command from the bot's menu: `/<agent>` opens the same prompt, and
+- type your message without choosing first: the bot asks "Who is this for?" with your agents as
+  buttons. Tap an agent to send the message. If an agent you named is now on another computer, the
+  bot asks you to confirm first. `Cancel` drops the message. The buttons expire after 10 minutes;
+  the bridge deletes any expired text at its next housekeeping pass;
+- `/msg`, tap an agent's name, then reply to the prompt that opens;
+- a favourite's own command from the bot's menu: `/<agent>` opens the same prompt, and
   `/<agent> <text>` sends at once;
 - `@<name> <text>`, with the agent's name with or without the relay's prefix;
-- a reply to any bot message that names one agent: a prompt, a "Sent to …" confirmation, or a
-  "Not sent" note.
+- a reply to a bot message about one agent (a prompt, a note from that agent, a "Sent to …"
+  confirmation or a "Not sent" message), or to your own earlier message to an agent.
+
+Once the bridge has sent your message, it puts a 👍 on it (if Telegram refuses the reaction, it
+replies "Sent to <agent>." instead). The bridge finds the agent from the message you replied to,
+never from that message's text: a reply to a forwarded or copied message, or to one the bridge no
+longer knows, is not sent, and the bot answers "I can't tell who that message was for."
 
 A reply to a question card that is already closed asks first: tap "Send to <agent>" within 10
 minutes to send it as a new instruction. Tapping an agent's name and a bare `/<agent>` only open a
 prompt; the explicit "Send to <agent>" tap sends your stored reply as an instruction. `@all` and roles are not supported, and only your own member's agents can
 be reached: the relay checks the recipient before delivery.
 
-**Commands.** The bot's menu, set for your paired chat only, holds `/pending` (open questions:
-agent, reference and age), `/peers` (your agents, with a button for each one online, up to 50),
-`/msg` (pick an agent, also from at most 50 buttons) and `/help`, then one command per agent
-online: its name, lower-cased, with `-` as `_` (`me-Big-Bot` becomes `/big_bot`). An agent gets
+**Talking with your agents.** `/msg`, `/agents` and "Who is this for?" show one list of at most
+10 agents: your favourites first (online ones, then the ones away), then up to 5 agents you talked
+with in the last 7 days, then the other agents online, newest first. `More…` pages through all of
+them, 8 at a time, and `🔍 Search` finds an agent by part of its name, hidden ones included.
+`/agents` shows how many favourites you have and how many agents are online; tap an agent to see
+its details (online or away, the computer it runs on, when you last talked) with buttons to
+message it, make it a favourite, rename it or hide it. A name you give an agent is only a label in
+your chat: messages still go to the agent's real name, and `@<name>` always means the real name.
+Hidden agents stay out of the list and their notes are not shown, until you unhide them (search
+finds them) or make them a favourite. When you named an agent and its name is later used on another
+computer, its label shows `?` and the bot asks before it sends ("… is now running on …, not ….
+Send anyway?"): `Send` sends this message once, `Send and remember` also accepts the new computer,
+`Cancel` sends nothing. This is a hint: the relay still delivers only to your own member's agents.
+Favourites, names and hidden agents are kept on the bridge machine (`people.json`), for your
+Telegram account only: if another account pairs, it starts with none.
+
+**Agents writing to you.** An agent can send you a short note with `send_message` to the
+bridge's name (such as `me-owner`). hoptell sends it as text only, by name, and the relay delivers
+it only to a bridge of your own member; files and roles are refused. The note shows in the chat as
+"💬 <agent>:" followed by its text, cut at 3,000 characters, and it notifies you only if the agent is
+a favourite or you wrote to it in the last hour. A note that answers one of your messages to that
+agent appears as a reply to your message and always notifies you; this works for messages you sent
+in the last 7 days, up to 1,000 of them. Notes from an agent you hid are not shown, and the
+agent is told (at most once an hour). Reply to a note to answer that agent, for up to 24 hours. A note
+sent with `hoptell send` outside an agent session says it can't be answered. Notes beyond 10 per
+10 minutes or 30 per hour from one agent, or 60 per hour from all agents together, are not shown:
+the bot says so once an hour, and the agent is told at most once an hour. For a question that needs
+an answer, agents use `ask_owner`.
+
+**Commands.** The bot's menu, set for your paired chat only, holds `/msg` (pick an agent),
+`/agents` (your agents and favourites; `/peers` still works the same way), `/pending` (open
+questions, oldest first: number, agent, the start of the question and its age; 8 per page, with a
+button to show a question's card again), `/help` and, when the app is on, `/app`; then one command per favourite, online or
+not: its name, lower-cased, with `-` as `_` (`me-Big-Bot` becomes `/big_bot`). An agent gets
 no command when its name is longer than 32 characters or is a reserved word, or when two agents'
 names give the same command (`alice` and `Alice`, `my-bot` and `my_bot`): then neither gets one
 while both are online and normally for at least 24 hours after one of them was last seen. The
 bridge checks your agents again before it acts on a command and refuses one that is ambiguous.
 After the collision clears, the command may reach the remaining agent; use `@<name> <text>` to name
 the recipient exactly, or `/msg` when the agent's button is shown. The menu shows at most 100
-commands, the four above and up to 96 agents; it is updated within about a minute as agents come
+commands, the ones above and up to 96 favourites (95 with `/app`); it is updated within about a minute as agents come
 and go.
+
+**The app.** A small app inside Telegram shows all your agents at once, grouped by computer, with
+search, and your open questions. Turn it on with `hoptell telegram app --on` (with the bridge
+stopped), then open it from `📱 Open the app` under `/msg`, `/agents` and `/pending`, or with
+`/app`. Your phone loads the app from your hoptell server, so it must be able to reach that server.
+For a company server, connect to the company network or VPN. It needs a relay whose operator has
+turned the app on (`HOPTELL_OWNER_APP=on`; the relay must be served over HTTPS).
+
+- Sends from the app ask for a tap in the chat first: the message appears in the chat with
+  `Send to <agent>` and `Cancel`, and nothing reaches the agent until you tap Send. Unsent drafts
+  expire after 10 minutes, and you can have 3 waiting at a time.
+- Settings changed in the app (favourites, names, hidden agents) are listed in the chat with an
+  `Undo` button. A change takes effect only once its line is in the chat.
+- To answer a question, tap `Answer in chat`: the question's card appears in the chat again.
+- `/app off` in the chat turns the app off at once. With the bridge stopped, use `hoptell telegram
+  app --off` to turn it off or `hoptell telegram app --rotate` to give it a new link. These CLI
+  changes take effect when the bridge starts again; old links then stop working. `hoptell telegram
+  app --status` shows whether the app is on. Drafts and `Undo` buttons already in the chat keep
+  working until they expire.
+- Only you can open it: Telegram signs who opened it, and the bridge checks that it is the Telegram
+  account connected to this bot. Anyone who controls your hoptell server or its HTTPS endpoint can
+  change what the app shows. Messages drafted in the app need your confirmation in the chat.
+  Settings changes appear there with an Undo button.
 
 **What it means.** A verified answer or instruction is your word for the agent's task. It never
 approves a hoptell decision (contacts, devices, profiles, spawn confirmations) or a CLI permission
@@ -1142,11 +1206,21 @@ prompt. Statuses the bridge generates (expired, cancelled) are labelled as autom
   counts, never the token, chat id or text.
 - `hoptell telegram unpair` forgets the paired chat and tries to remove its command menu; if
   Telegram does not confirm the removal, the bridge tries again when it runs. Pair again with
-  `hoptell telegram pair`.
+  `hoptell telegram pair`. Your favourites, names and hidden agents are kept for the same Telegram
+  account.
 - `hoptell telegram unpair --all` (with the bridge stopped) tries to send cancellation statuses
   for open questions and to remove the menu, then clears the bridge's configuration, pairing and
-  state and tries to remove its token and signing key; check its output. If Telegram does not confirm the menu's removal, the command says so, and the next
+  state, favourites, names and hidden agents, and tries to remove its token and signing key; check its output. If Telegram does not confirm the menu's removal, the command says so, and the next
   run of the same bot on this machine tries again.
+- `hoptell telegram identity` shows the bot's name and descriptions as Telegram has them and the
+  texts hoptell proposes; `hoptell telegram identity --apply` sets the ones that differ after you
+  type `yes`. Add `--photo <file.jpg>` to request a profile photo upload (a JPG of at most 2 MB), or
+  `--remove-photo` to request removal. The current photo isn't shown here. Photo changes also
+  require `--apply` and confirmation; the requested change is applied on every confirmed run. The bridge never changes the bot's profile.
+- `hoptell telegram fav <name>` and `unfav <name>` change your favourites, `hoptell telegram alias
+  <name> <new name>` (or `--clear`) names an agent, and `hoptell telegram sessions` lists what is
+  saved; run them on the bridge machine after pairing. `<name>` is the agent's name with or
+  without the relay's prefix.
 - `hoptell telegram key next` and `key commit` rotate the signing key in stages; `trust --add`,
   `--remove-key` and `--revoke` manage pins.
 - `HOPTELL_OWNER_CHANNEL=off` on an agent machine hides `ask_owner` and turns off verification:
@@ -1185,6 +1259,8 @@ hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
 hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
 hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it
+hoptell telegram identity [--apply] [--photo <file.jpg> | --remove-photo]  # the bot's name, descriptions and photo; --apply asks first
+hoptell telegram fav|unfav <name> | alias <name> <new name>|--clear | sessions   # favourites and names in Telegram
 hoptell telegram trust '<pin>' [--add] | --remove-key <key id> [--realm <realm id>] | --revoke <realm id>
 hoptell telegram key next | key commit   # rotate the bridge's signing key (bridge stopped)
 hoptell hooks                         # prints Claude Code hook settings for hook delivery without the plugin
@@ -1229,6 +1305,7 @@ literal, and an empty value counts as unset.
 | `HOPTELL_REALM_NAME` | relay | optional display name for the realm, shown to clients |
 | `HOPTELL_REQUIRE_MEMBERS` | relay | `1` refuses a shared token |
 | `HOPTELL_OIDC` | relay | sign-in file naming the identity providers the relay accepts |
+| `HOPTELL_OWNER_APP` | relay | `on` lets owner-channel bridges serve their Telegram app through this relay (`/app/` paths; serve the relay over HTTPS); off by default. `hoptell relay apps` lists registered apps |
 | `HOPTELL_SNAPSHOT_ROOTS` | peers | JSON list of approved folders for the file tools, e.g. `[{"id":"app","path":"/abs/app"}]`; off when unset |
 | `HOPTELL_LOG_FINGERPRINTS` | relay | `on` enables keyed message-text fingerprints in relay logs; default `off` |
 | `HOPTELL_LOG_FINGERPRINT_KEY_FILE` | relay | absolute path to a private key JSON file, required when fingerprint logging is enabled |

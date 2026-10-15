@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { API_ORIGIN, TelegramError, botIdOf, createTelegram, isBotToken, redact } from "../lib/telegram.js";
+import { API_ORIGIN, PHOTO_MAX, TelegramError, botIdOf, createTelegram, isBotToken, isJpeg, redact } from "../lib/telegram.js";
 
 // Generated per run, so no token value is written in the source.
 const TOKEN = `${1_000_000 + crypto.randomInt(1e6)}:${crypto.randomBytes(26).toString("base64url")}`;
@@ -35,7 +35,12 @@ test("every call goes to the fixed origin, as a POST with redirects refused", as
   await tg.setMyCommands({ commands: [{ command: "help", description: "Help" }], scope: { type: "chat", chat_id: 1 } });
   await tg.deleteMyCommands({ scope: { type: "chat", chat_id: 1 } });
   await tg.editMessageReplyMarkup({ chat_id: 1, message_id: 2, reply_markup: { inline_keyboard: [] } });
-  assert.deepEqual(calls.slice(2).map((c) => new URL(c.url).pathname.split("/").at(-1)), ["setMyCommands", "deleteMyCommands", "editMessageReplyMarkup"]);
+  await tg.setMessageReaction({ chat_id: 1, message_id: 2, reaction: [{ type: "emoji", emoji: "👍" }] });
+  for (const m of ["getMyName", "getMyDescription", "getMyShortDescription"]) await tg[m]();
+  await tg.setMyName({ name: "hoptell" });
+  await tg.setMyDescription({ description: "d" });
+  await tg.setMyShortDescription({ short_description: "s" });
+  assert.deepEqual(calls.slice(2).map((c) => new URL(c.url).pathname.split("/").at(-1)), ["setMyCommands", "deleteMyCommands", "editMessageReplyMarkup", "setMessageReaction", "getMyName", "getMyDescription", "getMyShortDescription", "setMyName", "setMyDescription", "setMyShortDescription"]);
   for (const c of calls) {
     assert.ok(c.url.startsWith(`${API_ORIGIN}/bot`), "the fixed origin");
     assert.equal(new URL(c.url).origin, "https://api.telegram.org");
@@ -104,4 +109,39 @@ test("a call that hangs ends at its deadline", async () => {
   clearInterval(keep);
   assert.ok(e instanceof TelegramError);
   assert.equal(e.aborted, false);
+});
+
+test("the profile photo: one multipart upload of a JPG (at most 2 MB) to the fixed origin, attach:// naming its part; removal; refused before any call otherwise", async () => {
+  const calls = [];
+  const tg = createTelegram(TOKEN, { fetchImpl: async (url, init) => (calls.push({ url, init }), json({ ok: true, result: true })) });
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xdb]), crypto.randomBytes(1000)]);
+  assert.equal(await tg.setMyProfilePhoto({ jpeg }), true);
+  const c = calls[0];
+  assert.equal(new URL(c.url).origin, "https://api.telegram.org");
+  assert.equal(new URL(c.url).pathname.split("/").at(-1), "setMyProfilePhoto");
+  assert.equal(c.init.redirect, "error");
+  assert.equal(c.init.method, "POST");
+  assert.ok(c.init.signal instanceof AbortSignal);
+  assert.equal(c.init.headers, undefined, "fetch sets the multipart boundary itself");
+  assert.ok(c.init.body instanceof FormData);
+  assert.deepEqual(JSON.parse(c.init.body.get("photo")), { type: "static", photo: "attach://hoptell_photo" });
+  const part = c.init.body.get("hoptell_photo");
+  assert.equal(part.type, "image/jpeg");
+  assert.deepEqual(Buffer.from(await part.arrayBuffer()), jpeg);
+  // The multipart body is what fetch sends: the JPG bytes, under the named part.
+  const wire = Buffer.from(await new Response(c.init.body).arrayBuffer());
+  assert.ok(wire.includes(jpeg), "the file is in the body");
+  assert.ok(wire.includes(Buffer.from('name="hoptell_photo"; filename="photo.jpg"')));
+  await tg.removeMyProfilePhoto();
+  assert.equal(new URL(calls[1].url).pathname.split("/").at(-1), "removeMyProfilePhoto");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {});
+  // Not a JPG, too large, missing: refused, no call.
+  assert.equal(isJpeg(Buffer.from("GIF89a")), false);
+  await assert.rejects(tg.setMyProfilePhoto({ jpeg: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }), /must be a JPG/);
+  await assert.rejects(tg.setMyProfilePhoto({ jpeg: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(PHOTO_MAX)]) }), /too large/);
+  await assert.rejects(tg.setMyProfilePhoto({}), /must be a JPG/);
+  assert.equal(calls.length, 2);
+  // A refusal is redacted like any call.
+  const bad = createTelegram(TOKEN, { fetchImpl: async () => json({ ok: false, error_code: 400, description: `PHOTO_INVALID_DIMENSIONS bot${TOKEN}` }, 400) });
+  await assert.rejects(bad.setMyProfilePhoto({ jpeg }), (e) => e instanceof TelegramError && e.status === 400 && !e.message.includes(TOKEN.split(":")[1]) && /setMyProfilePhoto refused/.test(e.message));
 });

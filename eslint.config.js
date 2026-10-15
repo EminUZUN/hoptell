@@ -10,4 +10,6 @@ export default [
     // `catch {}` marks best-effort steps (cleanup, diagnostics) on purpose.
     rules: { "no-empty": ["error", { allowEmptyCatch: true }] },
   },
+  // The owner app's page (design 7.4) runs in Telegram's webview: browser globals, classic scripts.
+  { files: ["lib/miniapp/**/*.js"], languageOptions: { sourceType: "script", globals: globals.browser } },
 ];

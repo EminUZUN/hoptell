@@ -15,6 +15,13 @@ import { TREE_HARD, TREE_MAX, createRunFiles, isLive, processTree, listRuns, new
 import { currentBoot, descendantIdentities, identityState, parsePsTable, processIdentity, processInfo, processTable, sameIdentity } from "../lib/host.js";
 import { writeRecord } from "../lib/locks.js";
 
+// A run starts its tmux session with a sterile environment, so it is always on the default tmux
+// server. The test's own tmux calls must reach that same server, even when the suite itself runs
+// inside tmux: an inherited TMUX or TMUX_TMPDIR would point them at another server instead.
+delete process.env.TMUX;
+delete process.env.TMUX_PANE;
+delete process.env.TMUX_TMPDIR;
+
 const FAKE = fileURLToPath(new URL("./fixtures/fake-agent-cli.mjs", import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -64,6 +71,7 @@ export async function makeRun(w, { mode = "headless", plan, task = "the task", n
 
 /** A process's identity once it can be read (a just-started process may not be listed yet). */
 async function identityWhenReadable(pid, ms = 10_000) {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(`not a pid: ${pid}`);
   for (const end = Date.now() + ms; Date.now() < end; await sleep(50)) {
     const id = processIdentity(pid);
     if (id && sameIdentity(id)) return id;
@@ -505,11 +513,11 @@ test("teardown: the recorded descendants are in the run record; after the superv
   await startSupervisor(w.home, a.run, { env: supEnv(w, a.run) });
   t.after(() => cleanup(readRun(w.home, a.run)?.agent));
   for (const end = Date.now() + 10_000; !fs.existsSync(pidfile) && Date.now() < end; ) await sleep(50);
-  await sleep(100);
-  const orphan = processIdentity(Number(fs.readFileSync(pidfile, "utf8")));
+  const orphan = await identityWhenReadable(Number(fs.readFileSync(pidfile, "utf8")));
   t.after(() => {
     if (orphan && sameIdentity(orphan)) process.kill(orphan.pid, "SIGKILL");
   });
+  assert.ok(orphan && sameIdentity(orphan), "the orphan runs");
   let rec;
   for (const end = Date.now() + 10_000; Date.now() < end; await sleep(100)) {
     rec = readRun(w.home, a.run);
@@ -699,7 +707,8 @@ test("tmux: a failed start whose pane process cannot be stopped keeps the run st
     } catch {}
   });
   await new Promise((r) => child.once("spawn", r));
-  const pane = processIdentity(child.pid);
+  const pane = await identityWhenReadable(child.pid);
+  assert.ok(pane && sameIdentity(pane), "the pane's process runs");
   const b = await makeRun(w, { mode: "tmux", plan: { command: process.execPath, args: [], cli: { command: "/bin/sh", args: [] } }, extra: { state: "stopping", supervisor: { pid: 999999, start: "x", uid: process.getuid(), boot: currentBoot() }, pane: { ...pane, pane: "%999999", session: "hoptell-none" }, error: "failed", errorText: "new-window refused" } });
   const exited = new Promise((r) => child.once("exit", r));
   const changed = await sweep(w.home, { deps: { graceMs: 300 } });
@@ -1036,6 +1045,8 @@ test("tmux: when the injector window cannot be created, the agent's new session 
   const failWindow = 'if [ "$1" = new-window ]; then echo refused >&2; exit 1; fi\n';
   const gone = async (pidFile) => {
     const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    // Never 0 (process.kill(0, 0) would probe this test's own process group).
+    assert.ok(Number.isSafeInteger(pid) && pid > 1, `not a pid: ${pid}`);
     for (let i = 0; i < 100; i++) {
       try {
         process.kill(pid, 0);
@@ -1073,7 +1084,7 @@ test("tmux: when the injector window cannot be created, the agent's new session 
     const name2 = `t7x${crypto.randomBytes(3).toString("hex")}-c9c9`;
     t.after(() => endSession(`hoptell-${name2}`));
     const pidFile = path.join(w.base, `pid-${name2}`);
-    const a = await makeRun(w, { mode: "tmux", name: name2, plan: { command: process.execPath, args: [], cli: { command: "/bin/sh", args: ["-c", `echo $$ > '${pidFile}'; exec sleep 600`] } } });
+    const a = await makeRun(w, { mode: "tmux", name: name2, plan: { command: process.execPath, args: [], cli: { command: "/bin/sh", args: ["-c", `echo $$ > '${pidFile}.tmp' && mv '${pidFile}.tmp' '${pidFile}'; exec sleep 600`] } } });
     const rec = await startSupervisor(w.home, a.run, { env: supEnv(w, a.run, { PATH: `${dir}:${process.env.PATH}` }) });
     const ended = rec.state === "failed" ? rec : await until(w, a.run, ["failed"]);
     assert.equal(ended.state, "failed", how);
