@@ -8,6 +8,8 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { BIN } from "../lib/config.js";
 import { createAccess } from "../lib/access.js";
 import { backupRelay } from "../lib/backup.js";
 import { loadRealm, lockStateDir, readRestoreIntent } from "../lib/realm.js";
@@ -224,6 +226,16 @@ const unlock = (dir) => {
   locks.get(dir)?.();
   locks.delete(dir);
 };
+
+test("HOPTELL_RESTORE_TEST_CRASH alone does nothing: the crash hook is reachable only from a test preload", async (t) => {
+  await tpl();
+  const dir = work(t, TPL);
+  const e = { ...process.env, HOPTELL_ENV: path.join(path.dirname(dir), "empty.env"), XDG_CONFIG_HOME: path.join(path.dirname(dir), "xdg"), HOPTELL_STATE_DIR: dir, HOPTELL_MEMBERS: TPL.config.members, HOPTELL_RESTORE_TEST_CRASH: "install-rename" };
+  fs.writeFileSync(e.HOPTELL_ENV, "");
+  const r = await new Promise((resolve) => execFile(process.execPath, [BIN, "relay", "admin", "restore", TPL.backup], { env: e, timeout: 30_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.signal ?? err.code ?? 1) : 0, stdout, stderr })));
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /complete/);
+});
 
 test("restore, real crashes (SIGKILL) inside phase 4: -wal and -shm present at phase installed are accepted", async (t) => {
   await tpl();
@@ -507,7 +519,7 @@ test("restore, authorization: lost access state holds every member until it publ
   assert.deepEqual(a.pendingRecipients().map((p) => p.memberId).sort(), [ID.alice, ID.bob, ID.carol]);
   for (const to of [ID.alice, ID.bob, ID.carol]) {
     assert.equal(a.decide({ memberId: ID.alice }, { memberId: to }), "hold", `to ${to}`);
-    assert.equal(a.decide({ memberId: ID.alice }, { memberId: to }, { send: true }), "retry");
+    assert.equal(a.decide({ memberId: ID.alice }, { memberId: to }, { send: true }), "deny", "a new send answers as for an unknown name");
   }
   assert.equal(a.decide({ memberId: ID.bob }, { memberId: ID.alice }, { replyTo: "msg-1" }), "hold", "no allowance passes a pending recipient");
   // The backup's revision (1) is current: a client holding 2 fails, re-reads and publishes.

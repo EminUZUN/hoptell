@@ -66,6 +66,14 @@ test("the store uses the keychain when it can, the file only when chosen, and st
   assert.throws(() => credentialStore(home, "../x", { keychainBackend: none }), /invalid relay profile/);
 });
 
+test("a keychain that refuses a credential: the error names the encrypted file as the way forward", (t) => {
+  const home = tmp(t);
+  const refusing = { kind: "macOS keychain", available: () => true, get: () => null, set: () => false, remove: () => true };
+  assert.throws(() => credentialStore(home, "relay-1", { keychainBackend: refusing }).write({ x: 1 }), {
+    message: "the credential could not be saved in the macOS keychain; to keep it in an encrypted file instead, set HOPTELL_CREDENTIAL_STORE=file and HOPTELL_CREDENTIAL_PASSPHRASE (at least 12 characters)",
+  });
+});
+
 test("a locked or unavailable keychain is an error, never 'not signed in'", () => {
   const darwin = (status) => keychain({ platform: "darwin", run: () => ({ status, stdout: "", stderr: "" }) });
   assert.equal(darwin(44).get("p"), null, "not stored");

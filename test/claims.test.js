@@ -253,7 +253,7 @@ test("transition matrix: FREE, ACTIVE_LEGACY, ACTIVE_LEASED, RESERVED x legacy, 
   // Expected [same principal, other principal]: "ok", "ok+evict", "ok+fence" or the refusal code.
   const expected = {
     FREE: { legacy: ["ok", "ok"], acquire: ["ok", "ok"], resume: ["lease_unknown", "lease_unknown"], replace: ["ok", "ok"] },
-    ACTIVE_LEGACY: { legacy: ["ok+evict", "ok+evict"], acquire: ["name_in_use", "name_in_use"], resume: ["lease_unknown", "lease_unknown"], replace: ["ok+evict", "not_allowed"] },
+    ACTIVE_LEGACY: { legacy: ["ok+evict", "name_in_use"], acquire: ["name_in_use", "name_in_use"], resume: ["lease_unknown", "lease_unknown"], replace: ["ok+evict", "not_allowed"] },
     ACTIVE_LEASED: { legacy: ["name_in_use", "name_in_use"], acquire: ["name_in_use", "name_in_use"], resume: ["ok+fence", "lease_unknown"], replace: ["ok+evict", "not_allowed"] },
     RESERVED: { legacy: ["ok", "name_in_use"], acquire: ["ok", "reserved"], resume: ["ok", "lease_unknown"], replace: ["ok", "not_allowed"] },
   };
@@ -273,6 +273,22 @@ test("transition matrix: FREE, ACTIVE_LEGACY, ACTIVE_LEASED, RESERVED x legacy, 
       });
     }
   }
+});
+
+test("legacy hellos: a reconnect of the same principal takes the name; another principal (shared token vs member) never evicts it", () => {
+  const ct = new ClaimTable();
+  const member = sock("member");
+  assert.deepEqual(ct.hello({ name: "alice", socket: member, principal: alice, version: 1 }), { ok: true });
+  const r = ct.hello({ name: "alice", socket: sock("shared"), principal: shared, version: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, "name_in_use");
+  assert.equal(ct.isCurrent("alice", member), true, "the member's session keeps its name");
+  const again = sock("member-again");
+  assert.equal(ct.hello({ name: "alice", socket: again, principal: alice, version: 1 }).evict, member, "its own reconnect replaces it");
+  const s1 = sock("s1");
+  ct.hello({ name: "free", socket: s1, principal: shared, version: 1 });
+  assert.equal(ct.hello({ name: "free", socket: sock("s2"), principal: shared, version: 1 }).evict, s1, "shared-token holders are one principal");
+  assert.equal(ct.hello({ name: "free", socket: sock("m"), principal: alice, version: 1 }).code, "name_in_use", "nor does a member evict a shared-token session");
 });
 
 test("legacy close frees the name; a stale close after a replacement changes nothing", () => {

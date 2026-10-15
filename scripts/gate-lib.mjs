@@ -5,8 +5,10 @@
 // Every record is canonical JSON (keys sorted at every level, two-space indent, one trailing
 // newline) with no hosts or absolute paths, so the same inputs give the same bytes. The only times
 // are the build attestations' start and end in the build mapping (format 2), which record the builds.
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,10 +83,19 @@ export const GROUPS = {
       "lib/ownerui.js",
       // their import closure (with the N7 entry points, bin/hoptell.js loads most of lib/)
       "lib/adminui.js",
+      "lib/agentadapters.js",
+      "lib/agentdeny.js",
+      "lib/agentruns.js",
+      "lib/agents.js",
+      "lib/agentscli.js",
+      "lib/agentspawn.js",
       "lib/apply.js",
+      "lib/apptunnel.js",
+      "lib/attested.js",
       "lib/backup.js",
       "lib/broker.js",
       "lib/claims.js",
+      "lib/clihelp.js",
       "lib/composer.js",
       "lib/config.js",
       "lib/contacts.js",
@@ -114,6 +125,14 @@ export const GROUPS = {
       "lib/metrics.js",
       "lib/notices.js",
       "lib/oidc.js",
+      "lib/ownerapp.js",
+      "lib/ownerappauth.js",
+      "lib/ownerapppage.js",
+      "lib/ownerchannel.js",
+      "lib/ownerchannelcli.js",
+      "lib/ownerpeople.js",
+      "lib/ownersig.js",
+      "lib/ownertexts.js",
       "lib/profiles.js",
       "lib/realm.js",
       "lib/records.js",
@@ -123,6 +142,7 @@ export const GROUPS = {
       "lib/session.js",
       "lib/settings.js",
       "lib/snapshot.js",
+      "lib/telegram.js",
       "lib/tmux.js",
       "lib/transfercli.js",
       "lib/transferin.js",
@@ -134,6 +154,12 @@ export const GROUPS = {
       // not imported but run: lib/files.js starts it as a child process (spawn of process.execPath
       // with its path) for every guarded read, a transfer's capture included
       "lib/read-helper.mjs",
+      // not imported but read: lib/ownerapppage.js reads these at bridge start and serves them as
+      // the owner app's page (design 7.4)
+      "lib/miniapp/app.css",
+      "lib/miniapp/app.js",
+      "lib/miniapp/index.html",
+      "lib/miniapp/tg.js",
       // the Node dependencies loaded on this path
       "package.json",
       "package-lock.json",
@@ -153,7 +179,7 @@ export const DYNAMIC_LOADS = {
   "lib/mls/driver.js": { "import(pathToFileURL(file).href)": "HOPTELL_MLS_DRIVER, an owner-given module outside the package; always labeled experimental" },
   "lib/mls/openmls.js": {
     "require(`node:${name}`)": "the shipped glue's built-ins, only names on GLUE_BUILTINS, always with the node: prefix",
-    "require(wasmPath)": "HOPTELL_MLS_WASM, an owner-given binding outside the package; always labeled experimental",
+    "createRequire(file)": "HOPTELL_MLS_WASM, an owner-given binding evaluated as CommonJS with a require relative to its own file (loadBindingFrom); always labeled experimental",
   },
 };
 
@@ -542,18 +568,129 @@ export function verifyBuildMapping(mapping, { inputsBytes, dockerfile, cargoLock
   return problems;
 }
 
+// The child that reads REVIEWED_BINDING (declaredReviewedDigests). It runs with
+// --frozen-intrinsics, so the module cannot change Object.prototype, Promise, JSON, Reflect or the
+// other built-in objects while it loads (a module that tries fails to load, and is refused).
+// globalThis itself stays writable, so the child takes every global it uses after the import
+// (setTimeout, setImmediate, Promise, Error) before it. It reads a one-time nonce from stdin before the import (the module cannot read it
+// again) and writes its answer as the last stdout line, carrying the nonce, built by string
+// concatenation from checked primitives (no object goes through JSON.stringify, so no toJSON
+// hook applies).
+const READ_REVIEWED_BINDING = `
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+import { types } from "node:util";
+const nonce = fs.readFileSync(0, "utf8").trim();
+const writeSync = fs.writeSync, stringify = JSON.stringify, apply = Reflect.apply, ownKeys = Reflect.ownKeys;
+const { isFrozen, getPrototypeOf, getOwnPropertyDescriptor, hasOwn } = Object, OBJECT_PROTOTYPE = Object.prototype;
+const isProxy = types.isProxy, isNamespace = types.isModuleNamespaceObject;
+const wait = setTimeout, soon = setImmediate, PromiseOf = Promise, ErrorOf = Error;
+const test = RegExp.prototype.test, HEX = /^[0-9a-f]{64}$/, url = pathToFileURL(process.argv[1]).href;
+const later = () => new PromiseOf((resolve) => soon(() => wait(resolve, 50)));
+const digest = (x) => (x === null ? "null" : '"' + x + '"');
+let answer;
+try {
+  const m = await import(url);
+  if (!isNamespace(m)) throw new ErrorOf("the import did not give a module namespace");
+  if (!("REVIEWED_BINDING" in m)) throw new ErrorOf("it exports no REVIEWED_BINDING");
+  const v = m.REVIEWED_BINDING;
+  // An export let reassigned right after loading (a microtask, setImmediate or a short timer).
+  await later();
+  if (m.REVIEWED_BINDING !== v) throw new ErrorOf("its value changed after the module loaded");
+  if (v === null) {
+    answer = '{"nonce":"' + nonce + '","ok":true,"value":null}';
+  } else {
+    if (typeof v !== "object") throw new ErrorOf("its value is neither null nor an object");
+    if (isProxy(v)) throw new ErrorOf("its value is a Proxy");
+    if (getPrototypeOf(v) !== OBJECT_PROTOTYPE) throw new ErrorOf("its value is not a plain object");
+    if (!isFrozen(v)) throw new ErrorOf("its value is not frozen (Object.freeze)");
+    const keys = ownKeys(v);
+    if (keys.length !== 2) throw new ErrorOf("its object must have exactly the keys glue and wasm");
+    let glue, wasm, seen = 0;
+    for (let i = 0; i < 2; i++) {
+      const k = keys[i];
+      if (k !== "glue" && k !== "wasm") throw new ErrorOf("its object must have exactly the keys glue and wasm");
+      const d = getOwnPropertyDescriptor(v, k);
+      if (!hasOwn(d, "value")) throw new ErrorOf(k + " is an accessor, not a value");
+      const x = d.value;
+      if (x !== null && !(typeof x === "string" && apply(test, HEX, [x]))) throw new ErrorOf(k + " is neither null nor a 64-digit lower-case hex digest");
+      if (k === "glue") glue = x;
+      else wasm = x;
+      seen++;
+    }
+    if (seen !== 2 || glue === undefined || wasm === undefined) throw new ErrorOf("its object must have exactly the keys glue and wasm");
+    answer = '{"nonce":"' + nonce + '","ok":true,"value":' + (glue === null && wasm === null ? "null" : '{"glue":' + digest(glue) + ',"wasm":' + digest(wasm) + "}") + "}";
+  }
+} catch (e) {
+  let text = "the module threw a value that is not an Error";
+  try {
+    const t = e !== null && typeof e === "object" ? e.message : undefined;
+    if (typeof t === "string") text = t;
+  } catch {
+    // keep the generic text
+  }
+  answer = '{"nonce":"' + nonce + '","error":' + stringify(text) + "}";
+}
+writeSync(1, "\\n" + answer + "\\n");
+`;
+
 /**
- * The reviewed digests a package's lib/mls/openmls.js declares: null when both are null (not a
- * reviewed build), else {glue, wasm}. Anything that is not exactly the expected declaration is
- * treated as a claim (fail closed: the full checks then run, and fail).
+ * The reviewed digests a package's lib/mls/openmls.js declares: null when it declares none
+ * (REVIEWED_BINDING null, or both digests null: not a reviewed build), else {glue, wasm}.
+ *
+ * The value is the one the module actually exports: the file is imported in a child Node process
+ * (its imports are Node built-ins and lib/mls/ files, so an unpacked package without node_modules
+ * loads), not read as text, so a declaration in a comment, a string or a regular expression, or a
+ * differently formatted export, cannot make it read another value than the runtime gets. It must
+ * be null or a frozen plain object (not a Proxy) with exactly the data properties glue and wasm,
+ * each null or a 64-digit lower-case hex digest. Anything else, a module that does not load (a
+ * syntax error, a duplicate export, a change to a built-in object), or a child that fails or
+ * times out throws (fail closed).
+ *
+ * The child runs with --frozen-intrinsics (the module cannot change the built-in objects the
+ * check relies on), --no-warnings and a minimal environment (no HOPTELL_* variables or tokens;
+ * HOME and the working directory an empty temporary directory), and is killed by PID when it
+ * overruns the timeout. It is not a file-system or network sandbox: the release workflow runs
+ * --records first, so the release check imports only recorded bytes. openmls.js and its imports
+ * (lib/mls/driver.js, lib/mls/policy.js) only define constants and functions at the top level.
+ *
+ * The value is read when the import resolves and again after setImmediate and a 50 ms timer; a
+ * change refuses. Known limit: a reassignment of an `export let` after that is not ruled out. The
+ * reviewer reads the source, and --records ties every shipped file to its reviewed input.
+ *
+ * Scope: lib/mls/openmls.js is hoptell's own source, a reviewed input whose bytes --records binds.
+ * This function reads the value that source really declares and fails closed on accidental or
+ * unknown forms. A module written to deceive the reader is outside its scope (the source review
+ * and --records cover that); the isolation above is a margin, not a sandbox for hostile code.
  */
-export function declaredReviewedDigests(openmlsSource) {
-  const re = /^export const REVIEWED_BINDING = Object\.freeze\(\{ glue: (null|"[0-9a-f]{64}"), wasm: (null|"[0-9a-f]{64}") \}\);$/gm;
-  const found = [...String(openmlsSource).matchAll(re)];
-  if (found.length !== 1) return { glue: "unparsed", wasm: "unparsed" };
-  const [, g, w] = found[0];
-  if (g === "null" && w === "null") return null;
-  return { glue: JSON.parse(g), wasm: JSON.parse(w) };
+export function declaredReviewedDigests(openmlsPath, { timeoutMs = 20000 } = {}) {
+  const refuse = (why) => {
+    throw new Error(`lib/mls/openmls.js: cannot read REVIEWED_BINDING: ${why}`);
+  };
+  const nonce = crypto.randomBytes(16).toString("hex");
+  // A minimal environment: no HOPTELL_* settings or tokens, no NODE_OPTIONS or npm_config_*, and
+  // HOME and the working directory a new empty directory (no user .npmrc or hoptell state in
+  // reach). On timeout spawnSync kills the child by its PID with SIGKILL.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-read-binding-"));
+  let r;
+  try {
+    r = spawnSync(process.execPath, ["--frozen-intrinsics", "--no-warnings", "--input-type=module", "-e", READ_REVIEWED_BINDING, "--", path.resolve(openmlsPath)], { cwd: home, env: { HOME: home, TMPDIR: home, LANG: "C" }, encoding: "utf8", input: `${nonce}\n`, timeout: timeoutMs, killSignal: "SIGKILL", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  if (r.error) refuse(r.error.code === "ETIMEDOUT" ? `the module did not load within ${timeoutMs} ms` : r.error.message);
+  const last = String(r.stdout).trimEnd().split("\n").at(-1);
+  let out = null;
+  try {
+    out = JSON.parse(last);
+  } catch {
+    // handled below
+  }
+  if (r.status !== 0 || !out || typeof out !== "object") refuse(`the reading process failed (exit ${r.status ?? r.signal})${r.stderr ? `: ${String(r.stderr).trim().split("\n").slice(-3).join(" | ")}` : ""}`);
+  if (out.nonce !== nonce) refuse("the reading process's answer does not carry its nonce (the module wrote it, or exited before the check)");
+  if (out.error) refuse(String(out.error).split("\n")[0]);
+  if (out.ok !== true) refuse("the reading process gave no result");
+  return out.value;
 }
 
 const readRecord = (file, what) => {
@@ -646,7 +783,7 @@ export function recordsCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_D
  */
 export function releaseCheck({ pkgDir, repo = REPO, bindingRoot = BINDING_ROOT_DEFAULT, records = RECORDS }) {
   const openmls = path.join(pkgDir, "lib", "mls", "openmls.js");
-  const declared = declaredReviewedDigests(fs.readFileSync(openmls, "utf8"));
+  const declared = declaredReviewedDigests(openmls);
   if (!declared) return { reviewedBuild: false, problems: [] };
   const { problems, mapping } = recordsCheck({ pkgDir, repo, bindingRoot, records });
   if (mapping && (declared.glue !== mapping.binding?.[GLUE_KEY] || declared.wasm !== mapping.binding?.[WASM_KEY])) problems.push("REVIEWED_BINDING in the package's lib/mls/openmls.js is not the mapping's glue and WASM");

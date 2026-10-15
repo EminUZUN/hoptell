@@ -7,17 +7,17 @@
     "url": "https://github.com/EminUZUN/hoptell",
     "source": "github"
   },
-  "version": "0.2.2",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "hoptell",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }],
       "environmentVariables": [
         { "name": "HOPTELL_RELAY", "description": "Relay URL, e.g. ws://10.0.0.5:7777 or wss://relay.example.com", "isRequired": true, "format": "string" },
-        { "name": "HOPTELL_TOKEN", "description": "Shared or per-member relay token", "isRequired": true, "isSecret": true, "format": "string" },
+        { "name": "HOPTELL_TOKEN", "description": "Your member token or the relay's shared token; not needed with HOPTELL_AUTH=login", "isRequired": false, "isSecret": true, "format": "string" },
         { "name": "HOPTELL_NAME", "description": "This agent's peer name (letters, digits, _ and -)", "isRequired": false, "format": "string" },
         { "name": "HOPTELL_ROLES", "description": "Comma-separated roles for @role messages", "isRequired": false, "format": "string" }
       ]

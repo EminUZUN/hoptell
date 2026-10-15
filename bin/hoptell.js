@@ -5,7 +5,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HOSTNAME, checkName, defaultHome, envFiles, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
+import { HOSTNAME, NAME_RE, checkName, defaultHome, envAuth, envCredentialStore, envNotify, envSwitch, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
+import { profileKey } from "../lib/profiles.js";
+import { memberOfStoreDir, storeParts } from "../lib/session.js";
 
 // Claude Code hook commands (lib/wake.js) print only what Claude Code expects, never errors.
 const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged" };
@@ -25,7 +27,8 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
 
 // A client's headers helper for hoptell mcp-http: prints {"X-Hoptell-Hook-Registration": id} for
 // the Claude Code process it runs under, or {} (never an error: the client then has no hooks).
-if (process.argv[2] === "hook-header") {
+// `hook-header --help` prints its help (Claude Code never passes it).
+if (process.argv[2] === "hook-header" && !process.argv.slice(3).some((a) => a === "--help" || a === "-h")) {
   let out = {};
   try {
     const i = process.argv.indexOf("--home", 3);
@@ -38,6 +41,46 @@ if (process.argv[2] === "hook-header") {
   process.exit(0);
 }
 
+// --help or -h anywhere before a lone "--", and --version: printed before anything else runs (no
+// settings read, no state created, no connection). An option a command does not know is refused.
+{
+  const cli = await import("../lib/clihelp.js");
+  const argv = process.argv.slice(2);
+  const p = cli.preflight(argv);
+  const print = async (text, code) => {
+    await new Promise((resolve) => (code ? process.stderr : process.stdout).write(`${text}\n`, resolve));
+    process.exit(code);
+  };
+  if (p?.version) await print(`hoptell ${cli.version()}`, 0);
+  if (p?.unknown) await print(`hoptell: unknown command "${p.unknown}"\n\n${cli.usage()}`, 2);
+  if (p) await print(p.help ? cli.commandHelp(p.help, p.args) : cli.usage(), 0);
+  const bad = cli.unknownFlag(argv[0], argv.slice(1));
+  const where = `hoptell ${argv[0]}${argv[0] === "relay" && ["admin", "apps", "broker-reset"].includes(argv[1]) ? ` ${argv[1]}` : ""}`;
+  if (bad) await print(`hoptell: unknown option ${bad} for ${where} (see hoptell ${argv[0]} --help)`, 2);
+  const empty = cli.missingValue(argv[0], argv.slice(1));
+  if (empty) await print(`hoptell: ${empty} needs a value (see ${where} --help); nothing was done`, 2);
+}
+
+// `hoptell mcp --run <id> --home <home>` (design 7.1): a spawned agent's server reads the run's own
+// settings file, never the environment's or the owner's default one.
+let mcpRun = null;
+if (process.argv[2] === "mcp" && process.argv.includes("--run")) {
+  const m = await import("../lib/mcp.js");
+  try {
+    mcpRun = m.prepareRunEnv(process.argv.slice(3), process.env);
+  } catch (e) {
+    console.error(`hoptell: ${e.message}`);
+    process.exit(2);
+  }
+  // The record first: nothing of the run (not even its settings file) is read for a run that
+  // does not verify.
+  const v = await m.verifyRun(mcpRun.home, mcpRun.run);
+  if (v.problem) {
+    console.error(`[hoptell] not serving: ${v.problem}`);
+    process.exit(1);
+  }
+}
+
 try {
   loadEnv();
 } catch (e) {
@@ -45,98 +88,6 @@ try {
   process.exit(1);
 }
 
-const USAGE = `hoptell - messaging between AI coding agents over your own LAN/VPN
-
-Usage:
-  hoptell relay --host <ip> [--port 7777] [--members file.json] [--policy policy.json] [--trusted-proxies <ip/cidr,...>]
-                [--log-format text|json] [--metrics-port <port>] [--wal-soft-limit <size>] [--wal-hard-limit <size>]
-                                            run the relay (one machine per team)
-  hoptell relay broker-reset --yes [--state-dir <dir>]
-                                            with the relay stopped: a new broker refresh key; every broker
-                                            sign-in ends (after the key was lost or damaged)
-  hoptell relay admin status|members|devices|policy|grants|revocations|metrics|store|audit|reload|checkpoint
-                | backup <dir> | restore <dir>|--resume|--abort | devices reinstate <member> <device> | ui
-                                            the relay owner's views and controls (on the relay host); see
-                                            hoptell relay admin help
-  hoptell members list|add <name>|revoke <name>|migrate [--yes]|link|unlink <name> --issuer <url> --subject <sub>|signout <name> [--members <file>]
-                                            manage the relay's members file on the relay host; add shows
-                                            the new token once and stores only its SHA-256; signout ends
-                                            the member's broker sign-ins made until now
-  hoptell grants [show] | allow|deny <selector> [--until <s>] | deny-forever member:<id> | remove <selector> [--yes --rev N]
-                | default allow|deny | visible all|grantees [--yes]
-                                            who may reach your sessions through the relay (gate 2);
-                                            selectors: *, group:<name>, member:<id>
-  hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]
-                                            a private relay for your own sessions on this machine
-                                            (loopback, a user service, a token only you can read)
-  hoptell contacts [list|show|allow|allow-once|block|grants|blocks|revoke|unblock|check|init]
-                                            decide who may reach your agent sessions; senders without a
-                                            grant wait in quarantine until you decide (see README)
-  hoptell contacts request <name> [--reason collaborate|review|handoff|other]
-                                            ask a member who does not accept you yet at the relay
-  hoptell contacts requests [accept|deny|deny-forever <id>]
-                                            contact requests waiting for you at the relay (acts at once)
-  hoptell ui [--port N] [--open]           the owner's pages on 127.0.0.1: what waits for your decision,
-                                            contacts, devices, settings (prints a single-use launch link)
-  hoptell login [--issuer <url|broker id>] [--mode broker|resource] [--device | --client-credentials --client-id <id> --client-secret-file <file>] [--store file]
-                                            sign in to the relay with your identity provider; then HOPTELL_AUTH=login
-  hoptell logout                            remove (and revoke) the stored sign-in credential
-  hoptell mcp                               MCP server for an agent session (stdio)
-  hoptell mcp-http [--port 7790]            the same over HTTP on 127.0.0.1, for clients that only speak HTTP
-  hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>
-  hoptell mcp-hosted --experimental --config <file> --state-dir <dir>
-                                            EXPERIMENTAL hosted MCP endpoint behind an HTTPS proxy: the host
-                                            reads its tenants' messages; link|unlink|list manage its links
-                                            tokens for those clients (shown once, stored hashed)
-  hoptell tmux <name> [--roles a,b] -- <agent command>
-                                            run an agent in tmux; attempt an inbox notice when its prompt appears idle
-  hoptell list                              list peers on the relay
-  hoptell send [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>
-                                            send a message (as $HOPTELL_NAME, without going online);
-                                            --ttl: request relay queue expiry; older relays ignore it;
-                                            --reply-to: the "Message reference" you are answering
-  hoptell snapshot <file>                   print a UTF-8 file snapshot with its SHA-256, for review
-  hoptell snapshot --check <sha256> <file>  exit 0 if the bytes match; nonzero if different or the check fails
-  hoptell apply                             list proposals that answered your review sets and wait for you
-  hoptell apply <proposal id> [--preview | --yes]
-                                            show what a proposal changes (from the captured bytes) and, after
-                                            you confirm, write it; --preview writes nothing
-  hoptell apply --recover [--finish | --roll-back]
-                                            after an interrupted apply: show each file's state, then finish
-                                            it or restore the files as they were
-  hoptell wait [--wait-for-name | --replace] [seconds]
-                                            go online as $HOPTELL_NAME, print the next message, exit;
-                                            if another session has the name: stop (default), wait for it
-                                            (--wait-for-name), or take it over once (--replace)
-  hoptell listen [--no-ack] <name> [seconds]
-                                            wait for the next messages in <name>'s local inbox, print them, exit
-  hoptell listen [--no-ack] --session <folder> [seconds]
-                                            the same for an agent session's storage folder (shown by the session);
-                                            acknowledges after printing, or prints a receipt with --no-ack
-  hoptell ack <receipt> (<name> | --session <folder>)
-                                            acknowledge messages printed with --no-ack
-  hoptell doctor [--relay-check] [--fix]    check settings, relay, login, inbox and tmux on this machine;
-                                            --relay-check: also send a test message through the relay;
-                                            --fix: remove transfer leftovers (staging, outbox)
-  hoptell transfers [cancel <t_id>]         EXPERIMENTAL: file transfers staged for you (or being fetched)
-  hoptell save <t_id> <path> [--overwrite] [--yes] | --forget <t_id>
-                                            EXPERIMENTAL: save a staged transfer to a path you choose
-                                            (never replaces a file without --overwrite)
-  hoptell hooks                             print Claude Code hook settings for hook delivery without the plugin
-
-Settings: environment variables, else the first file found of
-${envFiles().map((f) => `  ${f}`).join("\n")}
-Peers:  HOPTELL_RELAY, HOPTELL_TOKEN, HOPTELL_NAME, HOPTELL_ROLES (e.g. reviewer,backend),
-        HOPTELL_PUSH (channel, hook, tmux or listener; unset for automatic),
-        HOPTELL_PROTOCOL (1 to keep the older relay protocol), HOPTELL_PROFILE,
-        HOPTELL_RECEIPTS (on/off), HOPTELL_LEASE_MINUTES, HOPTELL_NOTIFY (off: no desktop notifications),
-        HOPTELL_AUTH (login: use hoptell login), HOPTELL_CREDENTIAL_STORE (file), HOPTELL_CREDENTIAL_PASSPHRASE
-Relay:  HOPTELL_HOST, HOPTELL_PORT, HOPTELL_TOKEN and/or HOPTELL_MEMBERS (members file); HOPTELL_POLICY (access policy file);
-        HOPTELL_LOG_FINGERPRINTS=on with HOPTELL_LOG_FINGERPRINT_KEY_FILE for keyed log fingerprints;
-        HOPTELL_TRUSTED_PROXIES, HOPTELL_LOG_FORMAT, HOPTELL_METRICS_PORT, HOPTELL_METRICS_HOST,
-        HOPTELL_OIDC (sign-in configuration file)
-
-Send to a peer name, to @<role> (every online peer with the role) or to @all.`;
 
 /** A byte size: a whole number of bytes, or with a unit (KiB, MiB, GiB; K, M, G mean the same). */
 function parseSize(v) {
@@ -155,7 +106,23 @@ const fail = (msg, code = 1) => {
 const [cmd, ...args] = process.argv.slice(2);
 const opt = (flag, fallback) => {
   const i = args.indexOf(flag);
-  return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
+  if (i >= 0 && args[i + 1]) return args[i + 1];
+  // --subject=<value>: a value that starts with "--" (clihelp's EQUALS_FLAGS).
+  const eq = flag === "--subject" ? args.find((a) => a.startsWith(`${flag}=`)) : undefined;
+  return eq ? eq.slice(flag.length + 1) || fallback : fallback;
+};
+/** A port option: a whole number from 0 to 65535 (0: any free port), else refused (exit 2). */
+const portOpt = (flag, fallback) => {
+  const v = opt(flag);
+  if (v === undefined) return fallback;
+  if (!/^\d+$/.test(v) || Number(v) > 65535) fail(`invalid ${flag}: a port number from 0 to 65535`, 2);
+  return Number(v);
+};
+/** A seconds argument: a whole number from 1 to 2147483 (a timer's limit), else refused (exit 2); absent: the default. */
+const secondsArg = (v, fallback, usage) => {
+  if (v === undefined) return fallback;
+  if (!/^\d{1,7}$/.test(v) || Number(v) < 1 || Number(v) > 2_147_483) fail(`invalid seconds "${String(v).slice(0, 40)}": a whole number from 1 to 2147483 (${usage})`, 2);
+  return Number(v);
 };
 // Unset HOPTELL_NAME: a protocol-2 relay assigns the name (<member>-<host>-cli for sending); the protocol-1
 // fallback uses <host>-cli as before.
@@ -171,8 +138,63 @@ const leaseMinutes = () => {
 const relayChoice = () => ({ relayUrl: process.env.HOPTELL_RELAY, protocol: parseProtocol(process.env.HOPTELL_PROTOCOL), profile: process.env.HOPTELL_PROFILE || null });
 const cliName = () => (process.env.HOPTELL_NAME ? checkName(process.env.HOPTELL_NAME, "HOPTELL_NAME") : null);
 
-/** Device keys and enrollment (design 3.2) are experimental: off unless HOPTELL_EXPERIMENTAL_E2EE=1. */
-const experimentalE2ee = () => /^(1|true|on|yes)$/i.test(String(process.env.HOPTELL_EXPERIMENTAL_E2EE ?? "").trim());
+/** HOPTELL_RELAY is set and is a URL the client can connect to (the WebSocket library's rules). Throws. */
+function checkRelayUrl() {
+  const v = process.env.HOPTELL_RELAY;
+  if (!v) throw new Error("HOPTELL_RELAY is not set (e.g. ws://192.0.2.10:7777); see .env.example");
+  const shown = `"${v.slice(0, 80)}"`;
+  if (!URL.canParse(v)) throw new Error(`HOPTELL_RELAY is not a URL: ${shown} (e.g. ws://192.0.2.10:7777)`);
+  const u = new URL(v);
+  if (!["ws:", "wss:", "http:", "https:", "ws+unix:"].includes(u.protocol)) throw new Error(`HOPTELL_RELAY ${shown} must start with ws://, wss://, http:// or https://`);
+  if (u.protocol === "ws+unix:" && !u.pathname) throw new Error(`HOPTELL_RELAY ${shown} names no socket path`);
+  if (u.hash) throw new Error(`HOPTELL_RELAY ${shown} must not contain a fragment (#...)`);
+}
+
+/**
+ * The settings a relay connection needs, checked before the home's contacts are opened (a command
+ * that cannot connect creates nothing): the relay's URL, the protocol, the profile, HOPTELL_AUTH (token or login, as
+ * for agent sessions), the name and, for a peer, the roles. Throws.
+ */
+function checkPeerSettings(mode) {
+  checkRelayUrl();
+  if (parseProtocol(process.env.HOPTELL_PROTOCOL) === 2) profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null);
+  envAuth(process.env);
+  cliName();
+  if (mode === "peer") parseRoles(process.env.HOPTELL_ROLES);
+}
+
+/** Device keys and enrollment (design 3.2) are experimental: off unless HOPTELL_EXPERIMENTAL_E2EE=1 (a value that is not on or off is refused). */
+const experimentalE2ee = () => {
+  try {
+    return envSwitch(process.env, "HOPTELL_EXPERIMENTAL_E2EE");
+  } catch (e) {
+    fail(e.message);
+  }
+};
+/** A switch that guards something (HOPTELL_REQUIRE_MEMBERS, HOPTELL_OWNER_APP, ...): a value that is not on or off is refused. */
+const envOnOff = (name) => {
+  try {
+    return envSwitch(process.env, name);
+  } catch (e) {
+    fail(e.message);
+  }
+};
+/** HOPTELL_CREDENTIAL_STORE: "file" or "auto" (the OS keychain); a misspelled value is refused. */
+const credentialStoreOrFail = () => {
+  try {
+    return envCredentialStore(process.env);
+  } catch (e) {
+    fail(e.message);
+  }
+};
+/** HOPTELL_NOTIFY: an unaccepted value is reported once and notifications stay on. */
+let notifyWarned = false;
+const notifyOn = () => {
+  const { value, warning } = envNotify(process.env);
+  if (warning && !notifyWarned) console.error(`hoptell: ${warning}`);
+  notifyWarned = true;
+  return value;
+};
 
 const CONNECT_BUDGET_MS = 30_000; // send and list: retry an unreachable relay this long
 
@@ -187,7 +209,7 @@ const CONNECT_BUDGET_MS = 30_000; // send and list: retry an unreachable relay t
 let contactsPromise = null;
 const contactsOf = () =>
   (contactsPromise ??= import("../lib/quarantine.js").then((q) =>
-    q.openContacts(home(), { notify: String(process.env.HOPTELL_NOTIFY ?? "").trim().toLowerCase() !== "off", log: (...a) => console.error("hoptell:", ...a) }),
+    q.openContacts(home(), { notify: notifyOn(), log: (...a) => console.error("hoptell:", ...a) }),
   ));
 const relayProfileOf = async () => {
   if (!process.env.HOPTELL_RELAY) return null;
@@ -200,9 +222,11 @@ const relayProfileOf = async () => {
 };
 /** The receiving session of a bound store folder or a legacy name, as the policy names it. */
 const sessionOfDir = (dir) => {
-  const rel = path.relative(home(), dir).split(path.sep);
+  const rel = storeParts(home(), dir);
   return rel[0] === "v2" ? { realm: rel[1], name: rel[3] } : { realm: null, name: rel[1] };
 };
+/** The own member of a session store folder (v2/<realm>/<member folder>/<key>; lib/session.js memberDir), or null. */
+const memberOfDir = (dir) => memberOfStoreDir(home(), dir);
 
 /** The access-token source of this relay profile (HOPTELL_AUTH=login, after hoptell login). */
 async function signInSource() {
@@ -248,6 +272,7 @@ async function selectRelay(addressAlias = null, given = undefined) {
 }
 
 async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false } = {}) {
+  checkPeerSettings(mode);
   await contactsOf();
   const { RelayClient } = await import("../lib/client.js");
   const { commitWelcome, noteLegacy, profileKey } = await import("../lib/profiles.js");
@@ -269,7 +294,9 @@ async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForN
     onWelcome: (w) => (w.realm ? commitWelcome(home(), profile, { realm: w.realm.id, member: w.member }) : undefined),
     onLegacy: () => noteLegacy(home(), profile),
   });
-  if (onMessage) c.on("message", (m, confirm) => onMessage(m, confirm, c));
+  // Only this machine sets "e2ee" and "owner" on a message (lib/quarantine.js fromRelay): a relay's never count.
+  const { fromRelay } = onMessage ? await import("../lib/quarantine.js") : {};
+  if (onMessage) c.on("message", (m, confirm) => onMessage(fromRelay(m), confirm, c));
   c.start();
   try {
     await c.ready(budgetMs);
@@ -284,18 +311,37 @@ try {
   switch (cmd) {
     case "login": {
       // login [--issuer <url|broker id>] [--mode broker|resource] [--device] [--client-credentials --client-id <id> --client-secret-file <file>] [--store file]
-      const { login } = await import("../lib/login.js");
+      const { checkSignInUrl, login } = await import("../lib/login.js");
+      // The options are checked before anything is read, created or asked of the relay.
+      if (!process.env.HOPTELL_RELAY) fail("HOPTELL_RELAY is not set");
+      const loginUsage = "usage: hoptell login [--issuer <url|broker id>] [--mode broker|resource] [--device | --client-credentials --client-id <id> --client-secret-file <file>] [--store file]";
+      if (opt("--mode") !== undefined && !["broker", "resource"].includes(opt("--mode"))) fail("--mode must be broker or resource", 2);
+      if (opt("--store") !== undefined && opt("--store") !== "file") fail("--store takes only file (the default is the OS keychain)", 2);
+      const cc = args.includes("--client-credentials");
+      if (cc && args.includes("--device")) fail(`use --device or --client-credentials, not both\n${loginUsage}`, 2);
+      if (cc && (!opt("--client-id") || !opt("--client-secret-file"))) fail(`--client-credentials needs --client-id <id> and --client-secret-file <file>\n${loginUsage}`, 2);
+      if (!cc && (opt("--client-id") !== undefined || opt("--client-secret-file") !== undefined)) fail(`--client-id and --client-secret-file go with --client-credentials\n${loginUsage}`, 2);
+      if (args.some((a, i) => !a.startsWith("--") && !["--issuer", "--mode", "--client-id", "--client-secret-file", "--store"].includes(args[i - 1]))) fail(loginUsage, 2);
+      const service = cc ? { clientId: opt("--client-id"), clientSecret: fs.readFileSync(opt("--client-secret-file"), "utf8").trim() } : null;
+      let storeOfEnv;
+      try {
+        checkRelayUrl();
+        checkSignInUrl(process.env.HOPTELL_RELAY);
+        storeOfEnv = envCredentialStore(process.env); // a misspelled store is refused, also with --store file
+      } catch (e) {
+        fail(e.message);
+      }
+      const profile = await profileOfRelay();
       await contactsOf(); // classify the home first, as every command that creates state does
-      const service = args.includes("--client-credentials") ? { clientId: opt("--client-id"), clientSecret: opt("--client-secret-file") ? fs.readFileSync(opt("--client-secret-file"), "utf8").trim() : null } : null;
       const r = await login({
-        relayUrl: process.env.HOPTELL_RELAY ?? fail("HOPTELL_RELAY is not set"),
+        relayUrl: process.env.HOPTELL_RELAY,
         home: home(),
-        profile: await profileOfRelay(),
+        profile,
         issuer: opt("--issuer") ?? null,
-        signInMode: opt("--mode") ? (["broker", "resource"].includes(opt("--mode")) ? opt("--mode") : fail("--mode must be broker or resource", 2)) : null,
+        signInMode: opt("--mode") ?? null,
         mode: service ? "service" : args.includes("--device") ? "device" : "browser",
         service,
-        store: opt("--store") === "file" || process.env.HOPTELL_CREDENTIAL_STORE === "file" ? "file" : "auto",
+        store: opt("--store") === "file" ? "file" : storeOfEnv,
         passphrase: process.env.HOPTELL_CREDENTIAL_PASSPHRASE || null,
       });
       console.log(`Signed in with ${r.issuer} (${r.kind === "service" ? "client credentials" : r.kind === "broker" ? `your account, through the relay (broker ${r.broker})` : "your account"}); the credential is kept in the ${r.store}. Set HOPTELL_AUTH=login for this relay.`);
@@ -314,7 +360,21 @@ try {
     case "grants": {
       // grants [show] | allow <selector> [--until <seconds>] | deny <selector> | deny-forever member:<id>
       //        | remove <selector> | default allow|deny | visible all|grantees   (publish with --yes)
-      const [sub = "show", arg] = args.filter((a, i) => !a.startsWith("--") && !["--until", "--rev"].includes(args[i - 1]));
+      const [sub = "show", arg] = args.filter((a, i) => !a.startsWith("--") && !["--until", "--rev", "--relay"].includes(args[i - 1]));
+      // A selector the relay would refuse is refused before the preview, not only at --yes.
+      if (["allow", "deny", "deny-forever", "remove"].includes(sub) && arg !== undefined) {
+        const { SELECTOR_RE } = await import("../lib/access.js");
+        if (!SELECTOR_RE.test(arg) || (sub === "deny-forever" && !arg.startsWith("member:"))) {
+          fail(`"${arg}" is not a ${sub === "deny-forever" ? "member selector: use member:<id>" : "selector: use *, group:<name> or member:<id>"}; a member id looks like m_ followed by 26 letters and digits (a message's Sender line shows it)`, 2);
+        }
+      }
+      // The command's shape, --until and --rev are checked before anything is opened or asked.
+      const grantsUsage = "usage: hoptell grants [show] | allow|deny <*|group:<name>|member:<id>> [--until <seconds>] | deny-forever member:<id> | remove <selector> | default allow|deny | visible all|grantees [--yes --rev N]";
+      const shaped = sub === "show" || (["allow", "deny", "remove"].includes(sub) && arg) || (sub === "deny-forever" && arg?.startsWith("member:")) || (sub === "default" && ["allow", "deny"].includes(arg)) || (sub === "visible" && ["all", "grantees"].includes(arg));
+      if (!shaped) fail(grantsUsage, 2);
+      const untilArg = opt("--until");
+      if (untilArg !== undefined && !(Number.isSafeInteger(Number(untilArg)) && Number(untilArg) > 0)) fail("--until needs a number of seconds", 2);
+      if (args.includes("--yes") && !/^\d+$/.test(opt("--rev") ?? "")) fail("--yes needs --rev <revision> from the preview", 2);
       await selectRelay();
       const c = await connect("send");
       try {
@@ -329,8 +389,6 @@ try {
           break;
         }
         const others = (sel) => cur.entries.filter((e) => e.selector !== sel);
-        const untilArg = opt("--until");
-        if (untilArg !== undefined && !(Number.isSafeInteger(Number(untilArg)) && Number(untilArg) > 0)) fail("--until needs a number of seconds", 2);
         const until = untilArg !== undefined ? Date.now() + Number(untilArg) * 1000 : undefined;
         let next;
         if (sub === "allow" && arg) next = { ...cur, entries: [...others(arg), { selector: arg, action: "allow", ...(until ? { until } : {}) }] };
@@ -339,7 +397,7 @@ try {
         else if (sub === "remove" && arg) next = { ...cur, entries: others(arg) };
         else if (sub === "default" && ["allow", "deny"].includes(arg)) next = { ...cur, default: arg };
         else if (sub === "visible" && ["all", "grantees"].includes(arg)) next = { ...cur, visible: arg };
-        else fail("usage: hoptell grants [show] | allow|deny <*|group:<name>|member:<id>> [--until <seconds>] | deny-forever member:<id> | remove <selector> | default allow|deny | visible all|grantees [--yes --rev N]", 2);
+        else fail(grantsUsage, 2);
         console.log("These grants say who may reach your sessions through this relay (your machine's contacts decide too).");
         show({ ...next, revision: `${cur.revision} -> ${cur.revision + 1}` });
         if (!args.includes("--yes")) {
@@ -368,7 +426,7 @@ try {
         // contacts request <name> [--reason collaborate|review|handoff|other]: ask a member that does
         // not accept you yet to let you reach them (design 4.1). The answer is the same whether the
         // name exists, accepts requests or not, so it says nothing about the recipient.
-        const name = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--reason")[1];
+        const name = args.filter((a, i) => !a.startsWith("--") && !["--reason", "--relay"].includes(args[i - 1]))[1];
         const reason = opt("--reason", "other");
         if (!name) fail("usage: hoptell contacts request <name> [--reason collaborate|review|handoff|other]", 2);
         if (!["collaborate", "review", "handoff", "other"].includes(reason)) fail("--reason must be collaborate, review, handoff or other", 2);
@@ -387,7 +445,7 @@ try {
       }
       if (args[0] === "requests") {
         // contacts requests [list] | accept|deny|deny-forever <id>: contact requests at the relay (design 4.1)
-        const [, action = "list", id] = args.filter((a) => !a.startsWith("--"));
+        const [, action = "list", id] = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--relay");
         await selectRelay();
         const c = await connect("send");
         try {
@@ -416,13 +474,49 @@ try {
       //          | check <realm> member <id> | shared <name> | unverified <profile> <name> [--session S] | init
       const q = await import("../lib/quarantine.js");
       const decisions = await import("../lib/decisions.js");
-      const c = await contactsOf();
-      const [sub = "list", target, third] = args.filter((a, i) => !a.startsWith("--") && !["--rev", "--policy-rev", "--session", "--how"].includes(args[i - 1]));
+      const [sub = "list", target, third] = args.filter((a, i) => !a.startsWith("--") && !["--rev", "--policy-rev", "--session", "--how", "--set", "--reason"].includes(args[i - 1]));
       const num = (flag) => {
         const v = opt(flag);
         if (v === undefined || !/^\d+$/.test(v)) fail(`${flag} <number> is required (shown by hoptell contacts show)`, 2);
         return Number(v);
       };
+      // A usage error is said before the home's contacts are opened (which creates them in a new home).
+      if (!["list", "show", "allow", "allow-once", "block", "grants", "blocks", "revoke", "unblock", "check", "verify", "accept-device", "forget-device", "encryption", "init"].includes(sub)) fail(`unknown contacts command "${sub}" (see hoptell help)`, 2);
+      if (sub === "show" && !target) fail("usage: hoptell contacts show <id> [--text]", 2);
+      if (["allow", "allow-once", "block"].includes(sub)) {
+        if (!target) fail(`usage: hoptell contacts ${sub} <id> --rev N --policy-rev P${sub === "block" ? "" : " [--session <scope>]"}`, 2);
+        num("--rev");
+        num("--policy-rev");
+      }
+      if (sub === "revoke" || sub === "unblock") {
+        if (!target) fail(`usage: hoptell contacts ${sub} <id> --policy-rev P`, 2);
+        num("--policy-rev");
+      }
+      if (["verify", "accept-device", "forget-device"].includes(sub) && !experimentalE2ee()) fail(`hoptell contacts ${sub} is experimental (device keys): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it`, 2);
+      if (sub === "encryption" && !experimentalE2ee()) fail("hoptell contacts encryption is experimental (encrypted messages): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it", 2);
+      if (["verify", "accept-device", "forget-device", "encryption"].includes(sub)) credentialStoreOrFail(); // the device store, before the contacts are opened
+      const deviceUsage = { verify: "usage: hoptell contacts verify <member id> [--yes --how in-person|out-of-band --set <code>] | <member id> --conversation", "accept-device": "usage: hoptell contacts accept-device <member id> <device> [--set <code>]", "forget-device": "usage: hoptell contacts forget-device <member id> <device> [--set <code>]" }[sub];
+      if (deviceUsage && (!target || (sub !== "verify" && !third))) fail(deviceUsage, 2);
+      if (sub === "verify" && !args.includes("--conversation")) {
+        // The confirmation's own arguments (the device set's code is compared later, with the relay's
+        // list); exit 1, as when the confirmation itself refused them.
+        if (opt("--how") !== undefined && !["in-person", "out-of-band"].includes(opt("--how"))) fail(`--how in-person or --how out-of-band says how you compared the safety number\n${deviceUsage}`);
+        if (args.includes("--yes") && (opt("--how") === undefined || opt("--set") === undefined)) fail(`--yes needs --how in-person|out-of-band and --set <code>\n${deviceUsage}`);
+      }
+      const encryptionUsage = "usage: hoptell contacts encryption <member id> | --default  required|preferred|off|clear  (for the current relay's realm)";
+      const encryptionArgs = () => {
+        const pos = args.filter((a) => !a.startsWith("--"));
+        return args.includes("--default") ? [null, pos[1]] : [pos[1], pos[2]];
+      };
+      if (sub === "encryption") {
+        const [who, mode] = encryptionArgs();
+        if ((!who && !args.includes("--default")) || !["required", "preferred", "off", "clear"].includes(mode)) fail(encryptionUsage, 2);
+      }
+      if (sub === "check") {
+        const [, realmOrProfile, kind, a1] = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--session");
+        if (!((kind === "member" || kind === "shared") && a1) && !(realmOrProfile === "unverified" && kind && a1)) fail("usage: hoptell contacts check <realm> member <id> | <realm> shared <name> | unverified <profile> <name> [--session <realm>/<name>]", 2);
+      }
+      const c = await contactsOf();
       const where = `contacts of ${home()}`;
       try {
         if (sub === "list") {
@@ -447,8 +541,13 @@ try {
           }
           const scopeHint = new Set(r.items.map((i) => i.session)).size > 1 ? " [--session <one of the sessions above>]" : "";
           console.log(`\nDecide with --rev ${r.rev} --policy-rev ${r.policyRevision}:`);
-          if (r.sender.auth !== "unverified") console.log(`  hoptell contacts allow ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (always: adds a grant)`);
-          console.log(`  hoptell contacts allow-once ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (only these messages)`);
+          // Plaintext from a contact whose encryption is required: allowing is refused, so only
+          // blocking is offered (or a change of that contact's encryption setting).
+          if (shown.view.violation) console.log(`  (These messages are unencrypted, and this contact's encryption is required: they can only be blocked, or released after hoptell contacts encryption ${r.sender.member} preferred|off.)`);
+          else {
+            if (r.sender.auth !== "unverified") console.log(`  hoptell contacts allow ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (always: adds a grant)`);
+            console.log(`  hoptell contacts allow-once ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}${scopeHint}   (only these messages)`);
+          }
           console.log(`  hoptell contacts block ${r.id} --rev ${r.rev} --policy-rev ${r.policyRevision}   (deletes them; blocks the sender)`);
         } else if (["allow", "allow-once", "block"].includes(sub)) {
           if (!target) fail(`usage: hoptell contacts ${sub} <id> --rev N --policy-rev P${sub === "block" ? "" : " [--session <scope>]"}`, 2);
@@ -483,18 +582,16 @@ try {
           console.log(p.legacy ? "allow (not managed yet)" : decide(p.doc, key, session));
         } else if (sub === "verify" || sub === "accept-device" || sub === "forget-device") {
           // Device pins (design 3.2): EXPERIMENTAL, only with HOPTELL_EXPERIMENTAL_E2EE=1.
-          if (!experimentalE2ee()) fail(`hoptell contacts ${sub} is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it`, 2);
+          if (!experimentalE2ee()) fail(`hoptell contacts ${sub} is experimental (device keys): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it`, 2);
           const { verifyCommand, conversationCommand } = await import("../lib/mls/cli.js");
           // The encrypted conversation's checkpoint (design 3.3), for comparing histories.
           if (sub === "verify" && args.includes("--conversation")) await conversationCommand({ member: target, home: home(), profile: await profileOfRelay(), env: process.env });
           else await verifyCommand({ sub, member: target, device: third, yes: args.includes("--yes"), how: opt("--how") ?? null, set: opt("--set") ?? null, home: home(), profile: await profileOfRelay(), connect: () => connect("send", null), contacts: c });
         } else if (sub === "encryption") {
           // The require-encryption policy (design 3.3): EXPERIMENTAL, only with HOPTELL_EXPERIMENTAL_E2EE=1.
-          if (!experimentalE2ee()) fail("hoptell contacts encryption is experimental (encrypted messages, design 3.3): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it", 2);
-          const usage = "usage: hoptell contacts encryption <member id> | --default  required|preferred|off|clear  (for the current relay's realm)";
-          const pos = args.filter((a) => !a.startsWith("--"));
-          const [who, mode] = args.includes("--default") ? [null, pos[1]] : [pos[1], pos[2]];
-          if ((!who && !args.includes("--default")) || !["required", "preferred", "off", "clear"].includes(mode)) fail(usage, 2);
+          if (!experimentalE2ee()) fail("hoptell contacts encryption is experimental (encrypted messages): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it", 2);
+          const [who, mode] = encryptionArgs();
+          if ((!who && !args.includes("--default")) || !["required", "preferred", "off", "clear"].includes(mode)) fail(encryptionUsage, 2);
           const rc = await connect("send", null);
           const realmId = rc.realm?.id;
           rc.close();
@@ -519,8 +616,10 @@ try {
       const { loadedEnvFile, loadedEnvKeys } = await import("../lib/config.js");
       const { settingsContext } = await import("../lib/decisions.js");
       const { startOwnerUi } = await import("../lib/ownerui.js");
+      // The switches it uses are checked before the contacts are opened (a new home stays untouched).
+      if (experimentalE2ee()) credentialStoreOrFail();
       const contacts = await contactsOf();
-      const sources = { contacts };
+      const sources = { contacts, agents: { homedir: os.homedir(), env: process.env, surface: "ui" } };
       // The relay (HOPTELL_RELAY) is reached only for what lives there: contact requests, and the
       // device lists with experimental device keys. Without it those views say so.
       if (process.env.HOPTELL_RELAY) {
@@ -579,7 +678,11 @@ try {
     case "local-relay": {
       // local-relay install [--port N] | start | stop | status | uninstall [--purge]
       const lr = await import("../lib/localrelay.js");
-      const sub = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--port") ?? "status";
+      const words = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--port");
+      const sub = words[0] ?? "status";
+      const lrUsage = "usage: hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]";
+      // --port goes with install and --purge with uninstall only; nothing else is taken.
+      if (words.length > 1 || (args.includes("--port") && sub !== "install") || (args.includes("--purge") && sub !== "uninstall")) fail(lrUsage, 2);
       const relaysFile = process.env.HOPTELL_RELAYS || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoptell", "relays.json");
       const o = { home: home(), homedir: os.homedir(), relaysFile, env: process.env };
       if (sub === "install") {
@@ -601,7 +704,7 @@ try {
         const r = await lr.uninstallLocalRelay(o, { purge: args.includes("--purge") });
         console.log(r.removed ? `Removed the service${r.entryRemoved ? " and its relays entry" : ""}${r.purged ? ", the token and the realm state" : "; the token and the realm state are kept (--purge removes them)"}.` : "Not installed.");
         if (r.note) console.log(`Note: ${r.note}.`);
-      } else fail("usage: hoptell local-relay install [--port 7788]|start|stop|status|uninstall [--purge]", 2);
+      } else fail(lrUsage, 2);
       break;
     }
     case "members": {
@@ -617,6 +720,8 @@ try {
       const { defaultStateDir } = await import("../lib/realm.js");
       const changeOf = (action, target, change) =>
         auditedChange({ stateDir: opt("--state-dir", process.env.HOPTELL_STATE_DIR) || defaultStateDir(), config: { members: file, policy: process.env.HOPTELL_POLICY || null, oidc: process.env.HOPTELL_OIDC || null }, action, target, change, e2ee: experimentalE2ee() });
+      // A name the file would refuse is refused before the relay's state (its audit log) is opened.
+      if ((sub === "add" || sub === "add-hosted") && name && !NAME_RE.test(name)) fail(`invalid member name "${name}": letters, digits, "_" and "-", up to 64 characters`);
       if (sub === "list") {
         const rows = m.listMembers(file);
         if (!rows.length) console.log("No members.");
@@ -635,13 +740,13 @@ try {
         const c = await changeOf(`members.${sub}`, name, () => m.linkMember(file, name, { issuer: opt("--issuer"), subject: opt("--subject"), unlink: sub === "unlink" }));
         console.log(sub === "unlink" ? `Unlinked that identity from "${name}". ${appliedNote(c)}` : c.value.already ? `"${name}" already has that identity.` : `Linked: "${name}" may now sign in with that identity. ${appliedNote(c)}`);
       } else if (sub === "device-revoke" && name && third) {
-        if (!experimentalE2ee()) fail("hoptell members device-revoke is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
+        if (!experimentalE2ee()) fail("hoptell members device-revoke is experimental (device keys): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
         const c = await changeOf("members.device-revoke", `${name}/${third}`, () => m.revokeMemberDevice(file, name, third));
         console.log(c.value.already ? `Device ${third} of "${name}" is already revoked.` : `Revoked device ${third} of "${name}": once the relay applies it, it no longer serves that device's KeyPackages or directory entry. ${appliedNote(c)}`);
       } else if (sub === "device-approve" && name && third) {
         // A12: the relay admin approves a new device's pending request when none of the member's
         // devices can (all suspended, or all lost); over the admin channel, audited.
-        if (!experimentalE2ee()) fail("hoptell members device-approve is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
+        if (!experimentalE2ee()) fail("hoptell members device-approve is experimental (device keys): set HOPTELL_EXPERIMENTAL_E2EE=1 to use it", 2);
         const words = args.filter((a, i) => !a.startsWith("--") && !["--members", "--state-dir"].includes(args[i - 1]));
         const fingerprint = words.slice(3).join(" ");
         if (!fingerprint) fail("usage: hoptell members device-approve <member> <device> <fingerprint> (the fingerprint the new device shows)", 2);
@@ -681,8 +786,9 @@ try {
       if (args[0] === "admin") {
         // The relay owner's commands (design 4.4): over the admin socket, or offline with the lock.
         const { adminCommand } = await import("../lib/admincli.js");
-        const crash = process.env.HOPTELL_RESTORE_TEST_CRASH || null; // tests: a real crash at a restore point
-        process.exitCode = await adminCommand({ args: args.slice(1), stateDir: stateDirOf(), config: configFiles(), e2ee: args.includes("--experimental-e2ee") || experimentalE2ee(), testFault: crash ? (p) => p === crash && process.kill(process.pid, "SIGKILL") : null });
+        // Tests only: a real crash at a restore point, set by a preload in test/ (never by the environment).
+        const crash = globalThis[Symbol.for("hoptell.test.restoreCrash")] || null;
+        process.exitCode = await adminCommand({ args: args.slice(1), stateDir: stateDirOf(), config: configFiles(), e2ee: experimentalE2ee() || args.includes("--experimental-e2ee"), testFault: crash ? (p) => p === crash && process.kill(process.pid, "SIGKILL") : null });
         break;
       }
       if (args[0] === "broker-reset") {
@@ -694,15 +800,54 @@ try {
         console.log(`Broker sign-in reset: a new refresh key, ${n} sign-in${n === 1 ? "" : "s"} ended.`);
         break;
       }
+      if (args[0] === "apps") {
+        // The owner channel's Mini App ids (design 7.4, section 2), with the relay stopped (the state lock).
+        const { appsAdmin } = await import("../lib/apptunnel.js");
+        const dir = stateDirOf();
+        const retire = opt("--retire");
+        const purge = opt("--purge");
+        if (retire && purge) fail("use --retire or --purge, not both", 2);
+        const { lockStateDir: lockDir } = await import("../lib/realm.js");
+        let release;
+        try {
+          release = lockDir(dir);
+        } catch (e) {
+          fail(`${e.message}; stop the relay first`);
+        }
+        try {
+          if (retire) console.log(`Retired: ${appsAdmin.retire(dir, retire).slice(0, 6)}… (it answers 404 and can never be registered again).`);
+          else if (purge) console.log(`Deleted: ${appsAdmin.purge(dir, purge).slice(0, 6)}…. Its URL is free now: any bridge may register it again.`);
+          else {
+            const rows = appsAdmin.list(dir);
+            if (!rows.length) console.log("No app ids.");
+            for (const r of rows) console.log(`${r.id}  ${r.state}  member ${r.member}  ${r.name}${r.registered ? `  since ${new Date(r.registered).toISOString()}` : ""}`);
+          }
+        } catch (e) {
+          release();
+          fail(e.message);
+        }
+        release();
+        break;
+      }
       const { startRelay } = await import("../lib/relay.js");
       const port = Number(opt("--port", process.env.HOPTELL_PORT || 7777));
       if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
+      // Every option and file is checked before the state directory is created or locked: a
+      // refused start changes nothing. The switches are read even when their flag is given, so
+      // a misspelled value is refused rather than taken as off.
+      const requireMembers = envOnOff("HOPTELL_REQUIRE_MEMBERS") || args.includes("--require-members");
+      const e2ee = experimentalE2ee() || args.includes("--experimental-e2ee");
+      // The owner channel's Mini App (design 7.4): off unless HOPTELL_OWNER_APP=on.
+      const ownerApp = envOnOff("HOPTELL_OWNER_APP");
       const membersFile = opt("--members", process.env.HOPTELL_MEMBERS);
       const { loadMembersAndHosts } = await import("../lib/members.js");
       // The members list and the host credentials (design 4.5) come from one read of the file.
       let hostsRead = null;
+      // systemd LoadCredential= hands the file over as a 0440 copy in its credentials directory;
+      // the relay's own reads of it (start, reload, the admin views) accept that copy.
+      const membersRead = { credentialsDir: process.env.CREDENTIALS_DIRECTORY || null };
       const readMembers = () => {
-        const d = loadMembersAndHosts(membersFile);
+        const d = loadMembersAndHosts(membersFile, membersRead);
         hostsRead = d.hosts;
         return d.members;
       };
@@ -715,19 +860,8 @@ try {
       const log = makeLogger(opt("--log-format", process.env.HOPTELL_LOG_FORMAT || "text"));
       const { fencedMessage, loadRealm, lockStateDir, readRestoreIntent } = await import("../lib/realm.js");
       const stateDirectory = stateDirOf();
-      const release = lockStateDir(stateDirectory);
-      for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => (release(), process.exit(0)));
-      process.on("exit", release);
-      // An unfinished restore fences the state directory (design 4.4): checked before any store,
-      // access state or broker state is opened.
-      const fence = readRestoreIntent(stateDirectory);
-      if (fence) fail(fencedMessage(fence));
       const realmName = opt("--realm-name", process.env.HOPTELL_REALM_NAME);
       if (realmName && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(realmName)) fail("invalid --realm-name: letters, digits, '.', '_' and '-', up to 64 characters");
-      const realm = { id: loadRealm(stateDirectory, process.env.HOPTELL_REALM_ID || null), name: realmName || undefined };
-      // The store opens on every start (design 4.4: the audit log, the store's instance id and the
-      // restore marker live there); the device service stays behind the experimental flag.
-      const { openRelayStore } = await import("../lib/relaystore.js");
       // WAL admission (design 6): every write of the store is admitted against the log's size.
       const size = (flag, env) => {
         const v = opt(flag, process.env[env]);
@@ -737,7 +871,41 @@ try {
         return n;
       };
       const admission = Object.fromEntries(Object.entries({ soft: size("--wal-soft-limit", "HOPTELL_WAL_SOFT_LIMIT"), hard: size("--wal-hard-limit", "HOPTELL_WAL_HARD_LIMIT") }).filter(([, v]) => v !== undefined));
-      if (admission.soft !== undefined && admission.hard === undefined && admission.soft > 512 * 1024 * 1024) fail("--wal-soft-limit must not be above --wal-hard-limit (512MiB unless set)");
+      // The pair in force (a limit not given takes its default) is checked here, before the state directory is touched.
+      const { WAL_LIMITS } = await import("../lib/relaydb.js");
+      if ((admission.soft ?? WAL_LIMITS.soft) > (admission.hard ?? WAL_LIMITS.hard)) {
+        const mib = (n) => `${n / 1024 / 1024}MiB`;
+        if (admission.hard === undefined) fail(`--wal-soft-limit must not be above the hard limit (${mib(WAL_LIMITS.hard)} unless --wal-hard-limit is set)`);
+        if (admission.soft === undefined) fail(`--wal-hard-limit must not be below the soft limit (${mib(WAL_LIMITS.soft)} unless --wal-soft-limit is set)`);
+        fail("--wal-soft-limit must not be above --wal-hard-limit");
+      }
+      // Larger transfers' quotas: checked with or without --experimental-e2ee, used only with it.
+      const quota = Object.fromEntries(Object.entries({ totalQuota: size("--transfer-quota", "HOPTELL_TRANSFER_QUOTA"), memberQuota: size("--transfer-member-quota", "HOPTELL_TRANSFER_MEMBER_QUOTA") }).filter(([, v]) => v !== undefined));
+      const metricsPort = opt("--metrics-port", process.env.HOPTELL_METRICS_PORT);
+      if (metricsPort && !(/^\d+$/.test(metricsPort) && Number(metricsPort) >= 1 && Number(metricsPort) <= 65535)) fail("invalid --metrics-port");
+      const initialMembers = membersFile ? readMembers() : null;
+      const { checkRelayStart } = await import("../lib/relay.js");
+      checkRelayStart({ host: opt("--host", process.env.HOPTELL_HOST), token: process.env.HOPTELL_TOKEN, members: initialMembers, hosts: hostsRead, requireMembers });
+      if (process.env.HOPTELL_REALM_ID && !/^[0-9a-f]{32}$/.test(process.env.HOPTELL_REALM_ID)) fail("HOPTELL_REALM_ID must be 32 lowercase hex characters");
+      const policyFile = opt("--policy", process.env.HOPTELL_POLICY);
+      const { createAccess, loadPolicy } = await import("../lib/access.js");
+      const policyDoc = policyFile ? loadPolicy(policyFile) : null;
+      const oidcFile = opt("--oidc", process.env.HOPTELL_OIDC);
+      const oidcConfig = oidcFile ? (await import("../lib/oidc.js")).loadOidcConfig(oidcFile) : null;
+      // Before anything listens: a relay must not say it is listening and then stop on this.
+      const socketProblem = (await import("../lib/admin.js")).socketPathProblem(stateDirectory);
+      if (socketProblem) fail(socketProblem);
+      const release = lockStateDir(stateDirectory);
+      for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => (release(), process.exit(0)));
+      process.on("exit", release);
+      // An unfinished restore fences the state directory (design 4.4): checked before any store,
+      // access state or broker state is opened.
+      const fence = readRestoreIntent(stateDirectory);
+      if (fence) fail(fencedMessage(fence));
+      const realm = { id: loadRealm(stateDirectory, process.env.HOPTELL_REALM_ID || null), name: realmName || undefined };
+      // The store opens on every start (design 4.4: the audit log, the store's instance id and the
+      // restore marker live there); the device service stays behind the experimental flag.
+      const { openRelayStore } = await import("../lib/relaystore.js");
       let db;
       try {
         db = openRelayStore({ dir: stateDirectory, admission });
@@ -748,9 +916,7 @@ try {
       let admin = null;
       const pendingEvents = [];
       const audit = (action, detail) => (admin ? admin.securityEvent(action, detail) : pendingEvents.push([action, detail]));
-      const requireMembers = args.includes("--require-members") || /^(1|true|on|yes)$/i.test(process.env.HOPTELL_REQUIRE_MEMBERS || "");
       // Sign-in with identity providers (design 1.6): explicit issuers from --oidc / HOPTELL_OIDC.
-      const oidcFile = opt("--oidc", process.env.HOPTELL_OIDC);
       let oidc = null;
       // Broker sign-ins of a relay whose broker issuers were all removed end at startup (design 1.7:
       // removing an issuer ends its families); the broker starts whenever its state exists.
@@ -761,7 +927,7 @@ try {
       }
       if (oidcFile) {
         const o = await import("../lib/oidc.js");
-        const config = o.loadOidcConfig(oidcFile);
+        const config = oidcConfig;
         const brokerIssuers = config.issuers.filter((i) => i.mode === "broker");
         // Broker mode (design 1.7): its families and refresh key live in this relay's state directory.
         const broker = brokerIssuers.length || brokerState ? await (await import("../lib/broker.js")).createBroker({ issuers: brokerIssuers, stateDir: stateDirectory, log, audit }) : null;
@@ -770,11 +936,8 @@ try {
       }
       // Access (design 4.1/4.2): the admin policy (gate 1) from --policy / HOPTELL_POLICY, and the
       // members' own grants (gate 2) in the state directory. Without either nothing changes.
-      const { createAccess, loadPolicy } = await import("../lib/access.js");
-      const policyFile = opt("--policy", process.env.HOPTELL_POLICY);
-      const access = createAccess({ stateDir: stateDirectory, policy: policyFile ? loadPolicy(policyFile) : null });
+      const access = createAccess({ stateDir: stateDirectory, policy: policyDoc });
       // Device keys (design 3.2): EXPERIMENTAL, only on explicit request.
-      const e2ee = args.includes("--experimental-e2ee") || experimentalE2ee();
       let devices = null;
       if (e2ee) {
         const { createDeviceDirectory } = await import("../lib/mls/relaydir.js");
@@ -782,7 +945,6 @@ try {
         const { createTransferStore } = await import("../lib/mls/relaytransfers.js");
         const directory = createDeviceDirectory({ db, realm: realm.id });
         // Larger transfers (design 6) on the same store; the quotas are relay options.
-        const quota = Object.fromEntries(Object.entries({ totalQuota: size("--transfer-quota", "HOPTELL_TRANSFER_QUOTA"), memberQuota: size("--transfer-member-quota", "HOPTELL_TRANSFER_MEMBER_QUOTA") }).filter(([, v]) => v !== undefined));
         let transfers;
         try {
           transfers = createTransferStore({ db, limits: quota, log });
@@ -790,8 +952,8 @@ try {
           fail(e.message);
         }
         devices = { directory, ds: createDeliveryService({ db, directory, realm: realm.id, transfers }), transfers };
-        log("EXPERIMENTAL: device keys, encrypted messages and larger transfers (designs 3.2, 3.3, 6) are enabled; not for production use");
-      }
+        log("EXPERIMENTAL: device keys, encrypted messages and larger transfers are enabled; not for production use");
+      } else if (Object.keys(quota).length) log("note: the transfer quotas apply only with --experimental-e2ee; they are ignored");
       let dropped = () => 0;
       // The store's sizes, checkpoints and admission (design 6), and the transfers' charged total.
       const storeStats = () => {
@@ -803,7 +965,8 @@ try {
           return {};
         }
       };
-      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: membersFile ? readMembers() : null, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
+      if (ownerApp) log("owner app: /app/ is served for registered owner channel bridges (HOPTELL_OWNER_APP=on)");
+      const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: initialMembers, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, ownerApp: ownerApp ? { stateDir: stateDirectory } : null, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
       // The relay admin (design 4.4): its operations over this store, served on the admin socket.
       const { createAdmin, startAdminSocket, COUNTS_EVERY_MS } = await import("../lib/admin.js");
       admin = createAdmin({
@@ -815,6 +978,7 @@ try {
         config: { members: membersFile || null, policy: policyFile || null, oidc: oidcFile || null },
         flags: { e2ee },
         apply: { readMembers, members: (list) => relay.reload(list, hostsRead), policy: (p) => access.setPolicy(p) },
+        membersRead,
         log,
       });
       dropped = admin.auditDropped;
@@ -830,10 +994,8 @@ try {
       const maintain = () => admin.maintain().catch((e) => log("admin: store maintenance failed:", e.message));
       maintain();
       setInterval(maintain, COUNTS_EVERY_MS).unref();
-      const metricsPort = opt("--metrics-port", process.env.HOPTELL_METRICS_PORT);
       if (metricsPort) {
         const mp = Number(metricsPort);
-        if (!Number.isInteger(mp) || mp < 1 || mp > 65535) fail("invalid --metrics-port");
         const metricsHost = opt("--metrics-host", process.env.HOPTELL_METRICS_HOST || "127.0.0.1");
         await startMetrics(relay, { host: metricsHost, port: mp });
         log(`metrics on http://${metricsHost}:${mp}/metrics`);
@@ -856,7 +1018,8 @@ try {
     }
     case "device": {
       // Device keys and enrollment (design 3.2): EXPERIMENTAL, only with HOPTELL_EXPERIMENTAL_E2EE=1.
-      if (!experimentalE2ee()) fail("hoptell device is experimental (device keys, design 3.2): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it (encrypted messages are experimental and not independently reviewed)", 2);
+      if (!experimentalE2ee()) fail("hoptell device is experimental (device keys): set HOPTELL_EXPERIMENTAL_E2EE=1 to try it (encrypted messages are experimental and not independently reviewed)", 2);
+      credentialStoreOrFail(); // before the contacts are opened
       const { deviceCommand } = await import("../lib/mls/cli.js");
       await deviceCommand({ args, home: home(), profile: await profileOfRelay(), env: process.env, connect: () => connect("send", null), contacts: await contactsOf() });
       break;
@@ -877,26 +1040,33 @@ try {
         const h = await import("../lib/httpmcp.js");
         const [, action, label] = args.filter((a, i) => !a.startsWith("--") && !["--port", "--name", "--roles"].includes(args[i - 1]));
         if (action === "add" && label) {
-          const r = await h.addClient(home(), label, { name: opt("--name") ?? null, roles: parseRoles(opt("--roles") ?? "") });
+          const r = await h.addClient(home(), label, { name: opt("--name") ?? null, roles: parseRoles(opt("--roles") ?? ""), agents: args.includes("--agents") });
           console.log(`Client "${r.label}" added. Its token (shown only now): ${r.token}`);
           console.log(`Configure the client with the URL http://127.0.0.1:<port>/mcp and the header "Authorization: Bearer <token>".`);
         } else if (action === "list") {
           const rows = h.listClients(home());
           if (!rows.length) console.log("No clients.");
-          for (const c of rows) console.log(`${c.label}${c.name ? `  name ${c.name}` : ""}${c.roles?.length ? `  roles ${c.roles.join(",")}` : ""}  since ${c.created}`);
+          for (const c of rows) console.log(`${c.label}${c.name ? `  name ${c.name}` : ""}${c.roles?.length ? `  roles ${c.roles.join(",")}` : ""}${c.agents ? "  agents" : ""}  since ${c.created}`);
         } else if (action === "remove" && label) {
           await h.removeClient(home(), label);
           console.log(`Removed client "${label}"; its token no longer works and its open sessions end within a minute.`);
-        } else fail("usage: hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] | list | remove <label>", 2);
+        } else fail("usage: hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>", 2);
         break;
       }
       const { runMcpHttp } = await import("../lib/mcp.js");
-      await runMcpHttp({ port: opt("--port") ? Number(opt("--port")) : undefined });
+      await runMcpHttp({ port: portOpt("--port", undefined) });
+      break;
+    }
+    case "agents": {
+      // Agent profiles and runs (design 7.1).
+      const { agentsCommand } = await import("../lib/agentscli.js");
+      await agentsCommand({ args, home: home(), env: process.env, homedir: os.homedir(), fail });
       break;
     }
     case "mcp": {
+      if (!mcpRun && (args.includes("--home") || args.some((a) => !a.startsWith("--")))) fail("usage: hoptell mcp   or   hoptell mcp --run <run> --home <home>", 2);
       const { runMcp } = await import("../lib/mcp.js");
-      await runMcp();
+      await runMcp(mcpRun ?? {});
       break;
     }
     case "tmux": {
@@ -931,10 +1101,11 @@ try {
       let rest = args;
       // Options come first; "--" ends them, so a message may itself start with "--".
       for (;;) {
-        if (rest[0] === "--relay") relayFlag = rest[1] ?? fail("--relay needs an alias", 2);
+        if (!["--relay", "--ttl", "--reply-to"].includes(rest[0])) break;
+        if (rest[1] === undefined || rest[1] === "") fail(`${rest[0]} needs a value (see hoptell send --help); nothing was sent`, 2);
+        if (rest[0] === "--relay") relayFlag = rest[1];
         else if (rest[0] === "--ttl") ttl = parseTtl(rest[1]);
-        else if (rest[0] === "--reply-to") replyTo = parseRef(rest[1]);
-        else break;
+        else replyTo = parseRef(rest[1]);
         rest = rest.slice(2);
       }
       if (rest[0] === "--") rest = rest.slice(1);
@@ -961,13 +1132,36 @@ try {
         }
       }
       const c = await connect("send");
+      // To this relay's owner channel (design 7.3, 2.6): text by name, plaintext, to the own member.
+      const ownersig = await import("../lib/ownersig.js");
+      ownersig.armOwnerBackstop(home(), c);
+      let guarded;
+      try {
+        const policy = (await contactsOf()).currentPolicy();
+        guarded = ownersig.ownerSendGuard({ home: home(), client: c, to, policy: () => policy });
+      } catch (e) {
+        c.close();
+        fail(e.message);
+      }
+      if (guarded) {
+        console.log(`${describeAck(to, await c.send(to, words.join(" "), ttl, replyTo, { toMember: guarded.toMember }), ttl, replyTo)}\n${ownersig.OWNER_SEND_NOTE}`);
+        c.close();
+        break;
+      }
       // The contacts' encryption policy (design 3.3, 4.3), as in agent sessions: the CLI sends
       // plaintext only, so a contact (or a fan-out recipient) whose messages must be encrypted
       // gets nothing, never plaintext.
+      // Fail closed: a managed policy file that is missing, unreadable or invalid sends nothing.
       const { cliSendPolicy } = await import("../lib/mls/session.js");
+      const { sendPolicy } = await import("../lib/contacts.js");
+      const current = sendPolicy((await contactsOf()).currentPolicy());
+      if (current.refuse) {
+        c.close();
+        fail(current.refuse);
+      }
       let policy;
       try {
-        policy = await cliSendPolicy({ doc: (await contactsOf()).currentPolicy().doc ?? null, client: c, to });
+        policy = await cliSendPolicy({ doc: current.doc, client: c, to });
       } catch (e) {
         c.close();
         fail(`the encryption policy could not be checked (${e.message}); nothing was sent`);
@@ -986,7 +1180,10 @@ try {
       const waitForName = args.includes("--wait-for-name");
       const replace = args.includes("--replace");
       if (waitForName && replace) fail("use --wait-for-name or --replace, not both", 2);
-      const secs = Number(args.find((a) => !a.startsWith("--"))) || 300;
+      const words = args.filter((a) => !a.startsWith("--"));
+      if (words.length > 1) fail("usage: hoptell wait [--relay <alias>] [--wait-for-name | --replace] [seconds]", 2);
+      const secs = secondsArg(words[0], 300, "hoptell wait [seconds]; default 300");
+      checkPeerSettings("peer");
       const deadline = Date.now() + secs * 1000;
       const { format } = await import("../lib/inbox.js");
       process.stdout.on("error", (err) => fail(`cannot write output: ${err.message}`));
@@ -1024,8 +1221,10 @@ try {
               return confirm();
             }
             clearTimeout(timer);
-            // Confirm only once printed; on a write error the relay keeps the message.
-            process.stdout.write(`${format(m)}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : confirm()));
+            // Confirm only once printed; on a write error the relay keeps the message. Printed, it
+            // reached this session: this member may reply to it once even where the sender's
+            // grants would refuse it (a reply allowance), as with an agent session.
+            process.stdout.write(`${format(m)}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : confirm({ released: true })));
             clearTimeout(idle);
             idle = setTimeout(done, 500); // also collect messages arriving together
           })
@@ -1146,6 +1345,12 @@ try {
       process.exitCode = code;
       break;
     }
+    case "telegram": {
+      // The owner channel (design 7.2): the bot token comes from standard input only.
+      const { telegramCommand } = await import("../lib/ownerchannelcli.js");
+      process.exitCode = await telegramCommand(args, { home: home(), env: process.env, homedir: os.homedir() });
+      break;
+    }
     case "hooks": {
       // Settings for Claude Code without the plugin: printed only, never written.
       const { hooksSnippet } = await import("../lib/wake.js");
@@ -1186,7 +1391,8 @@ try {
       const bySession = rest[0] === "--session";
       const target = bySession ? rest[1] : rest[0] && checkName(rest[0], "name");
       if (!target) fail("usage: hoptell listen [--no-ack] <name> [seconds]   or   hoptell listen [--no-ack] --session <folder> [seconds]", 2);
-      const secs = Number(rest[bySession ? 2 : 1]) || 3600;
+      if (rest.length > (bySession ? 3 : 2)) fail("usage: hoptell listen [--no-ack] <name> [seconds]   or   hoptell listen [--no-ack] --session <folder> [seconds]", 2);
+      const secs = secondsArg(rest[bySession ? 2 : 1], 3600, "hoptell listen ... [seconds]; default 3600");
       const inbox = await import("../lib/inbox.js");
       const { boundFromPath, resolveNameStore } = await import("../lib/session.js");
       const { openStore, processConsumer } = await import("../lib/store.js");
@@ -1202,6 +1408,7 @@ try {
       let out = null;
       const pipes = new Map();
       const contacts = await contactsOf();
+      const { attest } = await import("../lib/quarantine.js");
       while (!out) {
         const r = resolve();
         if (r.state === "legacy") {
@@ -1249,7 +1456,9 @@ try {
             for (const k of claims) k.release();
             if (released?.receipt) await legacyPipe.release(me);
           };
-          if (shown.length) out = { text: shown.map(inbox.format).join("\n\n"), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
+          // What is shown carries this machine's checks (lib/attested.js), never a stored flag alone.
+          const checked = shown.map((m) => attest(home(), m));
+          if (shown.length) out = { text: checked.map(inbox.format).join("\n\n"), note: inbox.batchNote(checked), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
           else await undo();
         } else if (r.state === "bound") {
           // Keeps the session's receipt policy; claims use the configured lease.
@@ -1257,11 +1466,15 @@ try {
           const pipe = pipes.get(r.store.dir);
           // A message that cannot be read is an error (nothing is acknowledged); the current policy
           // is applied, and messages it holds back join their requests.
-          const batch = await pipe.take(consumer, { screen: contacts.screenFor(sessionOfDir(r.store.dir)) });
+          await (await import("../lib/ownersig.js")).completeSeen(home(), pipe); // owner-channel replay records first (design 7.2)
+          // The own member too: a verified owner-channel message needs no grant (as in the engine).
+          const batch = await pipe.take(consumer, { screen: contacts.screenFor(sessionOfDir(r.store.dir), memberOfDir(r.store.dir)) });
           if (batch?.quarantined?.length) await contacts.adopt();
           if (batch && (batch.messages.length || batch.damaged?.length)) {
             const notes = (batch.damaged ?? []).map((f) => `(A stored message was damaged and was set aside, unread, in ${f}.)`);
-            out = { text: [...notes, ...batch.messages.map((m) => inbox.format(m.msg))].join("\n\n"), receipt: batch.receipt, pipe };
+            const where = { ...sessionOfDir(r.store.dir), member: memberOfDir(r.store.dir) };
+            const checked = batch.messages.map((m) => attest(home(), m.msg, where));
+            out = { text: [...notes, ...checked.map((m) => inbox.format(m))].join("\n\n"), note: inbox.batchNote(checked), receipt: batch.receipt, pipe };
           }
         }
         if (out || Date.now() >= deadline) break;
@@ -1273,7 +1486,7 @@ try {
       }
       const footer = out.receipt && noAck ? `\nReceipt: ${out.receipt} (acknowledge with: hoptell ack ${out.receipt} ${bySession ? `--session "${target}"` : target})` : "";
       // Acknowledge only after the output is written (automatic mode); a failed write keeps them.
-      process.stdout.write(`${out.text}\n\n${inbox.NOT_YOUR_USER}${footer}\nReply with send_message, then start this listener again.\n`, async (err) => {
+      process.stdout.write(`${out.text}\n\n${out.note ?? inbox.NOT_YOUR_USER}${footer}\nReply with send_message, then start this listener again.\n`, async (err) => {
         if (err) {
           if (out.undo) await out.undo(); // not printed: the messages stay
           else for (const k of out.claims ?? []) k.release();
@@ -1301,19 +1514,14 @@ try {
         bound = r.store;
       }
       const pipe = await openStore(bound);
+      await (await import("../lib/ownersig.js")).completeSeen(home(), pipe); // owner-channel replay records first (design 7.2)
       const r = await pipe.ack(receipt);
       if (r !== "ok") fail(`unknown receipt ${receipt}: it may have expired (its messages were returned to the inbox) or be mistyped`);
       console.log("Acknowledged.");
       break;
     }
-    case undefined:
-    case "help":
-    case "-h":
-    case "--help":
-      console.log(USAGE);
-      break;
     default:
-      fail(`unknown command "${cmd}"\n\n${USAGE}`, 2);
+      fail(`unknown command "${cmd}"\n\n${(await import("../lib/clihelp.js")).usage()}`, 2);
   }
 } catch (e) {
   fail(e.message);

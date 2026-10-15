@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EminUZUN/hoptell/schema/agent-profile.schema.json",
+  "title": "hoptell agent profile",
+  "description": "Which local agent CLI a session of this hoptell home may start, how and within which limits. Kept in <home>/agents/profiles/<id>.json (0600); usable only after hoptell agents profile approve <id>. Checked by lib/agents.js, which also refuses what a schema cannot say: sandbox full (v1), roots that are, contain or lie inside the hoptell home (for a gated hardening profile: roots equal to or inside a denied path), a codex.headlessMode other than plain outside a read-only codex headless profile, budgetUsd for a CLI other than claude, a headless lifetime over 240 minutes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "cli", "modes", "sandbox", "folders", "name"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$", "description": "Equal to the file name without .json." },
+    "description": { "type": "string", "maxLength": 200 },
+    "cli": { "enum": ["codex", "claude", "gemini", "agy"] },
+    "command": { "type": "string", "pattern": "^/", "maxLength": 1024, "description": "Absolute path of the executable; by default the CLI's name on the supervisor's PATH." },
+    "modes": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["headless", "tmux"] }, "description": "The first one is the default." },
+    "sandbox": { "enum": ["read-only", "workspace-write", "full"], "description": "full is refused in v1." },
+    "folders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roots", "default"],
+      "properties": {
+        "roots": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "pattern": "^(/|~/)", "maxLength": 1024 } },
+        "default": { "type": "string", "pattern": "^(/|~/)", "maxLength": 1024, "description": "One of roots." }
+      }
+    },
+    "name": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefix"],
+      "properties": { "prefix": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$" } }
+    },
+    "roles": { "type": "array", "maxItems": 15, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "not": { "enum": ["all", "spawned"] } }, "default": [] },
+    "relays": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" }, "default": ["local"] },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "pass": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$", "not": { "pattern": "^HOPTELL_" } } } }
+    },
+    "cliOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$" },
+        "effort": { "enum": ["minimal", "low", "medium", "high", "xhigh", "max"], "description": "codex and claude only." },
+        "allowedTools": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}(\\([^()\\u0000-\\u001f]{1,200}\\))?$" }, "description": "claude only." },
+        "disallowedTools": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}(\\([^()\\u0000-\\u001f]{1,200}\\))?$" }, "description": "claude only." }
+      }
+    },
+    "codex": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "headlessMode": { "enum": ["plain", "hardening", "containment"], "default": "plain", "description": "The headless mode of a codex profile with modes [\"headless\"] and sandbox read-only: plain (-s read-only), hardening (path-deny hardening). containment is specified but not offered. Any other profile: absent or plain. Part of the digest: a change needs approval again." }
+      }
+    },
+    "spawners": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roles": { "type": "array", "maxItems": 16, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" } },
+        "names": { "type": "array", "maxItems": 16, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" } }
+      }
+    },
+    "confirm": { "enum": ["never", "always"], "description": "Default: always with workspace-write or a remote relay, else never." },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concurrent": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2 },
+        "perHour": { "type": "integer", "minimum": 1, "maximum": 60, "default": 10 },
+        "lifetimeMinutes": { "type": "integer", "minimum": 1, "maximum": 1440, "description": "Default 30 (headless) or 480 (tmux); at most 240 when the profile has headless mode." },
+        "taskBytes": { "type": "integer", "minimum": 1, "maximum": 262144, "default": 32768 },
+        "resultBytes": { "type": "integer", "minimum": 1, "maximum": 1048576, "default": 65536 },
+        "budgetUsd": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000, "default": null, "description": "cli claude, headless only." }
+      }
+    }
+  }
+}

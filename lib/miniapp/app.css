@@ -1,0 +1,199 @@
+/* The hoptell app in Telegram: Telegram's theme colours when it gives them, else a light or dark set. */
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --text: var(--tg-theme-text-color, #111111);
+  --hint: var(--tg-theme-hint-color, #6b6b6b);
+  --accent: var(--tg-theme-button-color, #2a7ae2);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --panel: var(--tg-theme-secondary-bg-color, #f1f1f4);
+  --line: var(--tg-theme-section-separator-color, #dcdce0);
+  --warn: var(--tg-theme-destructive-text-color, #c62828);
+  --safe-top: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+  --safe-right: 0px;
+  --content-safe-top: 0px;
+  --content-safe-bottom: 0px;
+  --content-safe-left: 0px;
+  --content-safe-right: 0px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--tg-theme-bg-color, #17181c);
+    --text: var(--tg-theme-text-color, #f2f2f2);
+    --hint: var(--tg-theme-hint-color, #9a9aa2);
+    --panel: var(--tg-theme-secondary-bg-color, #24262c);
+    --line: var(--tg-theme-section-separator-color, #34363d);
+    --warn: var(--tg-theme-destructive-text-color, #ef6c6c);
+  }
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+}
+#app {
+  min-height: var(--tg-viewport-height, 100vh);
+  padding-top: calc(max(var(--safe-top), env(safe-area-inset-top, 0px)) + var(--content-safe-top));
+  padding-bottom: calc(max(var(--safe-bottom), env(safe-area-inset-bottom, 0px)) + var(--content-safe-bottom) + 16px);
+  padding-left: calc(max(var(--safe-left), env(safe-area-inset-left, 0px)) + var(--content-safe-left) + 16px);
+  padding-right: calc(max(var(--safe-right), env(safe-area-inset-right, 0px)) + var(--content-safe-right) + 16px);
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.tab,
+.btn,
+.row {
+  min-height: 44px;
+  font: inherit;
+  color: inherit;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tab {
+  flex: 1;
+  background: var(--panel);
+}
+.tab.on,
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.btn {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--panel);
+  text-align: center;
+}
+.btn.small {
+  width: auto;
+  margin: 0;
+  min-height: 36px;
+  padding: 6px 12px;
+}
+.search,
+.name,
+.text {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.search {
+  position: sticky;
+  top: 60px;
+  z-index: 1;
+}
+.text {
+  resize: vertical;
+  margin-top: 8px;
+}
+.section {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--hint);
+  margin: 16px 0 4px;
+  overflow-wrap: anywhere;
+}
+.row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 12px;
+  margin: 0;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  text-align: left;
+}
+.label,
+.title,
+.qtext {
+  overflow-wrap: anywhere;
+}
+.title {
+  font-size: 20px;
+  margin: 12px 0 4px;
+}
+.sub,
+.hint {
+  color: var(--hint);
+  font-size: 14px;
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.sub.on {
+  color: var(--text);
+}
+.notice,
+.warning {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.warning {
+  color: var(--warn);
+}
+.field {
+  display: block;
+  margin-top: 16px;
+  color: var(--hint);
+  font-size: 14px;
+}
+.field .name {
+  margin-top: 4px;
+}
+.pair {
+  display: flex;
+  gap: 8px;
+}
+.pair .btn {
+  flex: 1;
+}
+.to {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+.count {
+  text-align: right;
+}
+.question {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+}
+.qtext {
+  white-space: pre-wrap;
+  margin: 4px 0;
+}
+.message {
+  margin-top: 40px;
+  text-align: center;
+  font-size: 18px;
+}

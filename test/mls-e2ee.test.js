@@ -957,12 +957,13 @@ test("MII8 at the device: an offline device reaches the replacement's Welcome pa
   // Before the device holds a newer generation, a message of a group it has not joined waits for its Welcome.
   assert.equal(await recv.e2ee.receive(w.ds.pending({ member: b.id, device: b.device, limit: 1 })[0], noop), "later");
   await recv.e2ee.attach();
-  await until(() => recv.got.length === 50, "all 50 logical messages", 15_000);
+  // Generous budgets: 50 decryptions take about 4 s on an idle machine, and over 15 s under a full parallel test run.
+  await until(() => recv.got.length === 50, "all 50 logical messages", 60_000);
   assert.deepEqual(recv.got.map((m) => m.text).sort(), Array.from({ length: 50 }, (_, i) => `queued ${i}`).sort());
   assert.ok(recv.got.every((m) => m.e2ee.generation === 2));
   assert.equal((await recv.e2ee.checkpoint(a.id)).generation, 2);
   // The superseded generation's copies were refused (unreadable here for ever), not left waiting.
-  await until(() => w.ds.usage({ member: b.id, device: b.device }).messages === 0, "an empty queue");
+  await until(() => w.ds.usage({ member: b.id, device: b.device }).messages === 0, "an empty queue", 15_000);
 });
 
 test("MII8 at the device: a message whose acceptance is learned by reconciliation after a replacement is sealed again in the current group", async (t) => {

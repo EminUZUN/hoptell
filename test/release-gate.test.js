@@ -76,7 +76,8 @@ function fixture(t, { order = (xs) => xs, declared = [sha256(GLUE), sha256(WASM)
     ["lib/mls/openmls.js", `// adapter\n${DECL(...declared)}`],
     ["lib/mls/driver.js", "// driver\n"],
     ["lib/mls/sub/deep.js", "// a nested file\n"],
-    ...GROUPS.hoptell.paths.filter((p) => !p.endsWith("/**")).map((p) => [p, `// ${p}\n`]),
+    // package.json is real JSON: the release check imports the package's lib/mls/openmls.js.
+    ...GROUPS.hoptell.paths.filter((p) => !p.endsWith("/**")).map((p) => [p, p === "package.json" ? '{ "type": "module" }\n' : `// ${p}\n`]),
   ];
   for (const [p, c] of order(repoFiles)) put(repo, p, c);
   for (const [p, c] of order([
@@ -349,8 +350,7 @@ test("release check: a package without reviewed digests is not a reviewed build 
   const f = fixture(t, { declared: [null, null] });
   fs.rmSync(path.dirname(f.records.inputs), { recursive: true });
   assert.deepEqual(f.check(), { reviewedBuild: false, problems: [] });
-  assert.equal(declaredReviewedDigests(DECL(null, null)), null);
-  assert.deepEqual(declaredReviewedDigests(DECL("a".repeat(64), null)), { glue: "a".repeat(64), wasm: null });
+  assert.equal(declaredReviewedDigests(path.join(f.pkg, "lib", "mls", "openmls.js")), null);
 });
 
 test("release check: a reviewed build passes only when the package, the mapping and the regenerated inputs all agree", (t) => {
@@ -394,15 +394,102 @@ test("release check: a reviewed build passes only when the package, the mapping 
   }, /REVIEWED_BINDING .* is not the mapping's glue and WASM/);
 });
 
-test("release check: a declaration it cannot parse is a claim, checked in full (fail closed)", (t) => {
-  const f = fixture(t);
-  put(f.pkg, "lib/mls/openmls.js", "export const REVIEWED_BINDING = { glue: null, wasm: null };\n");
-  assert.deepEqual(declaredReviewedDigests(fs.readFileSync(path.join(f.pkg, "lib", "mls", "openmls.js"))), { glue: "unparsed", wasm: "unparsed" });
+test("release check: REVIEWED_BINDING is the value the module exports; anything else refuses (fail closed)", (t) => {
+  const G = "a".repeat(64);
+  const W = "b".repeat(64);
+  const dir = tmp(t);
+  put(dir, "package.json", '{ "type": "module" }\n');
+  let n = 0;
+  const file = (src) => {
+    const f = path.join(dir, `m${n++}.js`);
+    fs.writeFileSync(f, src);
+    return f;
+  };
+  const read = (src, opts) => declaredReviewedDigests(file(src), opts);
+  const refusedWith = (src, re, opts) => assert.throws(() => read(src, opts), (e) => /^lib\/mls\/openmls\.js: cannot read REVIEWED_BINDING: /.test(e.message) && re.test(e.message), src);
+  // The forms it accepts.
+  assert.equal(read(DECL(null, null)), null);
+  assert.equal(read("export const REVIEWED_BINDING = null;\n"), null);
+  assert.deepEqual(read(DECL(G, W)), { glue: G, wasm: W });
+  assert.deepEqual(read(`export const REVIEWED_BINDING=Object.freeze({\n  "wasm": '${W}',\n  glue: null,\n})`), { glue: null, wasm: W });
+  // pc3's first case: a canonical null declaration in a block comment, the real export (non-null)
+  // in another format. The old line regex read the comment (null); this reads the export.
+  assert.deepEqual(read(`/*\n${DECL(null, null)}*/\nexport const REVIEWED_BINDING = Object.freeze({wasm: "${W}", glue: "${G}"});\n`), { glue: G, wasm: W });
+  // pc3's review of the tokenizer: a regular expression after break, and a destructured Object.
+  assert.deepEqual(read(`for (;false;) break\n/export const REVIEWED_BINDING = null;/.test(""); export const REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); const q = /a/;\n`), { glue: G, wasm: W });
+  assert.deepEqual(read(`const { Object } = { Object: { freeze: () => globalThis.Object.freeze({ glue: "${G}", wasm: "${W}" }) } };\nexport const REVIEWED_BINDING=Object.freeze({wasm: null, glue: null});\n`), { glue: G, wasm: W });
+  assert.equal(read("const of = 4; const x = of / 2; export const REVIEWED_BINDING = null;\n"), null);
+  // A declaration only in a comment, a string or a regular expression is no export.
+  refusedWith(`// ${DECL(null, null)}`, /it exports no REVIEWED_BINDING/);
+  refusedWith(`const s = ${JSON.stringify(DECL(null, null))};\n`, /it exports no REVIEWED_BINDING/);
+  refusedWith(`const r = /export const REVIEWED_BINDING = null;/;\n`, /it exports no REVIEWED_BINDING/);
+  // A module that does not load: a second declaration, a second export of the name, a throw.
+  refusedWith(DECL(null, null) + DECL(G, W), /SyntaxError|has already been declared/);
+  refusedWith(`${DECL(null, null)}const other = 1;\nexport { other as REVIEWED_BINDING };\n`, /SyntaxError|Duplicate export/);
+  refusedWith(`throw new Error("boom");\n${DECL(null, null)}`, /boom/);
+  // Values of another shape.
+  refusedWith(`export const REVIEWED_BINDING = { glue: "${G}", wasm: "${W}" };\n`, /not frozen/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze(new Proxy({ glue: null, wasm: null }, {}));\n`, /a Proxy/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze({ get glue() { return null; }, wasm: null });\n`, /glue is an accessor/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze({ glue: null, wasm: null, extra: 1 });\n`, /exactly the keys glue and wasm/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze({ glue: null });\n`, /exactly the keys glue and wasm/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze({ glue: null, [Symbol("x")]: 1 });\n`, /exactly the keys glue and wasm/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze({ glue: "${G.toUpperCase()}", wasm: null });\n`, /glue is neither null nor a 64-digit/);
+  refusedWith(`export const REVIEWED_BINDING = Object.freeze(Object.create(null, { glue: { value: null, enumerable: true }, wasm: { value: null, enumerable: true } }));\n`, /not a plain object/);
+  refusedWith(`export const REVIEWED_BINDING = "${G}";\n`, /neither null nor an object/);
+  // An export let reassigned right after loading.
+  refusedWith(`export let REVIEWED_BINDING = null;\nsetTimeout(() => { REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); }, 10);\n`, /changed after the module loaded/);
+  refusedWith(`export let REVIEWED_BINDING = null;\nsetImmediate(() => { REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); });\n`, /changed after the module loaded/);
+  // A microtask runs before the import resolves: the value read is the reassigned one.
+  assert.deepEqual(read(`export let REVIEWED_BINDING = null;\nqueueMicrotask(() => { REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); });\n`), { glue: G, wasm: W });
+  // The child's environment: no HOPTELL_* variables or tokens, HOME an empty temporary directory.
+  process.env.HOPTELL_GATE_TEST_SECRET = "x";
+  t.after(() => delete process.env.HOPTELL_GATE_TEST_SECRET);
+  refusedWith(`import fs from "node:fs";\nimport os from "node:os";\nthrow new Error(JSON.stringify({ env: Object.keys(process.env).filter((k) => !k.startsWith("__CF_")).sort(), home: fs.readdirSync(os.homedir()), cwd: fs.realpathSync(process.cwd()) === fs.realpathSync(os.homedir()) }));\n`, /\{"env":\["HOME","LANG","TMPDIR"\],"home":\[\],"cwd":true\}/); // macOS adds __CF_USER_TEXT_ENCODING
+  // A module that tries to answer for the reader, exits early, or never finishes loading.
+  refusedWith(`process.stdout.write('\\n{"ok":true,"value":null}\\n'); process.exit(0);\nexport const REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" });\n`, /nonce/);
+  refusedWith(`process.on("exit", () => process.stdout.write('\\n{"ok":true,"value":null}\\n'));\nexport const REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" });\n`, /nonce/);
+  // Built-in objects are frozen in the reading process (--frozen-intrinsics): a module that changes
+  // one does not load. Covers a replaced Object.freeze, Object.isFrozen, JSON.stringify or
+  // Promise.prototype.then, an inherited toJSON on every object (pc3: it would see the answer and
+  // its nonce), and an inherited "value" making an accessor look like a data property.
+  const loadFails = /Cannot (?:assign to read only property|add property|define property)|not extensible/;
+  refusedWith(`const f = Object.freeze;\nObject.freeze = () => f({ glue: "${G}", wasm: "${W}" });\n${DECL(null, null)}`, loadFails);
+  refusedWith(`Object.isFrozen = () => true;\nexport const REVIEWED_BINDING = { glue: "${G}", wasm: "${W}" };\n`, loadFails);
+  refusedWith(`JSON.stringify = () => '{"ok":true,"value":null}';\n${DECL(G, W)}`, loadFails);
+  refusedWith(`Object.prototype.toJSON = function () { return { nonce: this.nonce, ok: true, value: null }; };\n${DECL(G, W)}`, loadFails);
+  refusedWith(`Promise.prototype.then = function (f) { return f({ REVIEWED_BINDING: null }); };\n${DECL(G, W)}`, loadFails);
+  refusedWith(`Object.defineProperty(Object.prototype, "value", { value: null });\nexport const REVIEWED_BINDING = Object.freeze({ get glue() { return "${G}"; }, wasm: null });\n`, loadFails);
+  // globalThis stays writable: replaced timers do not shorten the reader's wait (it took its own).
+  refusedWith(`const t = setTimeout;\nglobalThis.setTimeout = (f) => queueMicrotask(f);\nglobalThis.setImmediate = (f) => queueMicrotask(f);\nexport let REVIEWED_BINDING = null;\nt(() => { REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); }, 10);\n`, /changed after the module loaded/);
+  // ... nor does a replaced global Promise (pc3: a constructor that settles at once).
+  refusedWith(`const t = setTimeout;\nglobalThis.Promise = function (f) { return { then(r) { r(); } }; };\nexport let REVIEWED_BINDING = null;\nt(() => { REVIEWED_BINDING = Object.freeze({ glue: "${G}", wasm: "${W}" }); }, 10);\n`, /changed after the module loaded/);
+  // A replaced global Error does not change what the reader reports.
+  refusedWith(`globalThis.Error = function () { return { message: "fine" }; };\nexport const REVIEWED_BINDING = Object.freeze({ glue: null });\n`, /exactly the keys glue and wasm/);
+  // A thrown value that is not an Error, or whose message is a getter that throws.
+  refusedWith(`throw 7;\n${DECL(null, null)}`, /a value that is not an Error/);
+  refusedWith(`throw { get message() { throw new Error("x"); } };\n${DECL(null, null)}`, /a value that is not an Error/);
+  refusedWith(`await new Promise(() => {});\n${DECL(null, null)}`, /reading process failed|no result|nonce/);
+  refusedWith(`while (true) {}\n${DECL(null, null)}`, /did not load within 500 ms/, { timeoutMs: 500 });
+  refusedWith(`${DECL(null, null)}const s = "open\n`, /SyntaxError|Invalid or unexpected token/);
+  // The real lib/mls/openmls.js declares nothing today.
+  assert.equal(declaredReviewedDigests("lib/mls/openmls.js"), null);
+});
+
+test("release check: a REVIEWED_BINDING it cannot read stops the release (library and CLI); a real declaration is a claim, checked in full", (t) => {
+  const f = fixture(t, { declared: [null, null] });
+  const G = sha256(GLUE);
+  put(f.pkg, "lib/mls/openmls.js", `/*\n${DECL(null, null)}*/\nexport const REVIEWED_BINDING = { glue: "${G}", wasm: "${sha256(WASM)}" };\n`);
+  assert.throws(() => f.check(), /cannot read REVIEWED_BINDING: its value is not frozen/);
+  const cli = spawnSync(process.execPath, ["scripts/release-check.mjs", "--package", f.pkg, "--repo", f.repo, "--records-dir", path.dirname(f.records.inputs), "--binding-root", f.binding], { encoding: "utf8" });
+  assert.equal(cli.status, 1, cli.stdout + cli.stderr);
+  assert.match(cli.stderr, /release gate: lib\/mls\/openmls\.js: cannot read REVIEWED_BINDING/);
+  // pc3's first case in a package: the real non-null export is a claim, checked in full (here
+  // refused: the package's openmls.js is not its reviewed input).
+  put(f.pkg, "lib/mls/openmls.js", `/*\n${DECL(null, null)}*/\nexport const REVIEWED_BINDING = Object.freeze({wasm: "${sha256(WASM)}", glue: "${G}"});\n`);
   const r = f.check();
   assert.equal(r.reviewedBuild, true);
-  assert.ok(r.problems.length > 0);
-  // The package's real lib/mls/openmls.js declares nothing today.
-  assert.equal(declaredReviewedDigests(fs.readFileSync("lib/mls/openmls.js", "utf8")), null);
+  assert.ok(r.problems.some((p) => /lib\/mls\/openmls\.js/.test(p)), JSON.stringify(r.problems));
 });
 
 // ---- A11: the build mapping (format 2) and the strict records check -----------------------------

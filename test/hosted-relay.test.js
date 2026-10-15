@@ -107,6 +107,23 @@ test("a shared token cannot take a hosted member's names", async (t) => {
   await s.open({ token: tok("shared"), name: "other" });
 });
 
+test("a reload that adds a hosted member: shared-token connections holding its names are cut off (send-only too), and their reservations go", async (t) => {
+  const s = await setup(t, { token: tok("shared") });
+  const henry = "m_jjjjjjjjjjjjjjjjjjjjjjjjjj";
+  const peer = await s.open({ token: tok("shared"), name: "henry" });
+  const sender = await s.open({ token: tok("shared"), name: "henry-cli", mode: "send" });
+  const other = await s.open({ token: tok("shared"), name: "other" });
+  const reserved = await s.open({ token: tok("shared"), name: "henry-r" });
+  reserved.ws.terminate(); // a network drop: its name stays reserved for the shared token
+  await sleep(100);
+  s.relay.reload([...MEMBERS, { name: "henry", id: henry, custody: "hosted", host: "h1" }], HOSTS);
+  assert.ok(await until(() => !peer.connected && !sender.connected), "both cut off");
+  assert.ok(other.connected, "other names are kept");
+  // The host takes the names at once, the reserved one included.
+  assert.ok((await s.host("h1", henry, "henry")).connected);
+  assert.ok((await s.host("h1", henry, "henry-r")).connected);
+});
+
 test("custody label in list and custody provenance at the recipient; host connections send no device or grant frames", async (t) => {
   const s = await setup(t);
   const got = [];

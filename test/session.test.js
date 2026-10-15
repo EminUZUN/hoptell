@@ -202,6 +202,29 @@ test("a member token on an older relay without HOPTELL_NAME gets a clear instruc
   await assert.rejects(c.start().ready(), /set HOPTELL_NAME to the member-prefixed name/);
 });
 
+test("a name a member token may not use: the refusal says which names it may use, in each protocol and in doctor", async (t) => {
+  const aliceToken = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, members: [{ name: "alice", token: aliceToken }], log: () => {} });
+  t.after(() => relay.close());
+  const url = `ws://127.0.0.1:${relay.port}`;
+  for (const protocol of [2, 1]) {
+    const c = new RelayClient({ url, token: aliceToken, name: "bob-x", protocol, reconnect: false });
+    t.after(() => c.close());
+    // Protocol 2: the relay says whose token it is, so the names are spelled out; protocol 1 cannot.
+    const message =
+      protocol === 2
+        ? `relay refused the connection: name not allowed: this is member alice's token, which may use only "alice" or names that start with "alice-", e.g. HOPTELL_NAME=alice-<name> (4002)`
+        : `relay refused the connection: name not allowed: a member token may use only "<member>" or names that start with "<member>-", e.g. HOPTELL_NAME=<member>-<name>; a shared token may not use a hosted member's names (4002)`;
+    await assert.rejects(c.start().ready(), { message });
+  }
+  const { doctor } = await import("../lib/doctor.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-session-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const out = [];
+  await doctor({ HOPTELL_RELAY: url, HOPTELL_TOKEN: aliceToken, HOPTELL_NAME: "bob", HOPTELL_HOME: home }, (l) => out.push(l), { homedir: home });
+  assert.match(out.join("\n"), /FAIL +relay login: the relay refused this name: this is member alice's token, which may use only "alice" or names that start with "alice-", e\.g\. HOPTELL_NAME=alice-<name> \(4002\)/);
+});
+
 test("an agent session that exits cleanly frees its name at once (no reservation)", async (t) => {
   const w = await world();
   t.after(() => w.close());

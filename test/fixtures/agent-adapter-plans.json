@@ -1,0 +1,344 @@
+{
+ "codex/headless/read-only": {
+  "command": "/bin/codex",
+  "mode": "plain",
+  "args": [
+   "exec",
+   "--ignore-user-config",
+   "--ignore-rules",
+   "--ephemeral",
+   "--json",
+   "-s",
+   "read-only",
+   "-c",
+   "approval_policy=\"never\"",
+   "-c",
+   "features.apps=false",
+   "-c",
+   "features.plugins=false",
+   "-c",
+   "features.hooks=false",
+   "-c",
+   "features.browser_use=false",
+   "-c",
+   "features.browser_use_external=false",
+   "-c",
+   "features.browser_use_full_cdp_access=false",
+   "-c",
+   "features.computer_use=false",
+   "-c",
+   "features.multi_agent=false",
+   "-c",
+   "features.image_generation=false",
+   "-c",
+   "features.goals=false",
+   "-c",
+   "web_search=\"disabled\"",
+   "-c",
+   "agents.max_threads=1",
+   "-C",
+   "/work/sub",
+   "-o",
+   "/h/agents/runs/r-0123456789abcdef/result",
+   "-c",
+   "mcp_servers.hoptell.command=\"/node\"",
+   "-c",
+   "mcp_servers.hoptell.args=[\"/hoptell/bin/hoptell.js\", \"mcp\", \"--run\", \"r-0123456789abcdef\", \"--home\", \"/h\"]",
+   "-c",
+   "mcp_servers.hoptell.env={HOPTELL_RUN=\"r-0123456789abcdef\", HOPTELL_HOME=\"/h\", HOPTELL_ENV=\"/h/agents/runs/r-0123456789abcdef/env\", HOPTELL_RELAYS=\"/h/agents/runs/r-0123456789abcdef/relays.json\"}",
+   "-c",
+   "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+   "-"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "file"
+  }
+ },
+ "codex/tmux/read-only": {
+  "cli": {
+   "command": "/bin/codex",
+   "args": [
+    "-s",
+    "read-only",
+    "-a",
+    "on-request",
+    "-C",
+    "/work/sub",
+    "-c",
+    "mcp_servers.hoptell.command=\"/node\"",
+    "-c",
+    "mcp_servers.hoptell.args=[\"/hoptell/bin/hoptell.js\", \"mcp\", \"--run\", \"r-0123456789abcdef\", \"--home\", \"/h\"]",
+    "-c",
+    "mcp_servers.hoptell.env={HOPTELL_RUN=\"r-0123456789abcdef\", HOPTELL_HOME=\"/h\", HOPTELL_ENV=\"/h/agents/runs/r-0123456789abcdef/env\", HOPTELL_RELAYS=\"/h/agents/runs/r-0123456789abcdef/relays.json\"}",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "codex/headless/workspace-write": {
+  "command": "/bin/codex",
+  "mode": "plain",
+  "args": [
+   "exec",
+   "--ignore-user-config",
+   "--ignore-rules",
+   "--ephemeral",
+   "--json",
+   "-s",
+   "workspace-write",
+   "-c",
+   "approval_policy=\"never\"",
+   "-c",
+   "features.apps=false",
+   "-c",
+   "features.plugins=false",
+   "-c",
+   "features.hooks=false",
+   "-c",
+   "features.browser_use=false",
+   "-c",
+   "features.browser_use_external=false",
+   "-c",
+   "features.browser_use_full_cdp_access=false",
+   "-c",
+   "features.computer_use=false",
+   "-c",
+   "features.multi_agent=false",
+   "-c",
+   "features.image_generation=false",
+   "-c",
+   "features.goals=false",
+   "-c",
+   "web_search=\"disabled\"",
+   "-c",
+   "agents.max_threads=1",
+   "-C",
+   "/work/sub",
+   "-o",
+   "/h/agents/runs/r-0123456789abcdef/result",
+   "-c",
+   "mcp_servers.hoptell.command=\"/node\"",
+   "-c",
+   "mcp_servers.hoptell.args=[\"/hoptell/bin/hoptell.js\", \"mcp\", \"--run\", \"r-0123456789abcdef\", \"--home\", \"/h\"]",
+   "-c",
+   "mcp_servers.hoptell.env={HOPTELL_RUN=\"r-0123456789abcdef\", HOPTELL_HOME=\"/h\", HOPTELL_ENV=\"/h/agents/runs/r-0123456789abcdef/env\", HOPTELL_RELAYS=\"/h/agents/runs/r-0123456789abcdef/relays.json\"}",
+   "-c",
+   "mcp_servers.hoptell.default_tools_approval_mode=\"approve\"",
+   "-"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "file"
+  }
+ },
+ "codex/tmux/workspace-write": {
+  "cli": {
+   "command": "/bin/codex",
+   "args": [
+    "-s",
+    "workspace-write",
+    "-a",
+    "on-request",
+    "-C",
+    "/work/sub",
+    "-c",
+    "mcp_servers.hoptell.command=\"/node\"",
+    "-c",
+    "mcp_servers.hoptell.args=[\"/hoptell/bin/hoptell.js\", \"mcp\", \"--run\", \"r-0123456789abcdef\", \"--home\", \"/h\"]",
+    "-c",
+    "mcp_servers.hoptell.env={HOPTELL_RUN=\"r-0123456789abcdef\", HOPTELL_HOME=\"/h\", HOPTELL_ENV=\"/h/agents/runs/r-0123456789abcdef/env\", HOPTELL_RELAYS=\"/h/agents/runs/r-0123456789abcdef/relays.json\"}",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "claude/headless/read-only": {
+  "command": "/bin/claude",
+  "args": [
+   "-p",
+   "--output-format",
+   "json",
+   "--no-session-persistence",
+   "--permission-prompts",
+   "none",
+   "--permission-mode",
+   "plan",
+   "--strict-mcp-config",
+   "--mcp-config",
+   "/h/agents/runs/r-0123456789abcdef/mcp.json",
+   "-n",
+   "agent-1a2b"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "result"
+  }
+ },
+ "claude/tmux/read-only": {
+  "cli": {
+   "command": "/bin/claude",
+   "args": [
+    "--permission-mode",
+    "plan",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "/h/agents/runs/r-0123456789abcdef/mcp.json",
+    "-n",
+    "agent-1a2b",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "claude/headless/workspace-write": {
+  "command": "/bin/claude",
+  "args": [
+   "-p",
+   "--output-format",
+   "json",
+   "--no-session-persistence",
+   "--permission-prompts",
+   "none",
+   "--permission-mode",
+   "acceptEdits",
+   "--strict-mcp-config",
+   "--mcp-config",
+   "/h/agents/runs/r-0123456789abcdef/mcp.json",
+   "-n",
+   "agent-1a2b"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "result"
+  }
+ },
+ "claude/tmux/workspace-write": {
+  "cli": {
+   "command": "/bin/claude",
+   "args": [
+    "--permission-mode",
+    "acceptEdits",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "/h/agents/runs/r-0123456789abcdef/mcp.json",
+    "-n",
+    "agent-1a2b",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "gemini/headless/read-only": {
+  "command": "/bin/gemini",
+  "args": [
+   "-p",
+   "",
+   "-o",
+   "json",
+   "--approval-mode",
+   "plan"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "response"
+  }
+ },
+ "gemini/tmux/read-only": {
+  "cli": {
+   "command": "/bin/gemini",
+   "args": [
+    "--approval-mode",
+    "plan",
+    "-i",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "gemini/headless/workspace-write": {
+  "command": "/bin/gemini",
+  "args": [
+   "-p",
+   "",
+   "-o",
+   "json",
+   "--approval-mode",
+   "auto_edit",
+   "-s"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "response"
+  }
+ },
+ "gemini/tmux/workspace-write": {
+  "cli": {
+   "command": "/bin/gemini",
+   "args": [
+    "--approval-mode",
+    "auto_edit",
+    "-s",
+    "-i",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "agy/headless/read-only": {
+  "command": "/bin/agy",
+  "args": [
+   "--print",
+   "--output-format",
+   "json",
+   "--print-timeout",
+   "1800s",
+   "--mode",
+   "plan"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "result"
+  }
+ },
+ "agy/tmux/read-only": {
+  "cli": {
+   "command": "/bin/agy",
+   "args": [
+    "--mode",
+    "plan",
+    "-i",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ },
+ "agy/headless/workspace-write": {
+  "command": "/bin/agy",
+  "args": [
+   "--print",
+   "--output-format",
+   "json",
+   "--print-timeout",
+   "1800s",
+   "--mode",
+   "accept-edits",
+   "--sandbox"
+  ],
+  "stdin": "task",
+  "result": {
+   "from": "json",
+   "field": "result"
+  }
+ },
+ "agy/tmux/workspace-write": {
+  "cli": {
+   "command": "/bin/agy",
+   "args": [
+    "--mode",
+    "accept-edits",
+    "--sandbox",
+    "-i",
+    "Call the hoptell read_task tool for your task. When you are done, send the result to me-owner with send_message."
+   ]
+  }
+ }
+}
