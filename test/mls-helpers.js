@@ -36,7 +36,8 @@ export const tokenOf = () => crypto.randomBytes(16).toString("hex");
 /**
  * A relay with the device directory (unless `devices: false`), members alice, bob and carol.
  * Returns {relay, url, realm, members, directory, db, clock, fault, client(name), restart(), dir}.
- * `rateNow`: the clock of the relay's device-request rate window only; by default the real time.
+ * `rateNow`: the clock of the relay's device and encrypted-message rate windows only; by default
+ * the real time.
  */
 export async function deviceRelay(t, { autoApprove = true, devices = true, e2ee = false, limits = {}, visible = null, access = null, members: extra = [], hosted = [], shared = null, sweepMs = 3_600_000, audit = () => {}, transfers: xfer = null, admission = {}, dsCompat = {}, rateNow = null } = {}) {
   const dir = tmpDir(t, "hoptell-mls-relay-");
