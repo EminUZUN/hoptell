@@ -13,7 +13,7 @@ import { REPO } from "./gate-lib.mjs";
 const PHRASE = /cannot\s+read/gi;
 const ALLOWED_HEADING = /reviewed build/i;
 
-/** The public docs: Markdown at the top and under examples/, and the listings (server.json, .claude-plugin/). */
+/** The public docs: Markdown at the top and under examples/, the listings (server.json, .claude-plugin/), and the plugin's commands/ and skills/. */
 export function publicDocs(repo = REPO) {
   const out = [];
   const add = (dir, keep) => {
@@ -26,6 +26,19 @@ export function publicDocs(repo = REPO) {
   add("", (n) => n.endsWith(".md") || n === "server.json");
   add("examples", () => true);
   add(".claude-plugin", (n) => n.endsWith(".json"));
+  // The plugin's slash commands and skills (with their reference files).
+  add("commands", (n) => n.endsWith(".md"));
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(path.join(repo, dir), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    } catch {}
+    for (const e of entries) {
+      if (e.isDirectory()) walk(path.join(dir, e.name));
+      else if (e.isFile() && e.name.endsWith(".md")) out.push(path.join(dir, e.name));
+    }
+  };
+  walk("skills");
   return out;
 }
 
