@@ -26,6 +26,28 @@ const AGENT = new URL("./fixtures/fake-agent.cjs", import.meta.url).pathname;
 const PTY_CLIENT = new URL("./fixtures/pty-client.py", import.meta.url).pathname;
 let n = 0;
 
+/**
+ * End a tmux session and wait until the processes of its panes have exited. Its injector writes
+ * into the world's folder until it exits, and kill-session returns before it does, so a world is
+ * closed (its folder removed) only after this. Each pane is its own process group.
+ */
+async function endSession(session) {
+  const r = spawnSync("tmux", ["list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_pid}"], { encoding: "utf8" });
+  const groups = r.status === 0 ? r.stdout.split("\n").filter(Boolean).map(Number) : [];
+  spawnSync("tmux", ["kill-session", "-t", `=${session}`]);
+  const running = (pgid) => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch (e) {
+      return e.code === "EPERM";
+    }
+  };
+  for (const end = Date.now() + 10000; groups.some(running); await sleep(20)) {
+    if (Date.now() > end) throw new Error(`${session}: pane processes still running after kill-session (groups ${groups.filter(running).join(", ")})`);
+  }
+}
+
 /** A fake agent in a tmux pane, its injector, and a receiving MCP server for `name`. */
 async function setup(t, initial = "prompt", { fresh = false } = {}) {
   const w = await world({ fresh });
@@ -34,10 +56,8 @@ async function setup(t, initial = "prompt", { fresh = false } = {}) {
   const ctl = path.join(w.home, "ctl");
   const log = path.join(w.home, "enter.log");
   fs.writeFileSync(ctl, initial);
-  t.after(async () => {
-    spawnSync("tmux", ["kill-session", "-t", `=${session}`]);
-    await w.close();
-  });
+  w.onClose(() => endSession(session));
+  t.after(() => w.close());
   const [pane, pid] = execFileSync("tmux", ["new-session", "-d", "-P", "-F", "#{pane_id} #{pane_pid}", "-s", session, "-n", "agent", "-x", "200", "-y", "40", process.execPath, AGENT, ctl, log], { encoding: "utf8" })
     .trim()
     .split(" ");
@@ -713,15 +733,12 @@ test("tmux injector submits a fully visible draft once after a key in another pa
 
 test("hoptell tmux refuses another delivery mode and hoptell channel flags", { skip: !hasTmux }, async (t) => {
   const w = await world();
+  t.after(() => w.close());
   // Names unique to this process: tmux sessions live on the user's shared tmux server, where a
   // fixed name could meet the same test of another run at the same time.
   const [tc1, tc2] = [`tc1p${process.pid}`, `tc2p${process.pid}`];
-  // The session (and its injector, which writes in the home) ends before the home is removed.
-  t.after(async () => {
-    spawnSync("tmux", ["kill-session", "-t", `=hoptell-${tc2}`]);
-    for (let i = 0; i < 40 && spawnSync("pgrep", ["-f", `inject.*${tc2}`]).status === 0; i++) await sleep(100);
-    await w.close();
-  });
+  // The started session's injector writes into the world's folder: it ends before the folder goes.
+  w.onClose(() => endSession(`hoptell-${tc2}`));
   const r = await w.cli(["tmux", tc1, "--", "cat"], { HOPTELL_PUSH: "channel" });
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /hoptell tmux uses tmux delivery/);
