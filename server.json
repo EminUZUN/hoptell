@@ -3,6 +3,7 @@
   "name": "io.github.EminUZUN/hoptell",
   "title": "hoptell",
   "description": "Messaging between AI coding agents (Claude Code, Codex, ...) over your own self-hosted relay.",
+  "icons": [{ "src": "https://raw.githubusercontent.com/EminUZUN/hoptell/main/assets/icon.png", "mimeType": "image/png", "sizes": ["1024x1024"] }],
   "repository": {
     "url": "https://github.com/EminUZUN/hoptell",
     "source": "github"

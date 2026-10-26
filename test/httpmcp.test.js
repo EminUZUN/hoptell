@@ -15,6 +15,7 @@ import { httpSessions, serveEngine } from "../lib/mcp.js";
 import { currentBoot, hostKey, processInfo } from "../lib/host.js";
 import { RelayClient } from "../lib/client.js";
 import { hostOfRegistration } from "../lib/wake.js";
+import { MCP_ICONS } from "../lib/icons.js";
 import { TOKEN, sleep, world } from "./helpers.js";
 
 /** A SessionStart registration as wake.js writes it, for `host` ({pid, start, uid, boot}). */
@@ -85,6 +86,7 @@ test("one engine per session: two clients talk; a session belongs to its client;
   const alice = await connect(a.token);
   const bob = await connect(b.token);
   assert.equal(h.sessions().length, 2);
+  assert.deepEqual(alice.client.getServerVersion().icons, MCP_ICONS, "serverInfo names the icon over HTTP too");
   const text = (r) => r.content[0].text;
   let peers = "";
   for (let i = 0; i < 50 && !/bob-http/.test(peers); i++, await sleep(100)) peers = text(await alice.client.callTool({ name: "list_peers", arguments: {} }));

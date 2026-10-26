@@ -41,6 +41,22 @@ test("login: state, PKCE and nonce; a Lax login cookie, then a Strict session co
   assert.match((await w.page("GET", "/owner", { cookie: s.cookie })).text, new RegExp(HANNA.id));
 });
 
+test("icons: /owner/favicon.png and /owner/apple-touch-icon.png before sign-in; the pages allow img-src 'self' only", async (t) => {
+  const w = await hostedWorld(t, { owner: true });
+  for (const p of ["/owner/favicon.png", "/owner/apple-touch-icon.png"]) {
+    const r = await w.page("GET", p);
+    assert.equal(r.status, 200, p);
+    assert.equal(r.headers.get("content-type"), "image/png");
+    assert.equal(r.headers.get("content-security-policy"), "default-src 'none'");
+    assert.equal(r.headers.get("cache-control"), "public, max-age=86400");
+  }
+  const signIn = await w.page("GET", "/owner");
+  assert.equal(signIn.headers.get("content-security-policy"), "default-src 'none'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  assert.equal(signIn.headers.get("cache-control"), "no-store");
+  assert.match(signIn.text, /<link rel="icon" type="image\/png" sizes="32x32" href="\/owner\/favicon\.png"><link rel="apple-touch-icon" sizes="180x180" href="\/owner\/apple-touch-icon\.png">/);
+  assert.equal((await w.page("GET", "/owner/favicon.ico")).status, 403, "nothing else before sign-in");
+});
+
 test("login refusals: no login cookie, a reused state, a mismatched iss or a wrong nonce get 403 and no session", async (t) => {
   const w = await hostedWorld(t, { owner: true });
   // No login cookie.

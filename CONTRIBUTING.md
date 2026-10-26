@@ -69,6 +69,22 @@ lib/tmux.js      tmux launcher and message injector
 lib/config.js    settings, names, state directory
 ```
 
+## The icon
+
+`assets/icon.png` (1024 × 1024) is the source image. The plugin manifest uses it, and the MCP
+Registry entry (`server.json`) links to it on GitHub. The smaller copies in `lib/icons/` ship in
+the npm package and the relay's container image:
+
+- `favicon-32.png` (32 × 32) and `apple-touch-icon.png` (180 × 180): the favicon and touch icon
+  for `hoptell ui`, `hoptell relay admin ui` and the hosted owner page. The Telegram Mini App
+  embeds the 32 px icon as a `data:` URI.
+- `icon-64.png`: the MCP server's `serverInfo.icons`, as a `data:` URI.
+- On Linux, `notify-send` shows `apple-touch-icon.png`. macOS notifications are sent with
+  osascript, which cannot set an icon.
+
+If the source image changes, make the copies again with `sips`, for example
+`sips -z 180 180 assets/icon.png --out lib/icons/apple-touch-icon.png`.
+
 ## Conduct
 
 Be respectful and constructive. Harassment or personal attacks are not tolerated in

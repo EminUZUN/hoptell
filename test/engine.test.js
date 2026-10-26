@@ -47,6 +47,8 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
     {
       home: "/h",
       name: "alice-x",
+      title: null,
+      titleAuto: false,
       roles: ["rev", "back"],
       push: "hook",
       relay: { url: "ws://127.0.0.1:1", token: "t".repeat(20), auth: "token", protocol: 1, profile: "work", credentialStore: "auto", passphrase: null },
