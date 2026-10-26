@@ -182,12 +182,14 @@ test("the picker with 300 agents: favourites first (away ones marked), recent ne
   const names = Array.from({ length: 300 }, (_, i) => `me-a${String(i).padStart(3, "0")}`);
   for (const n of names) await agent(t, s.url, s.tokens.me, n);
   const now = Date.now();
+  // Recorded first sightings, so the order below does not depend on how long the picker takes.
+  await setPeople(s.home, names, { first_seen: now - 1000 });
   await setPeople(s.home, ["me-a010", "me-a005"]);
   await setPeople(s.home, ["me-gone"]); // a favourite that is not online
   await setPeople(s.home, ["me-a200"], { last_talked: now - 3600_000 });
   await setPeople(s.home, ["me-a201"], { last_talked: now - 60_000 });
   await setPeople(s.home, ["me-a202"], { last_talked: now - 8 * 86400_000 }); // too old for "recent"
-  await setPeople(s.home, ["me-a299"], { first_seen: now + 1000 }); // the newest online
+  await setPeople(s.home, ["me-a299"], { first_seen: now }); // the newest online
   s.tg.say("/msg");
   const first = await next(s.tg, /^Who should get your message\?$/, 0, "picker");
   assert.deepEqual(
