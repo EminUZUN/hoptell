@@ -36,8 +36,9 @@ export const tokenOf = () => crypto.randomBytes(16).toString("hex");
 /**
  * A relay with the device directory (unless `devices: false`), members alice, bob and carol.
  * Returns {relay, url, realm, members, directory, db, clock, fault, client(name), restart(), dir}.
+ * `rateNow`: the clock of the relay's device-request rate window only; by default the real time.
  */
-export async function deviceRelay(t, { autoApprove = true, devices = true, e2ee = false, limits = {}, visible = null, access = null, members: extra = [], hosted = [], shared = null, sweepMs = 3_600_000, audit = () => {}, transfers: xfer = null, admission = {}, dsCompat = {} } = {}) {
+export async function deviceRelay(t, { autoApprove = true, devices = true, e2ee = false, limits = {}, visible = null, access = null, members: extra = [], hosted = [], shared = null, sweepMs = 3_600_000, audit = () => {}, transfers: xfer = null, admission = {}, dsCompat = {}, rateNow = null } = {}) {
   const dir = tmpDir(t, "hoptell-mls-relay-");
   const release = lockStateDir(dir);
   t.after(() => release());
@@ -77,7 +78,7 @@ export async function deviceRelay(t, { autoApprove = true, devices = true, e2ee 
   const makeTransfers = () => (db && e2ee && xfer ? createTransferStore({ db, now: c.now, ...(xfer === true ? {} : xfer) }) : null);
   let transfers = makeTransfers();
   let ds = db && e2ee ? createDeliveryService({ db, directory, realm, now: c.now, limits, transfers, compat: dsCompat }) : null;
-  const start = () => startRelay({ host: "127.0.0.1", port: 0, ...(shared ? { token: shared } : {}), members: Object.values(members), ...(hosted.length ? { hosts: [{ id: "h1", token: hostToken }] } : {}), realm: { id: realm }, devices: directory ? { directory, visible, now: c.now, ...(ds ? { ds } : {}), ...(transfers ? { transfers } : {}) } : null, ...(access ? { access: access(members) } : {}), sweepMs, pingMs: 15_000, audit, log: () => {} });
+  const start = () => startRelay({ host: "127.0.0.1", port: 0, ...(shared ? { token: shared } : {}), members: Object.values(members), ...(hosted.length ? { hosts: [{ id: "h1", token: hostToken }] } : {}), realm: { id: realm }, devices: directory ? { directory, visible, now: c.now, ...(rateNow ? { rateNow } : {}), ...(ds ? { ds } : {}), ...(transfers ? { transfers } : {}) } : null, ...(access ? { access: access(members) } : {}), sweepMs, pingMs: 15_000, audit, log: () => {} });
   let relay = await start();
   const clients = [];
   const w = {

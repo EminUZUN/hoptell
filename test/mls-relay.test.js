@@ -82,6 +82,31 @@ test("device frames are for members on protocol 2: a shared-token connection is 
   assert.equal((await refusal(c.rpc({ type: "device_list" }))).code, "member_only");
 });
 
+test("device requests: at most 30 per 10 s per connection, on Date.now unless a test passes devices.rateNow", async (t) => {
+  // Date.now stands still unless moved: the window is decided by the clock alone, not by speed.
+  let real = Date.now();
+  t.mock.method(Date, "now", () => real);
+  const burst = async (c) => {
+    for (let i = 0; i < 30; i++) await c.rpc({ type: "device_list" });
+    assert.equal((await refusal(c.rpc({ type: "device_list" }))).code, "rate_limited");
+  };
+  // Without the option (as production starts it): Date.now's window.
+  const w = await deviceRelay(t);
+  const c = await w.client("alice");
+  await burst(c);
+  real += 10_000;
+  assert.ok(Array.isArray((await c.rpc({ type: "device_list" })).devices), "the window slid with Date.now");
+  // With the option: its clock alone moves the window.
+  let rate = 0;
+  const w2 = await deviceRelay(t, { rateNow: () => rate });
+  const c2 = await w2.client("alice");
+  await burst(c2);
+  real += 10_000;
+  assert.equal((await refusal(c2.rpc({ type: "device_list" }))).code, "rate_limited", "Date.now does not move it");
+  rate += 10_000;
+  assert.ok(Array.isArray((await c2.rpc({ type: "device_list" })).devices), "rateNow moves it");
+});
+
 test("enrollment: the pin must be the relay's own computation; idempotent; another key is refused; bounded", async (t) => {
   const w = await deviceRelay(t);
   const alice = await w.member("alice");

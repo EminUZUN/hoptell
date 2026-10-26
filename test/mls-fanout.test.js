@@ -42,6 +42,33 @@ async function until(fn, what = "condition", ms = 5000) {
   }
 }
 
+const RATE_WINDOW_MS = 10_000; // the relay's rate window (lib/relay.js)
+/**
+ * The clock of the relay's device-request rate window (30 per 10 s per connection; a pass that
+ * seals copies asks device_list for each): the real time until freeze(), which empties the window
+ * and stops it, so the limit stops the pass under test at the same request however fast the
+ * machine is; advance(ms) slides it from there.
+ */
+function rateWindow() {
+  let frozen = null;
+  return { now: () => frozen ?? Date.now(), freeze: () => (frozen = Date.now() + RATE_WINDOW_MS), advance: (ms) => (frozen += ms) };
+}
+/** Wait until `done()`; after each new refusal counted by `limited()`, the window slides past every request so far. */
+async function untilAfterRefusals(win, limited, done, what) {
+  let seen = 0;
+  return until(
+    () => {
+      if (limited() > seen) {
+        seen = limited();
+        win.advance(RATE_WINDOW_MS);
+      }
+      return done();
+    },
+    what,
+    15_000,
+  );
+}
+
 /**
  * A device of `member` (a home with its store, enrolled), and sessions on it: open(session,
  * {roles}) connects that session with its roles and an e2ee engine recording deliveries.
@@ -621,7 +648,8 @@ test("device lists during a fan-out: each copy asks again; a device enrolled aft
 });
 
 test("a replacement after a 20-copy fan-out: every accepted copy is sealed again without an explicit recover(), also when the relay's rate limit stops a pass", async (t) => {
-  const { w, alice, bob, fan } = await team(t);
+  const win = rateWindow();
+  const { w, alice, bob, fan } = await team(t, { relay: { rateNow: win.now } });
   t.after(() => (alice.s.alice.e2ee.close(), alice.s["alice-2"].e2ee.close()));
   const names = Array.from({ length: 20 }, (_, i) => `bob-x${i}`);
   const r = await fan({ to: names });
@@ -642,8 +670,9 @@ test("a replacement after a 20-copy fan-out: every accepted copy is sealed again
   // The relay records each accepted copy's op (a rate-limited request is refused before that);
   // its queue is no measure, as bob's device takes the copies from it as they arrive.
   const ops = appOps(w);
+  win.freeze();
   await bob.s.bob.e2ee.replace(alice.id);
-  await until(() => appOps(w) === ops + 20, "all 20 copies sealed again and accepted", 15_000);
+  await untilAfterRefusals(win, () => limited, () => appOps(w) === ops + 20, "all 20 copies sealed again and accepted");
   assert.ok(limited > 0, "a pass was stopped by the relay's rate limit");
   const s = await stateOf(alice);
   assert.ok(Object.values(s.logical).every((L) => L.state === "sent" && L.group !== gid), "all sent in the new group, nothing left marked resend");
@@ -679,7 +708,8 @@ test("an accepted direct message whose reseal is refused rate_limited at publica
 
 /** A crash right after a 20-copy fan-out's creation write: 20 copies "new", nothing sent. */
 async function twentyNew(t) {
-  const team_ = await team(t);
+  const win = rateWindow();
+  const team_ = await team(t, { relay: { rateNow: win.now } });
   const { alice } = team_;
   alice.s["alice-2"].client.close();
   const crashed = alice.engine(alice.s.alice.client, "alice", {
@@ -695,25 +725,28 @@ async function twentyNew(t) {
       if (e.code === "rate_limited") limited++;
       throw e;
     });
-  return { ...team_, limited: () => limited };
+  win.freeze(); // the pass under test starts with an empty window
+  return { ...team_, win, limited: () => limited };
 }
 
 test("recover(): a pass the relay's rate limit stops runs again on its own until every copy is sent (no second recover)", async (t) => {
-  const { w, alice, limited } = await twentyNew(t);
+  const { w, alice, limited, win } = await twentyNew(t);
   const fresh = alice.engine(alice.s.alice.client, "alice");
   t.after(() => fresh.e2ee.close());
   await fresh.e2ee.recover(); // the one explicit call
-  await until(() => appOps(w) === 20, "all 20 copies sent", 15_000);
   assert.ok(limited() > 0, "the first pass was stopped by the rate limit");
+  assert.ok(appOps(w) < 20, "not every copy was sent by the first pass");
+  await untilAfterRefusals(win, limited, () => appOps(w) === 20, "all 20 copies sent");
   assert.ok(Object.values((await stateOf(alice)).logical).every((L) => L.state === "sent"));
 });
 
 test("close(): the scheduled passes stop", async (t) => {
-  const { w, alice, limited } = await twentyNew(t);
+  const { w, alice, limited, win } = await twentyNew(t);
   const fresh = alice.engine(alice.s.alice.client, "alice");
   await fresh.e2ee.recover();
   assert.ok(limited() > 0);
   fresh.e2ee.close();
+  win.advance(RATE_WINDOW_MS); // the window is open again: a pass that still ran would be accepted
   const ops = appOps(w);
   await settle(4000);
   assert.equal(appOps(w), ops, "nothing more after close()");
