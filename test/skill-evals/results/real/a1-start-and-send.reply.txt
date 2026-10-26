@@ -1,0 +1,9 @@
+I've started a Codex reviewer, `dana-reviewer-1`, and sent it a snapshot of `add.js` to review for correctness. Its review isn't back yet, so no fixes have been applied.
+
+- **Setup:** The reviewer runs read-only (`codex -s read-only -a never`) in the background tmux session `hoptell-dana-reviewer-1`. To watch it, run `tmux attach -t '=hoptell-dana-reviewer-1'` in a split.
+- **Snapshot:** Request id `10b74cd7-…`, sha256 `8aa96360…`. The relay reported the request as delivered.
+- **Contacts:** If your hoptell home uses managed contacts, the request may be held until you allow the sender. Run `hoptell contacts` to check, and `hoptell contacts show <id>` gives the `allow` command. That decision is yours, so I won't run it.
+
+From my own read of the file, there's a clear bug: `add` returns `a - b`, not `a + b` (`add.js:2`). I expect the reviewer to flag the same thing.
+
+When the reply arrives, I'll confirm it matches the snapshot and check that `add.js` hasn't changed. Then I'll apply the fix and tell you what it said.

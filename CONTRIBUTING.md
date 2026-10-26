@@ -17,6 +17,9 @@ Thanks for helping. hoptell aims to stay small, so please keep that in mind.
 2. `npm install && npm run lint && npm test` must pass. For changes to delivery (relay, MCP, tmux), also run
    the real-agent suite if you can: `npm run test:e2e -- --use-local-logins`. The suite starts its own relay on a random port
    and never touches your real settings. tmux tests run when tmux 3.2+ is installed.
+   Run the suite with the tmux variables unset, especially from inside tmux:
+   `env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR npm test`. This keeps the tests from inheriting your
+   tmux client's settings; it does not isolate a tmux server.
    For changes to the relay protocol or MCP tools, run `npm run test:compat`. It installs
    the newest npm release older than this checkout's version and tests all eight combinations
    of old and current relays, senders and receivers. To choose a release, use
@@ -67,6 +70,8 @@ lib/mcp.js       MCP server: tools and push/inbox delivery
 lib/inbox.js     per-user local inbox (one file per message)
 lib/tmux.js      tmux launcher and message injector
 lib/config.js    settings, names, state directory
+commands/        the Claude Code plugin's slash commands (/hoptell:...)
+skills/          the Claude Code plugin's skills, each with a SKILL.md
 ```
 
 ## The icon

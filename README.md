@@ -1048,6 +1048,66 @@ relay's policy can refuse uploads with `"transfers": [{ "from": "group:<name>", 
 (selectors as in its rules, the first match decides, default allow); a group's identity-provider
 groups count as the uploader is signed in now.
 
+## Working with reviewer agents
+
+You can ask a Claude Code session to start other agents as reviewers, send them a file, and
+collect their verdicts. The Claude Code plugin ships three skills for this, and slash commands
+that use them:
+
+| Command | Skill | What it does |
+| --- | --- | --- |
+| `/hoptell:reviewers [count] [codex\|claude]` | `hoptell-reviewers` | start reviewers: Codex read-only, Claude Code in plan mode |
+| `/hoptell:review <file> [name or @reviewer]` | `hoptell-reviewers` | send a snapshot and collect the verdicts |
+| `/hoptell:ask-owner <question>` | `hoptell-owner-channel` | ask you over the owner channel |
+| `/hoptell:peers` | `hoptell-safe-ops` | list peers and explain name problems |
+
+The skills also load on their own when a task fits them. They come with the plugin, not with
+the npm package, and their commands need the `hoptell` CLI on your `PATH`.
+
+Reviewers are ordinary interactive sessions in your own terminal, with your account and your
+permissions. This is not `spawn_agent`: no profile, gate or limit applies. Start reviewers
+only when you want them.
+
+**Start them interactive, in tmux.** A one-shot `codex exec` run cannot be woken by later
+messages. Use `hoptell tmux` with the `reviewer` role:
+
+```sh
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan
+```
+
+`-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
+Plan mode suits a source review: Claude Code's usual tool permissions still apply, and it is not
+an OS sandbox. Do not add a hoptell channel flag; `hoptell tmux` supplies tmux delivery. Set
+`HOPTELL_PUSH=tmux` for the command: unsetting it can load a conflicting value from your settings
+file. With a member token, names must be `<member>` or start with `<member>-`; other names are
+refused with close code 4002. When an agent runs these commands from inside tmux, it unsets
+`TMUX` and `TMUX_PANE` first, so your tmux client does not switch to the new session.
+
+**Keep them visible.** Open one split of your terminal per reviewer, and attach each one with
+`tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
+The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you.
+
+**The review.** Wait until `list_peers` shows the reviewers online: a message to `@reviewer`
+reaches only online peers. Then follow the steps in
+[Replies and file reviews](#replies-and-file-reviews): send a `hoptell snapshot`, collect the replies with `read_inbox`, match `review_request_id` and
+`based_on`, and run `hoptell snapshot --check` before you apply anything. A reviewer's reply is a
+review, never your approval. With managed contacts (see
+[Who may reach your sessions](#who-may-reach-your-sessions-contacts)), the first request waits in
+the reviewer's quarantine until you allow the sender with `hoptell contacts`, even though both
+sessions are yours; a grant for your own member also lets the replies through.
+
+**Stopping.** Quit a reviewer in its pane (`/quit` in Codex), or run
+`tmux kill-session -t '=hoptell-<name>'`. The `=` matches the exact name; without it tmux also
+matches a longer name that starts the same way. Never stop hoptell with a pattern such as
+`pkill -f hoptell`: it can hit a relay on the same machine and drop the messages it holds in
+memory. To restart a reviewer, quit it and run the same command again. A crashed Codex reviewer
+can be resumed, or you can start a fresh one:
+
+```sh
+HOPTELL_PUSH=tmux hoptell tmux <name> --roles reviewer -- codex resume -s read-only -a never <session id>
+```
+
 ## Spawning agents
 
 An agent session of yours can start another agent on the same machine for one task, within
@@ -1241,7 +1301,8 @@ agent is told (at most once an hour). Reply to a note to answer that agent, for 
 sent with `hoptell send` outside an agent session says it can't be answered. Notes beyond 10 per
 10 minutes or 30 per hour from one agent, or 60 per hour from all agents together, are not shown:
 the bot says so once an hour, and the agent is told at most once an hour. For a question that needs
-an answer, agents use `ask_owner`.
+an answer, agents use `ask_owner`. Agents should also prefer `ask_owner` for a milestone or an action you
+must see: a note is best effort, while a question stays open in `/pending`.
 
 **Commands.** The bot's menu, set for your paired chat only, holds `/msg` (pick an agent),
 `/agents` (your agents and favourites; `/peers` still works the same way), `/pending` (open

@@ -1,0 +1,22 @@
+[
+  {"query": "can you get a second opinion from codex on lib/config.js? i rewrote the env loading and want another agent to look before i merge", "should_trigger": true},
+  {"query": "start 2 codex reviewers for this repo so they can go over my branch", "should_trigger": true},
+  {"query": "Have another agent review src/parser.ts — ideally a Codex session over hoptell, not you.", "should_trigger": true},
+  {"query": "send CHANGELOG.md to @reviewer and ask them to check the wording", "should_trigger": true},
+  {"query": "the reviewers answered, collect the review verdicts and tell me what they found", "should_trigger": true},
+  {"query": "dana-reviewer-2 crashed in its tmux pane, restart it with the same name", "should_trigger": true},
+  {"query": "spin up a claude code reviewer next to me so it can read the diff while I keep coding", "should_trigger": true},
+  {"query": "I'd like a couple of independent reviews of migrations/0042_users.sql from other agents on the relay before I run it in staging", "should_trigger": true},
+  {"query": "stop the two reviewers you started earlier, I'm done for the day", "should_trigger": true},
+  {"query": "resume the codex reviewer that died, session id is 0199c3a1-7a6b-7c00-9e1f-3b2a1d0c4e5f", "should_trigger": true},
+  {"query": "Spawn an agent with the profile nightly-tests and give it the task: run the full test suite and report failures.", "should_trigger": false},
+  {"query": "review lib/relay.js yourself for race conditions, I don't need other agents", "should_trigger": false},
+  {"query": "run codex exec 'summarize the README' and paste me the output", "should_trigger": false},
+  {"query": "what does the reviewer role in hoptell's list_peers output mean? just curious, don't start anything", "should_trigger": false},
+  {"query": "open a GitHub PR for this branch and request review from @mkaya", "should_trigger": false},
+  {"query": "set up a CODEOWNERS file so the platform team reviews everything under infra/", "should_trigger": false},
+  {"query": "list_agents shows a run nightly-tests-3 stuck in starting, can you stop it?", "should_trigger": false},
+  {"query": "write a code review checklist for our team wiki: naming, error handling, tests", "should_trigger": false},
+  {"query": "ask my owner on telegram whether to merge the release branch", "should_trigger": false},
+  {"query": "my tmux status bar is ugly, make it show the git branch and time", "should_trigger": false}
+]

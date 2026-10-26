@@ -1,0 +1,2 @@
+hoptell injector: announcing messages for "dana-reviewer-1" in pane %0
+2026-10-26T21:12:59.094Z submitted the inbox notice

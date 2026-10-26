@@ -1,0 +1,6 @@
+$ hoptell snapshot --check sha256:8aa9636055d9befcd071486484f5d14f10a083aee978220d9b554f13c84e05c7 add.js; echo "exit=$?"
+unchanged: add.js still matches sha256:8aa9636055d9befcd071486484f5d14f10a083aee978220d9b554f13c84e05c7
+exit=0
+
+$ node --input-type=module -e "import {add} from './add.js'; console.log(add(2,3), add(-2,3), add(0,0))"   [denied]
+This command requires approval

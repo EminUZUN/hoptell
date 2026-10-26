@@ -1,0 +1,6 @@
+$ git status --short; git remote -v; git log --oneline -3 2>&1; cat .gitignore 2>/dev/null
+Exit code 1
+?? .claude/
+?? add.js
+?? deploy.env
+fatal: your current branch 'main' does not have any commits yet

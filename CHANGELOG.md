@@ -20,6 +20,12 @@
   the hosted owner page have a favicon and an Apple touch icon, and the Telegram Mini App has a
   favicon. On Linux, desktop notifications show the icon. The hosted owner page's
   Content-Security-Policy now also allows `img-src 'self'`.
+- The Claude Code plugin ships skills and slash commands. Three skills, `hoptell-reviewers`,
+  `hoptell-owner-channel` and `hoptell-safe-ops`, cover working with reviewer agents, asking
+  the owner over Telegram, and stopping and restarting sessions safely. The new commands are
+  `/hoptell:reviewers`, `/hoptell:review`, `/hoptell:ask-owner` and `/hoptell:peers`. They come
+  with the plugin, not with the npm package. See "Working with reviewer agents" in the README.
+  Reviewers start read-only: Codex with `-s read-only -a never`, Claude Code in plan mode.
 
 ## 0.3.0 (2026-10-15)
 

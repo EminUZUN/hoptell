@@ -1,0 +1,18 @@
+$ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux dana-reviewer-1 --roles reviewer -- codex -s read-only -a never; echo "exit=$?"
+open terminal failed: not a terminal
+hoptell: session hoptell-dana-reviewer-1 is running; attach with: tmux attach -t hoptell-dana-reviewer-1
+exit=0
+
+$ tmux display-message -p -t '=hoptell-dana-reviewer-1' '#{session_id}'; hoptell snapshot add.js
+hoptell file snapshot. Review the content below. When you reply, quote review_request_id, and give the sha256 as based_on.
+{
+  "hoptell_snapshot": 1,
+  "review_request_id": "10b74cd7-63f2-455f-b0bd-d977cef661e7",
+  "file": "add.js",
+  "bytes": 57,
+  "sha256": "sha256:8aa9636055d9befcd071486484f5d14f10a083aee978220d9b554f13c84e05c7",
+  "content": "// Adds two numbers.\nexport const add = (a, b) => a - b;\n"
+}
+
+$ tmux ls 2>&1; tmux capture-pane -p -t '=hoptell-dana-reviewer-1' 2>&1 | tail -30   [denied]
+This Bash command contains multiple operations. The following part requires approval: tmux ls 2>&1; tmux capture-pane -p -t '=hoptell-dana-reviewer-1' 2>&1
