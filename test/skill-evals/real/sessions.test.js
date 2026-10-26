@@ -178,26 +178,15 @@ async function turn(w, label, prompt, { session = null, maxTurns = 40, budget = 
 const tmux = (w, ...args) => spawnSync(w.tmuxBin, args, { encoding: "utf8", env: w.env });
 
 /**
- * The user's decision, as the user would make it: list what the contacts hold, show the request
- * and allow its sender (their own member). The agent sessions never run this.
+ * What the user would see in `hoptell contacts`: the test checks that nothing is held (the lead
+ * and the reviewer are the same member). The agent sessions never run this.
  */
-async function userAllows(w, label) {
-  const cli = (...a) => spawnSync(process.execPath, [path.join(REPO, "bin/hoptell.js"), "contacts", ...a], { env: w.env, encoding: "utf8" });
-  const log = [];
-  let id = null;
-  await until(() => {
-    const r = cli();
-    log.push(`$ hoptell contacts\n${r.stdout}${r.stderr}`);
-    id = /^(q_[a-z0-9]+)\s/m.exec(r.stdout)?.[1] ?? null;
-    return id;
-  }, 60_000, "a held request in the contacts");
-  const show = cli("show", id);
-  log.push(`$ hoptell contacts show ${id}\n${show.stdout}${show.stderr}`);
-  const [, rev, policyRev] = /--rev (\d+) --policy-rev (\d+)/.exec(show.stdout) ?? [];
-  const allow = cli("allow", id, "--rev", rev, "--policy-rev", policyRev);
-  log.push(`$ hoptell contacts allow ${id} --rev ${rev} --policy-rev ${policyRev}\n${allow.stdout}${allow.stderr}`);
-  keep(w, `${label}.txt`, log.join("\n"));
-  assert.equal(allow.status, 0, allow.stderr);
+function noneHeld(w, label) {
+  const r = spawnSync(process.execPath, [path.join(REPO, "bin/hoptell.js"), "contacts"], { env: w.env, encoding: "utf8" });
+  keep(w, `${label}.txt`, `$ hoptell contacts\n${r.stdout}${r.stderr}`);
+  assert.equal(r.status, 0, `hoptell contacts failed: ${r.stderr}${r.error ?? ""}`);
+  assert.match(r.stdout, /managed \(default: ask/, "a new install's managed contacts, not a legacy home that allows everyone");
+  assert.doesNotMatch(r.stdout, /^q_[a-z0-9]+\s/m, "no request held for the user");
 }
 const mcpUses = (r, tool) => r.uses.filter((u) => u.name === `${MCP_PREFIX}${tool}`);
 
@@ -254,9 +243,8 @@ test("reviewer: one read-only Codex reviewer reviews a file; the reply is checke
   const requestId = (sent.input.message.match(/"review_request_id":\s*"([^"]+)"/) ?? [])[1];
   const digest = (sent.input.message.match(/"sha256":\s*"(sha256:[0-9a-f]{64})"/) ?? [])[1];
   assert.ok(requestId && digest);
-  // A new install's contacts hold the request until the user allows the sender: the session says so.
-  assert.match(r1.text, /hoptell contacts/, "the reply tells the user about the contacts decision");
-  await userAllows(w, "a-user-allows-contact");
+  // The reviewer is the same member (dana): the new install's contacts pass the request without a
+  // grant (HOPTELL_CONTACTS_SELF defaults to allow), so nothing waits for the user.
 
   // The reviewer works on its own; wait until its reply is queued for dana-lead.
   const shot = (n) => {
@@ -271,6 +259,7 @@ test("reviewer: one read-only Codex reviewer reviews a file; the reply is checke
     return /send_message/.test(s) && /(Delivered|sent|Sent)/.test(s);
   }, 10 * 60_000, "the reviewer's reply");
   shot("after-reply");
+  noneHeld(w, "a-contacts-after-reply");
   await sleep(3000);
 
   // Turn 2: the inbox notice, as the hook would show it.

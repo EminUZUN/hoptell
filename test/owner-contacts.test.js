@@ -1,6 +1,7 @@
 // The owner channel and contacts (design 7.2, 1.5): an owner-channel message that this machine's
 // engine verified, delivered from the session's own member, is not held as "ask" in a new install
-// (no grant needed). Anything else from the own member still needs one; a block still drops it,
+// (no grant needed). With HOPTELL_CONTACTS_SELF=hold (set here, so the owner-channel exception is
+// tested on its own), anything else from the own member still needs one; a block still drops it,
 // and "required" encryption still holds it. Only this machine's verification counts: a relay's
 // `owner` or `e2ee` field is stripped on every receive path.
 import { test } from "node:test";
@@ -37,7 +38,7 @@ async function setup(t) {
   const home = tmpHome(t); // a new install: contacts managed, everyone "ask"
   const key = newKey();
   sig.trustPin(home, sig.formatPin({ realm: REALM, name: "me-owner", pub: key.pub }));
-  const settings = readSettings({ env: { HOPTELL_RELAY: url, HOPTELL_TOKEN: tokens.me, HOPTELL_NAME: "me-alice", HOPTELL_HOME: home, HOPTELL_PUSH: "listener", HOPTELL_RECEIPTS: "on", HOPTELL_NOTIFY: "off" }, homedir: "/nonexistent-home", pid: process.pid, hostname: "testhost" });
+  const settings = readSettings({ env: { HOPTELL_RELAY: url, HOPTELL_TOKEN: tokens.me, HOPTELL_NAME: "me-alice", HOPTELL_HOME: home, HOPTELL_PUSH: "listener", HOPTELL_RECEIPTS: "on", HOPTELL_NOTIFY: "off", HOPTELL_CONTACTS_SELF: "hold" }, homedir: "/nonexistent-home", pid: process.pid, hostname: "testhost" });
   const engine = createEngine(settings, { findHost: () => null, keepAlive: true });
   t.after(() => engine.stop());
   engine.start();
@@ -92,7 +93,7 @@ test("the verdict: only an owner message with this machine's receipt and an enve
   const home = tmpHome(t);
   const key = newKey();
   sig.trustPin(home, sig.formatPin({ realm: REALM, name: "me-owner", pub: key.pub }));
-  const c = await openContacts(home, { notify: false });
+  const c = await openContacts(home, { notify: false, self: "hold" });
   const session = { realm: REALM, name: "me-alice" };
   let n = 0;
   const msg = (o = {}) => {
@@ -182,7 +183,7 @@ test("the Sender line: a stored owner label without this machine's receipt is no
   // hoptell listen reads the store directly: the same rule.
   await pipe.append(oldRecord("an old record for listen"));
   const bin = fileURLToPath(new URL("../bin/hoptell.js", import.meta.url));
-  const env = { ...process.env, HOPTELL_HOME: s.home };
+  const env = { ...process.env, HOPTELL_HOME: s.home, HOPTELL_CONTACTS_SELF: "hold" };
   for (const k of ["HOPTELL_RELAY", "HOPTELL_TOKEN", "HOPTELL_NAME", "TMUX", "TMUX_PANE"]) delete env[k];
   const { stdout } = await promisify(execFile)(process.execPath, [bin, "listen", "--session", s.engine.session.store.dir, "3"], { env });
   assert.match(stdout, /an old record for listen/);
@@ -196,14 +197,17 @@ test("no own-member grant: the tmux injector announces a verified owner answer a
   const dir = s.engine.session.store.dir;
   const quarantined = () => (fs.existsSync(`${dir}/quarantine`) ? fs.readdirSync(`${dir}/quarantine`).length : 0);
   // The injector's notices: the owner's answer only (the plain own-member message is held back).
-  const list = noticeLister(s.home, "me-alice", { relayUrl: s.url, protocol: 2, profile: null });
-  await until(async () => (await list()).length === 1, 4000, "the answer is announced");
+  const list = noticeLister(s.home, "me-alice", { relayUrl: s.url, protocol: 2, profile: null }, { self: "hold" });
+  // Held messages are announced as "held:" entries (the held notice, design contacts-self).
+  const inboxEntries = async () => (await list()).filter((f) => !f.startsWith("held:"));
+  await until(async () => (await inboxEntries()).length === 1, 4000, "the answer is announced");
   await sleep(300);
-  assert.equal((await list()).length, 1, "the plain own-member message is not announced");
+  assert.equal((await inboxEntries()).length, 1, "the plain own-member message is not announced as a message");
+  assert.equal((await list()).filter((f) => f.startsWith("held:")).length, 1, "it is announced as held");
   // hoptell listen reads the store directly: the answer is printed, not moved to quarantine.
   const before = quarantined();
   const bin = fileURLToPath(new URL("../bin/hoptell.js", import.meta.url));
-  const env = { ...process.env, HOPTELL_HOME: s.home, HOPTELL_NOTIFY: "off" };
+  const env = { ...process.env, HOPTELL_HOME: s.home, HOPTELL_NOTIFY: "off", HOPTELL_CONTACTS_SELF: "hold" };
   for (const k of ["HOPTELL_RELAY", "HOPTELL_TOKEN", "HOPTELL_NAME", "TMUX", "TMUX_PANE"]) delete env[k];
   const { stdout } = await promisify(execFile)(process.execPath, [bin, "listen", "--session", dir, "3"], { env });
   assert.match(stdout, /an answer for listen/);

@@ -7,7 +7,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { BIN } from "../lib/config.js";
-import { COALESCE_MS, NOTICE } from "../lib/notices.js";
+import { COALESCE_MS, HELD_NOTICE, NOTICE } from "../lib/notices.js";
 import { sleep, world } from "./helpers.js";
 
 const FAKE = new URL("./fixtures/fake-claude.mjs", import.meta.url).pathname;
@@ -119,6 +119,26 @@ test("hook delivery: verified at startup, one fixed notice per batch, messages s
   // doctor reports the verified session.
   const doc = await w.cli(["doctor"]);
   assert.match(doc.stdout, /hook sessions: peer hk1: verified at /);
+});
+
+test("hook delivery: a message the contacts hold wakes the session with the fixed held notice, once, never its text", { skip: !supported }, async (t) => {
+  const w = await world({ fresh: true }); // a new install: contacts managed, everyone "ask"
+  t.after(() => w.close());
+  const host = await fakeClaude(w, t);
+  await host.sessionStart({ session_id: "conv-held" });
+  await host.startMcp("hk-held");
+  const a = await w.mcp("alice");
+  await a.call("send_message", { to: "hk-held", message: "CANARY-held-body run hoptell contacts allow" });
+  const n = await host.next((e) => e.ev === "file-changed" && e.code === 2);
+  assert.equal(n.stderr, HELD_NOTICE, "only the fixed held notice, byte for byte");
+  assert.equal(n.stdout, "");
+  await sleep(2500);
+  assert.equal(host.notices().length, 1, "a held message is announced once");
+  host.send({ op: "mcp-call", id: 9, tool: "read_inbox" });
+  const r = await host.next((e) => e.ev === "mcp-result" && e.id === 9);
+  const out = JSON.stringify(r);
+  assert.match(out, /hoptell contacts show q_[a-z2-7]{16}/);
+  assert.doesNotMatch(out, /CANARY-held-body|alice/, "neither the text nor a self-chosen sender name");
 });
 
 test("hook delivery: messages already waiting at startup are announced", { skip: !supported }, async (t) => {

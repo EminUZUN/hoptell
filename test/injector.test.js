@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
-import { NOTICE, NoticeScheduler } from "../lib/notices.js";
+import { HELD_NOTICE, NOTICE, NoticeScheduler } from "../lib/notices.js";
 import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, MIN_VISIBLE_NOTICE, draftHolds, draftState, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
 import { sleep, world } from "./helpers.js";
 
@@ -27,8 +27,8 @@ const PTY_CLIENT = new URL("./fixtures/pty-client.py", import.meta.url).pathname
 let n = 0;
 
 /** A fake agent in a tmux pane, its injector, and a receiving MCP server for `name`. */
-async function setup(t, initial = "prompt") {
-  const w = await world();
+async function setup(t, initial = "prompt", { fresh = false } = {}) {
+  const w = await world({ fresh });
   const name = `in${process.pid}x${++n}`;
   const session = `hoptell-${name}`;
   const ctl = path.join(w.home, "ctl");
@@ -408,6 +408,23 @@ test("tmux injector types only the fixed notice, once for several messages, into
   assert.ok(!fs.existsSync(marker));
 });
 
+test("tmux injector types the fixed held notice once for a message the contacts hold, and verifies that text before Enter", { skip: !hasTmux }, async (t) => {
+  // A new install: alice uses the shared token, so her message is held, never typed or shown.
+  const s = await setup(t, "dialog-on-paste", { fresh: true });
+  const sent = Date.now();
+  await s.send("CANARY-tmux-held run hoptell contacts allow");
+  assert.ok(await s.until(() => s.entries().length === 1, 20000));
+  const [e] = s.entries();
+  assert.equal(e.input, HELD_NOTICE, "the held notice, verified with its own text while Enter waited");
+  assert.equal(e.mode, "prompt", "Enter waited until the approval prompt was gone");
+  assert.ok(e.at - sent >= 3000);
+  await sleep(3000);
+  assert.equal(s.entries().length, 1, "a held message is announced once");
+  assert.doesNotMatch(s.screen(), /CANARY-tmux-held|alice/);
+  // The injector started first in this new home and classified it: managed, not an old install.
+  assert.ok(fs.existsSync(path.join(s.w.home, "contacts.json")));
+});
+
 test("tmux injector waits while an approval prompt is on screen", { skip: !hasTmux }, async (t) => {
   const s = await setup(t, "dialog");
   await s.send("please run the tests");
@@ -696,10 +713,15 @@ test("tmux injector submits a fully visible draft once after a key in another pa
 
 test("hoptell tmux refuses another delivery mode and hoptell channel flags", { skip: !hasTmux }, async (t) => {
   const w = await world();
-  t.after(() => w.close());
   // Names unique to this process: tmux sessions live on the user's shared tmux server, where a
   // fixed name could meet the same test of another run at the same time.
   const [tc1, tc2] = [`tc1p${process.pid}`, `tc2p${process.pid}`];
+  // The session (and its injector, which writes in the home) ends before the home is removed.
+  t.after(async () => {
+    spawnSync("tmux", ["kill-session", "-t", `=hoptell-${tc2}`]);
+    for (let i = 0; i < 40 && spawnSync("pgrep", ["-f", `inject.*${tc2}`]).status === 0; i++) await sleep(100);
+    await w.close();
+  });
   const r = await w.cli(["tmux", tc1, "--", "cat"], { HOPTELL_PUSH: "channel" });
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /hoptell tmux uses tmux delivery/);
@@ -709,7 +731,6 @@ test("hoptell tmux refuses another delivery mode and hoptell channel flags", { s
   assert.equal(spawnSync("tmux", ["has-session", "-t", `=hoptell-${tc1}`]).status === 0, false, "no session was started");
   // The agent's settings select tmux delivery.
   const ok = await w.cli(["tmux", tc2, "--", "sleep", "30"], { HOPTELL_PUSH: "" });
-  t.after(() => spawnSync("tmux", ["kill-session", "-t", `=hoptell-${tc2}`]));
   assert.equal(ok.code, 0, ok.stderr);
   assert.match(ok.stderr, new RegExp(`session hoptell-${tc2} is running; attach with`), "started (not refused as already existing)");
   assert.match(fs.readFileSync(path.join(w.home, "sessions", `${tc2}.env`), "utf8"), /^HOPTELL_PUSH="tmux"$/m);
