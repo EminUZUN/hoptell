@@ -844,10 +844,13 @@ test("MII11 OpenMLS: an own-device admission deferred past the peer's epoch rete
   // message is delivered there.
   await acceptOwnDevices(b, extra);
   assert.equal(await old.e2ee.receive(commit, noop), "delivered");
-  await until(() => a.s.alice.got.length === 1, "the held message, decrypted");
-  assert.equal(a.s.alice.got[0].text, "never sealed in a pruned epoch");
+  // The receive queued the held message's send on the engine's serial queue; checkpoint() runs
+  // after it, so the device's catch-up, update and send are done here, without a time bound; the
+  // bound below covers alice's decryption only.
   // Epoch 7: its first send 8 days after joining updated first (the fresh-update policy, A2).
   assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 7);
+  await until(() => a.s.alice.got.length === 1, "the held message, decrypted");
+  assert.equal(a.s.alice.got[0].text, "never sealed in a pruned epoch");
 });
 
 test("MII2: a Welcome into a group with an unaccepted device waits for the owner (the key is kept); with a trusted-revoked device it is refused", async (t) => {
