@@ -57,9 +57,9 @@ process. None of this is sent to the relay.
   relay's configuration and is sent to clients. Apart from the broker and access files, the
   relay's database (its audit log and the experimental encrypted-message data) and the restore
   files described below, it holds no messages, names or tokens.
-  Session titles: a title can contain any text you typed into it, and every peer that may see
-  the session's name sees its title. A title set with `HOPTELL_TITLE` is copied to the relay's
-  memory, kept with the session's hold on its name and dropped when that hold ends; it is not
+  Session titles: a title can contain any text you typed into it, or a Claude Code custom name
+  that another hook derived from prompt text, and every peer that may see the session's name sees its title. The relay keeps
+  it in memory, with the session's hold on its name, and drops it when that hold ends; it is not
   written to the relay's database or logs. It also appears in other sessions' `list_peers`
   output, which their agent clients keep in their transcripts. `HOPTELL_TITLE=off` sends none.
   Name leases and reservations (which session holds a name, for up to 30 seconds after its
@@ -316,6 +316,16 @@ process. None of this is sent to the relay.
   prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and
   notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of
   ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed.
+- Session titles from Claude Code (only with `HOPTELL_TITLE_AUTO=on`): the `SessionStart` and
+  `UserPromptSubmit` hooks copy the session's custom name and its session id into
+  `<key>.title.json` in `~/.hoptell/wake/` (0600, at most 1 KiB). They never copy the prompt
+  field. Claude Code does not say whether the user, a hook or a tool set the custom name. Another
+  hook may derive it from prompt text, so a custom title can contain prompt text. With
+  `HOPTELL_TITLE_AUTO=on`, hoptell stores and shares that title. The file is removed together with the registration, which later SessionStart
+  hooks clean up after about 7 days once the Claude Code process has ended; a SessionStart with
+  `HOPTELL_TITLE_AUTO` off removes it. Other copies of a title: Claude Code's own transcripts and
+  session files (hoptell does not write them), the relay's memory, and other sessions'
+  `list_peers` output in their transcripts.
 - `hoptell tmux` writes any configured relay URL, token, delivery setting and approved
   snapshot folder settings to
   `~/.hoptell/sessions/<name>.env` (under `$HOPTELL_HOME` when configured). The file is not

@@ -7,6 +7,13 @@
   The title is a label only: messages still go to the name, and no access decision reads it.
   hoptell removes control and invisible characters and keeps at most 80 characters.
   `HOPTELL_TITLE=off` sends none. Titles need an updated relay; earlier relays ignore them.
+- Claude Code session names as titles: with `HOPTELL_TITLE_AUTO=on`, a session with the hoptell
+  plugin uses its custom name (`claude --name`, `/rename`). The plugin has a new
+  `UserPromptSubmit` hook that copies only the name and the session id. Claude Code does not say
+  whether the user, a hook or a tool set the custom name. Another hook may derive it from prompt
+  text. With `HOPTELL_TITLE_AUTO=on`, hoptell stores and shares that title. The hooks never copy
+  the prompt field. Off by default; an explicit `HOPTELL_TITLE` wins. A live session updates its title at the relay with
+  the new `set_title` frame (at most 10 changes a minute per session, 60 per member).
 - `list_peers` now shows the host as `(host: <host>)`.
 
 ## 0.3.0 (2026-10-15)

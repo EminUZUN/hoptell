@@ -10,7 +10,7 @@ import { profileKey } from "../lib/profiles.js";
 import { memberOfStoreDir, storeParts } from "../lib/session.js";
 
 // Claude Code hook commands (lib/wake.js) print only what Claude Code expects, never errors.
-const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged" };
+const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged", "hook-user-prompt-submit": "hookUserPromptSubmit" };
 if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
   let code = 0;
   try {
@@ -18,7 +18,7 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
     if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
     loadEnv();
     const wake = await import("../lib/wake.js");
-    code = wake[HOOKS[process.argv[2]]]({ home: defaultHome(process.env, os.homedir()), barrier: process.env.HOPTELL_WAKE_TEST_BARRIER || null });
+    code = wake[HOOKS[process.argv[2]]]({ home: defaultHome(process.env, os.homedir()), env: process.env, barrier: process.env.HOPTELL_WAKE_TEST_BARRIER || null });
   } catch {
     code = 0;
   }

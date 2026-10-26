@@ -13,9 +13,12 @@ let watchers = [];
 let mcp = null;
 const servers = new Set();
 
-function runHook(cmd, input, raw = false, env = {}) {
+// `viaShell`: the hook runs under a shell that stays its parent (Claude Code is then a further
+// ancestor, not the parent).
+function runHook(cmd, input, raw = false, env = {}, viaShell = false) {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, [BIN, cmd], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+    const [file, args] = viaShell ? ["/bin/sh", ["-c", '"$0" "$@"; s=$?; exit $s', process.execPath, BIN, cmd]] : [process.execPath, [BIN, cmd]];
+    const p = spawn(file, args, { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     p.stdout.on("data", (d) => (stdout += d));
@@ -69,7 +72,7 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
   const c = JSON.parse(line);
   if (c.op === "session-start") {
     sessionId = c.session_id ?? sessionId;
-    const r = await runHook("hook-session-start", { session_id: sessionId, hook_event_name: "SessionStart", source: c.source ?? "startup" });
+    const r = await runHook("hook-session-start", { session_id: sessionId, hook_event_name: "SessionStart", source: c.source ?? "startup", ...(c.input ?? {}) }, false, c.env ?? {});
     let paths = [];
     try {
       paths = JSON.parse(r.stdout).hookSpecificOutput.watchPaths;
@@ -79,7 +82,7 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
     watch(c.watch === false ? [] : paths);
     emit({ ev: "session-start", ...r, paths });
   } else if (c.op === "hook") {
-    emit({ ev: "hook", tag: c.tag, ...(await runHook(c.cmd, c.input, c.raw, c.env)) });
+    emit({ ev: "hook", tag: c.tag, ...(await runHook(c.cmd, c.input, c.raw, c.env, c.viaShell)) });
   } else if (c.op === "mcp-start") startMcp(c.env || {});
   else if (c.op === "mcp-call") mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: c.id, method: "tools/call", params: { name: c.tool, arguments: c.args || {} } })}\n`);
   else if (c.op === "mcp-stop") mcp.stdin.end();

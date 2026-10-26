@@ -481,24 +481,37 @@ one member here. A session that exits cleanly frees the name immediately.
 next one. A session can show a short title next to its name. Set it with `HOPTELL_TITLE`:
 
 ```
-HOPTELL_TITLE=review docs
+export HOPTELL_TITLE="review docs"
 ```
 
 Other sessions then see it in `list_peers`, after the name:
 `emin-mac-61034 (host: mac) title: "review docs" online`.
 
 - The title is a label only. Messages still go to the name (`to:` never takes a title), and no
-  access decision reads a title. Anyone can pick any title, so trust the name, not the title.
-  When a title looks like another name in the same list, the row says
+  access decision reads a title. Use the name for routing, not as proof of identity. In a
+  shared-token or mixed realm, another session can use a member-looking name. Check the
+  authenticated sender information when deciding who sent a message.
+- As a hint, when a title looks like another name in the same list, the row says
   `(title resembles another address)`.
 - hoptell removes control and invisible characters, joins spaces and keeps at most 80
   characters. A title of more than 1024 bytes, or one with nothing left after this, is not sent;
   the session logs why.
 - `HOPTELL_TITLE=off` never sends a title. An HTTP session (`hoptell mcp-http`) does not use the
   server's `HOPTELL_TITLE`.
-- The title belongs to the session's hold on its name. It stays while the session reconnects, and
-  a new session with the same name starts without it.
-- Titles need a relay updated for this feature. Earlier relays ignore them.
+- **Claude Code names.** With `HOPTELL_TITLE_AUTO=on`, a Claude Code session with the hoptell
+  plugin uses its custom name (`claude --name`, `/rename`) as its title. The plugin's
+  `SessionStart` and `UserPromptSubmit` hooks copy only that name and the session id into a
+  private file. Claude Code does not say whether the user, a hook or a tool set the custom name.
+  Another hook may derive it from prompt text. With `HOPTELL_TITLE_AUTO=on`, hoptell stores and
+  shares that title. The hooks never copy the prompt field. A later `/rename` is picked up after
+  the next prompt, and other sessions see it the next time this session lists peers or
+  reconnects. This is off by default. Set `HOPTELL_TITLE_AUTO` in the settings file
+  (`~/.config/hoptell/.env`), because the hooks read it too. An explicit `HOPTELL_TITLE` always wins, and Codex sessions get no automatic title.
+- The title stays with a resumed claim during its 30-second reservation. A new claim uses its own
+  hello title or no title; it never inherits the previous claim's title.
+- Titles need a relay updated for this feature. Earlier relays ignore them. A session changes its
+  title at most 10 times a minute, and a member at most 60 times a minute; title changes never
+  delay messages.
 
 Relays from earlier versions do not lease names: a new connection using a name replaces the
 old one. For names up to 58 characters, the replaced MCP session waits until the name is free,
@@ -1360,11 +1373,12 @@ Settings come from environment variables, otherwise from the first existing file
 double-quoted values decode JSON-style escapes (`\"`, `\\`, `\n`), single-quoted values are
 literal, and an empty value counts as unset.
 
-The on/off switches `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_REQUIRE_MEMBERS` and `HOPTELL_OWNER_APP`
+The on/off switches `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_REQUIRE_MEMBERS`, `HOPTELL_OWNER_APP` and `HOPTELL_TITLE_AUTO`
 take `1`, `true`, `on` or `yes` for on, and `0`, `false`, `off`, `no` or unset for off, in any
 case. A value that a setting does not accept is never read as its default. For these switches,
 `HOPTELL_AUTH` and `HOPTELL_CREDENTIAL_STORE`, the relay, the agent session or the command refuses
-to start and names the accepted values. An invalid `HOPTELL_AGENTS_MAX` refuses spawning. For
+to start and names the accepted values. An invalid `HOPTELL_AGENTS_MAX` refuses spawning. An
+unusable `HOPTELL_TITLE` is logged, and no title is sent. For
 `HOPTELL_NOTIFY`, `HOPTELL_ELICITATION` and `HOPTELL_OWNER_CHANNEL`, a warning names the value
 used instead. `hoptell doctor` lists these problems.
 
@@ -1379,6 +1393,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_NAME` | peers | this agent's peer name; unset lets the relay assign one |
 | `HOPTELL_ROLES` | peers | comma-separated roles |
 | `HOPTELL_TITLE` | peers | a display-only title shown next to this session's name in `list_peers` (at most 80 characters); `off` sends none; see [Teams and swarms](#teams-and-swarms) |
+| `HOPTELL_TITLE_AUTO` | peers | `on`: use the custom name of a Claude Code session (from the plugin's hooks) as its title when `HOPTELL_TITLE` is unset; default `off` |
 | `HOPTELL_PUSH` | peers | `channel`, `hook`, `tmux` or `listener`; unset picks one per session |
 | `HOPTELL_HOME` | peers | local state directory (default `~/.hoptell`) |
 | `HOPTELL_ENV` | both | settings file to read instead of `~/.config/hoptell/.env` |
@@ -1475,7 +1490,7 @@ hoptell's job is to put text from one agent in front of another agent. Plan for 
 - **Connects** by WebSocket to the relay you configure. Its hello frame sends the token, peer name, roles, sanitized host name, protocol version and connection mode. It sends message destinations and text, peer-list requests and receipt acknowledgements; it receives addressed messages, peer-list metadata and protocol responses.
 - **Stores** incoming MCP messages durably (synced to disk) before acknowledging receipt to the relay. It creates private directories (0700) and files (0600): with a current relay in the session's folder under `~/.hoptell/v2/` (see [PRIVACY.md](PRIVACY.md)), with earlier relays under `~/.hoptell/inbox/<name>/` (both under `$HOPTELL_HOME` when configured). With receipts, files are deleted when the agent acknowledges them; otherwise they are consumed and deleted by `read_inbox`, `wait_for_message` or `hoptell listen`. Recovering abandoned claims checks whether the claiming process still runs (process id, start time and boot).
 - **Inspects** the processes that started it with `ps -o ppid=,uid=,lstart=,args= -p <pid>` to find the Claude Code process that started it and check its channel flags, and reads the boot identifier (`/proc/sys/kernel/random/boot_id` on Linux, `sysctl -n kern.boottime` on macOS) and process start times to tell processes apart. This check is skipped when `HOPTELL_PUSH` chooses `channel`, `tmux` or `listener`.
-- **For hook delivery**, uses private files in `~/.hoptell/wake/` (0700/0600; under `$HOPTELL_HOME` when configured), keyed by the Claude Code process: a small counter file that Claude Code watches, a registration written by the `SessionStart` hook (process identity, session id and a random value), the MCP server's record (its process identity, peer name and current request) and the hook's last acknowledgement. They contain no message text, sender, relay URL, token, prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed. Claude Code executes the `hook-session-start` and `hook-file-changed` CLI commands with your OS permissions. These commands load normal hoptell settings, perform the local process inspection described above, and read and write wake files; they do not open inbox message or transcript files.
+- **For hook delivery**, uses private files in `~/.hoptell/wake/` (0700/0600; under `$HOPTELL_HOME` when configured), keyed by the Claude Code process: a small counter file that Claude Code watches, a registration written by the `SessionStart` hook (process identity, session id and a random value), the MCP server's record (its process identity, peer name and current request) and the hook's last acknowledgement. With `HOPTELL_TITLE_AUTO=on`, a title file holds the session's custom Claude Code name and session id. They contain no message text, sender, relay URL, token, prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed. Claude Code executes the `hook-session-start`, `hook-user-prompt-submit` and `hook-file-changed` CLI commands with your OS permissions. These commands load normal hoptell settings, perform the local process inspection described above, and read and write wake files; they do not open inbox message or transcript files.
 - **Tells agents** in its instructions how to capture file snapshots with the local CLI and check them before applying suggestions. The MCP server does not execute these snapshot commands. An agent or user must run the CLI under their own permissions; the CLI loads its normal settings before capturing or checking the selected file.
 - **File tools** are disabled by default. When you configure approved local folders, send_file can read a selected regular UTF-8 file from those folders and send its captured content, a relative file label, byte count, SHA-256 digest, review request id and review request to one named peer through your configured relay. The receiving agent's AI provider may process that content. Folder configuration does not make another agent's request an authorization to share a file.
 - **The file tools start** a bundled Node helper on the same machine to perform checked file reads. They do not run a shell, download software, execute project code or make additional network connections. The helper uses the MCP server's OS permissions; configuring folders does not inherit an AI agent's separate filesystem sandbox.
