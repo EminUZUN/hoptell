@@ -68,12 +68,15 @@ to `@reviewer` reaches only reviewers that are online at that moment.
    reviewers asked.
 2. Send the complete output unchanged with `send_message`, to one reviewer by name or to
    `@reviewer` for all of them. Add one short line that says what to look for.
-3. Tell the user about contacts. In a hoptell home with managed contacts (a new install, or
-   after `hoptell contacts init`), the reviewer's copy of the request waits in quarantine until
-   the user allows the sender, even though both sessions belong to the same member, and a held
-   request never wakes the reviewer. Ask the user to run `hoptell contacts`; `hoptell contacts
-   show <id>` prints the `allow` command. A grant for their own member also lets the replies
-   through. The decision is the user's, so do not run `hoptell contacts allow` from this session.
+3. Check contacts. With managed contacts (a new install, or after `hoptell contacts init`) and
+   the default self-member setting, requests and replies between sessions authenticated by the
+   relay as the same member in the same realm, with neither session hosted, can pass without a
+   grant. Each receiving session still applies its own blocks, encryption requirements and
+   default policy. `HOPTELL_CONTACTS_SELF=hold` disables this exception; messages then follow
+   that session's usual contacts policy, as messages from shared-token senders and other
+   members do. A held request wakes the reviewer with a notice; its text is not shown. Ask the
+   user to inspect `hoptell contacts` and `hoptell contacts show <id>` for the available
+   decisions. The decision is the user's: do not run `hoptell contacts allow` from this session.
 4. End the turn. A hook notice or the injector wakes this session when replies arrive, so
    polling or a `wait_for_message` loop only spends the user's time and tokens.
 

@@ -258,8 +258,18 @@ process. None of this is sent to the relay.
   finished requests). Held messages themselves are kept in each session folder's `quarantine/`
   (or `~/.hoptell/legacy/<name>/` for sessions on earlier relays) until you release or block them,
   or for seven days. Desktop notifications show the sender label and session name, never message
-  text. All of these are under `$HOPTELL_HOME` when configured, private (0700/0600), and not
-  encrypted by hoptell.
+  text. The receiving agent is told that a message was held, never its text: it sees the number
+  of held messages, the request id and, only for a sender the relay authenticated as a member,
+  that member's name. `~/.hoptell/contacts/reported/` keeps, per session folder, which held
+  messages a `wait_for_message` call or `hoptell listen` already reported (file names only). All
+  of these are under `$HOPTELL_HOME` when configured, private (0700/0600), and not encrypted by
+  hoptell.
+- Your own member: by default, eligible messages the relay attributes to the receiving session's
+  own member can reach the agent without a grant (`HOPTELL_CONTACTS_SELF=hold` disables this
+  exception). Both sessions must be in the same realm, with neither side hosted; blocks and the
+  usual encryption requirements still apply. This relies on the relay's statement of who signed
+  in, as grants do; a relay that lies can deliver a message as your own member. A plaintext
+  message is still held if your policy requires encryption for your own member.
 - Encrypted messages (experimental): `contacts.json` also keeps the device pins of your contacts
   and this home's own devices per realm (member and device ids, public signing keys, pin hashes,
   how and when each was accepted). `~/.hoptell/mls/<profile>/` holds this device's record (its
