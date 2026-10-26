@@ -1,0 +1,11 @@
+I didn't send the Telegram message. The `ask_owner` tool isn't available in this session, which means this machine doesn't trust the Telegram bridge yet.
+
+I could send a plain note with `send_message` instead, but a note can go unread and the owner can't answer it. Since you need a yes or no on pushing, I'm asking here instead:
+
+**The `add.js` fix is ready. Should I push it?**
+
+Before you answer:
+- `add.js` hasn't been committed; it's still an untracked file on `main`. Pushing it means committing it and then pushing directly to `main`, unless you want a branch first.
+- I haven't checked or tested the fix myself in this session.
+
+To use Telegram for this in future, run `hoptell telegram trust` on this machine; after that I can ask the owner directly.

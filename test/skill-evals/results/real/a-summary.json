@@ -1,0 +1,28 @@
+{
+  "reviewer": "dana-reviewer-1",
+  "launch": "env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux dana-reviewer-1 --roles reviewer -- codex -s read-only -a never; echo \"exit=$?\"",
+  "online": {
+    "name": "dana-reviewer-1",
+    "host": "mac",
+    "roles": [
+      "reviewer"
+    ],
+    "online": true,
+    "queued": 0,
+    "own": true
+  },
+  "sessions": [
+    "hoptell-dana-reviewer-1"
+  ],
+  "requestId": "10b74cd7-63f2-455f-b0bd-d977cef661e7",
+  "digest": "sha256:8aa9636055d9befcd071486484f5d14f10a083aee978220d9b554f13c84e05c7",
+  "check": "hoptell snapshot --check sha256:8aa9636055d9befcd071486484f5d14f10a083aee978220d9b554f13c84e05c7 add.js; echo \"exit=$?\"",
+  "stop": [
+    "tmux kill-session -t '=hoptell-dana-reviewer-1'; echo \"exit=$?\""
+  ],
+  "cost": [
+    0.1909494,
+    0.2655082,
+    0.32392740000000003
+  ]
+}

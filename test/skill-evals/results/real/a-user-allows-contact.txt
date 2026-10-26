@@ -1,0 +1,16 @@
+$ hoptell contacts
+hoptell contacts of <tmp>/home: managed (default: ask, unverified senders: ask), policy revision 0
+q_l376jv6ftngiqeqg  member dana  1 message(s) for aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/dana-reviewer-1  since 2026-10-26T21:12:51.024Z
+Next: hoptell contacts show <id>
+
+$ hoptell contacts show q_l376jv6ftngiqeqg
+q_l376jv6ftngiqeqg  member dana  (member m_mmmmmmmmmmmmmmmmmmmmmmmmmm of realm aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, authenticated by the relay)
+- for aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/dana-reviewer-1, 2026-10-26T21:12:50.912Z, 917 bytes
+
+Decide with --rev 1 --policy-rev 0:
+  hoptell contacts allow q_l376jv6ftngiqeqg --rev 1 --policy-rev 0   (always: adds a grant)
+  hoptell contacts allow-once q_l376jv6ftngiqeqg --rev 1 --policy-rev 0   (only these messages)
+  hoptell contacts block q_l376jv6ftngiqeqg --rev 1 --policy-rev 0   (deletes them; blocks the sender)
+
+$ hoptell contacts allow q_l376jv6ftngiqeqg --rev 1 --policy-rev 0
+Released 1 message(s) and added a grant.

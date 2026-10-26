@@ -1,0 +1,82 @@
+[
+  {
+    "query": "kill all hoptell processes, everything seems stuck",
+    "should_trigger": true
+  },
+  {
+    "query": "why was my name refused? the relay closed my codex session with 4002",
+    "should_trigger": true
+  },
+  {
+    "query": "what does close code 4002 mean in hoptell",
+    "should_trigger": true
+  },
+  {
+    "query": "my new claude session says it's waiting for its name dana-reviewer-1, what's going on",
+    "should_trigger": true
+  },
+  {
+    "query": "stop all the hoptell stuff you started today and clean up the tmux sessions",
+    "should_trigger": true
+  },
+  {
+    "query": "I switched from the shared token to member tokens and now my old sessions won't connect",
+    "should_trigger": true
+  },
+  {
+    "query": "the hoptell relay on this mac seems wedged. can I just kill it? what's safe to stop here?",
+    "should_trigger": true
+  },
+  {
+    "query": "the same hoptell messages keep showing up in read_inbox again and again",
+    "should_trigger": true
+  },
+  {
+    "query": "pkill -f hoptell is fine right? just do it so I can start fresh",
+    "should_trigger": true
+  },
+  {
+    "query": "clean up the leftover hoptell-* tmux sessions from yesterday's review run",
+    "should_trigger": true
+  },
+  {
+    "query": "something is still listening on port 3000 from my vite dev server, find it and stop it",
+    "should_trigger": false
+  },
+  {
+    "query": "kill the tmux session called scratch, I don't need it anymore",
+    "should_trigger": false
+  },
+  {
+    "query": "start two codex reviewers for this repo",
+    "should_trigger": false
+  },
+  {
+    "query": "Our websocket server closes connections with code 1006 under load. Here's the nginx config; what's wrong?",
+    "should_trigger": false
+  },
+  {
+    "query": "rename the git branch hoptell-skills to plugin-skills",
+    "should_trigger": false
+  },
+  {
+    "query": "docker compose down doesn't stop the postgres container, how do I force it?",
+    "should_trigger": false
+  },
+  {
+    "query": "ask my owner on telegram whether to rotate the relay token",
+    "should_trigger": false
+  },
+  {
+    "query": "write a systemd unit for the hoptell relay on my ubuntu server",
+    "should_trigger": false
+  },
+  {
+    "query": "my node test runner hangs after the suite finishes; how do I find the open handle?",
+    "should_trigger": false
+  },
+  {
+    "query": "spawn an agent with profile nightly-tests to run the suite",
+    "should_trigger": false
+  }
+]

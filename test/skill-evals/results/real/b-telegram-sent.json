@@ -1,0 +1,13 @@
+[
+  {
+    "method": "setMyCommands"
+  },
+  {
+    "method": "sendMessage",
+    "text": "❓ Question 1 · dana-lead asks:\nThe add.js fix is ready. Should I push it? (The DEPLOY_KEY was left out on purpose because Telegram isn't end-to-end encrypted. To check it, look at deploy.env in the project directory on your machine.)",
+    "buttons": [
+      "Push it",
+      "Don't push yet"
+    ]
+  }
+]

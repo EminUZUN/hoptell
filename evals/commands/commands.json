@@ -1,0 +1,27 @@
+[
+  {
+    "name": "reviewers-two-codex",
+    "command": "reviewers",
+    "args": "2 codex"
+  },
+  {
+    "name": "review-to-online-reviewer",
+    "command": "review",
+    "args": "add.js dana-reviewer-1"
+  },
+  {
+    "name": "review-with-no-reviewer-online",
+    "command": "review",
+    "args": "add.js"
+  },
+  {
+    "name": "ask-owner-question",
+    "command": "ask-owner",
+    "args": "Should I merge the release branch now?"
+  },
+  {
+    "name": "peers",
+    "command": "peers",
+    "args": ""
+  }
+]

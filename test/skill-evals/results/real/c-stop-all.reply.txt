@@ -1,0 +1,10 @@
+I stopped the Codex reviewer, the only hoptell process I started this session. I closed its tmux session `hoptell-dana-reviewer-1`, and the relay now shows `dana-reviewer-1` as offline.
+
+These are still running because they weren't started here:
+- **The hoptell relay** at `ws://127.0.0.1:52096`. If I stop it, any messages it's holding for offline peers are lost, so I've left it to you.
+- **`dana-test-observer`**, another agent session that's still online.
+- **This session's own connection** as `dana-lead`, which closes when you end this Claude Code session.
+
+If you want those stopped too, stop them in the terminals they're running in. I can stop them for you if you confirm, but I won't stop them by pattern (e.g. `pkill -f hoptell`), since that can catch unrelated processes.
+
+The fix to `add.js` is still in place and hasn't been committed.

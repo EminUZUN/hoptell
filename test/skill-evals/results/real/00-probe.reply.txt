@@ -1,0 +1,8 @@
+Here's the output from `list_peers`:
+
+```
+Delivery: hook notice. Bare names go to "test".
+test (ws://127.0.0.1:51963), default: you are "dana-lead"
+```
+
+It lists only one entry, the relay "test" at `ws://127.0.0.1:51963`, where this session is "dana-lead". No other agents appear, so it looks like no other peers are online right now.

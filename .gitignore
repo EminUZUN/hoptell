@@ -6,3 +6,9 @@ node_modules/
 !.env.example
 *.log
 .DS_Store
+# claude plugin eval run output
+/evals/results/
+/evals/.staged-cli
+/evals/.run-lock/
+# rendered by test/skill-evals/render-commands.mjs
+/evals/commands/*/prompt.md
