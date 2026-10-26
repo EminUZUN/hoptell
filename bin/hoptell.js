@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HOSTNAME, NAME_RE, checkName, defaultHome, envAuth, envCredentialStore, envNotify, envSwitch, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
+import { HOSTNAME, NAME_RE, checkName, defaultHome, envAuth, envContactsSelf, envCredentialStore, envNotify, envSwitch, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
 import { profileKey } from "../lib/profiles.js";
 import { memberOfStoreDir, storeParts } from "../lib/session.js";
 
@@ -209,7 +209,7 @@ const CONNECT_BUDGET_MS = 30_000; // send and list: retry an unreachable relay t
 let contactsPromise = null;
 const contactsOf = () =>
   (contactsPromise ??= import("../lib/quarantine.js").then((q) =>
-    q.openContacts(home(), { notify: notifyOn(), log: (...a) => console.error("hoptell:", ...a) }),
+    q.openContacts(home(), { notify: notifyOn(), log: (...a) => console.error("hoptell:", ...a), self: envContactsSelf(process.env) }),
   ));
 const relayProfileOf = async () => {
   if (!process.env.HOPTELL_RELAY) return null;
@@ -1076,11 +1076,15 @@ try {
         fail("usage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
       }
       const { launch } = await import("../lib/tmux.js");
-      launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home() });
+      // Once the checks pass, the home is classified first (a new install becomes managed): the
+      // session settings file and the injector's reads create state that would otherwise make a
+      // new home look like an old one.
+      await launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf() });
       break;
     }
     case "inject": {
       const { inject } = await import("../lib/tmux.js");
+      await contactsOf(); // classify the home first, as every command that creates state does
       await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice() });
       break;
     }
@@ -1206,7 +1210,7 @@ try {
         } else holdAt = { dir: path.join(home(), "legacy", client.name), session: { realm: null, name: client.name } };
         return holdAt;
       };
-      const { stamp } = await import("../lib/quarantine.js");
+      const { ownSelf, stamp } = await import("../lib/quarantine.js");
       const review = await import("../lib/reviewsets.js");
       const reviewSets = new review.ReviewSetStore({ home: home() });
       c = await connect("peer", (raw, confirm, client) => {
@@ -1215,7 +1219,9 @@ try {
           .then(async (place) => {
             // A proposal is stored for the owner and replaced by a fixed note, as in a session.
             if (review.isReviewTraffic(m)) m = await review.intakeMessage(reviewSets, m);
-            const v = contacts.verdict(m, place.session);
+            // The own member as this connection's welcome names it, unless hosted: its messages need
+            // no grant (as in the engine). The owner-channel exception stays off here, as before.
+            const v = contacts.verdict(m, place.session, null, { self: client.protocolInUse === 2 ? ownSelf(client.member) : null });
             if (v !== "allow") {
               await contacts.hold(place.dir, place.session, m, v);
               return confirm();
@@ -1409,6 +1415,11 @@ try {
       const pipes = new Map();
       const contacts = await contactsOf();
       const { attest } = await import("../lib/quarantine.js");
+      const notices = await import("../lib/notices.js");
+      // A hold that no wait or listener has reported yet ends it too (design contacts-self), so an
+      // idle agent wakes, once: a restarted listener does not exit again for the same hold.
+      await contacts.adopt(); // held messages a crash left without their request join it first
+      let lastDir = null;
       while (!out) {
         const r = resolve();
         if (r.state === "legacy") {
@@ -1459,7 +1470,13 @@ try {
           // What is shown carries this machine's checks (lib/attested.js), never a stored flag alone.
           const checked = shown.map((m) => attest(home(), m));
           if (shown.length) out = { text: checked.map(inbox.format).join("\n\n"), note: inbox.batchNote(checked), receipt: null, pipe: null, claims, legacy: released?.receipt ? { pipe: legacyPipe, receipt: released.receipt } : null, undo };
-          else await undo();
+          else {
+            await undo();
+            // Holds for a protocol-1 session are kept with its legacy store.
+            lastDir = legacyDir;
+            const fresh = contacts.heldUnreported({ store: legacyDir });
+            if (fresh.length) out = { held: fresh, store: legacyDir, text: notices.HELD_WAIT + notices.heldNote(contacts.heldFor({ store: legacyDir })) };
+          }
         } else if (r.state === "bound") {
           // Keeps the session's receipt policy; claims use the configured lease.
           if (!pipes.has(r.store.dir)) pipes.set(r.store.dir, await openStore(r.store, { leaseMs: leaseMinutes() * 60_000 }));
@@ -1475,13 +1492,23 @@ try {
             const where = { ...sessionOfDir(r.store.dir), member: memberOfDir(r.store.dir) };
             const checked = batch.messages.map((m) => attest(home(), m.msg, where));
             out = { text: [...notes, ...checked.map((m) => inbox.format(m))].join("\n\n"), note: inbox.batchNote(checked), receipt: batch.receipt, pipe };
+          } else {
+            lastDir = r.store.dir;
+            const fresh = contacts.heldUnreported({ store: r.store.dir });
+            if (fresh.length) out = { held: fresh, store: r.store.dir, text: notices.HELD_WAIT + notices.heldNote(contacts.heldFor({ store: r.store.dir })) };
           }
         }
         if (out || Date.now() >= deadline) break;
         await new Promise((res) => setTimeout(res, 250));
       }
       if (!out) {
-        process.stdout.write(`No messages within ${secs}s. Start the listener again to keep receiving.\n`);
+        const held = lastDir ? notices.heldNote(contacts.heldFor({ store: lastDir })) : "";
+        process.stdout.write(`No messages within ${secs}s.${held}\nStart the listener again to keep receiving.\n`);
+        break;
+      }
+      if (out.held) {
+        const held = out;
+        process.stdout.write(`${held.text}\nStart the listener again to keep receiving.\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : contacts.noteHeldReported({ store: held.store }, held.held)));
         break;
       }
       const footer = out.receipt && noAck ? `\nReceipt: ${out.receipt} (acknowledge with: hoptell ack ${out.receipt} ${bySession ? `--session "${target}"` : target})` : "";
