@@ -373,14 +373,14 @@ test("holds: a new device of a pinned contact holds sending until the owner acce
   loseAnswer(alice.s.alice.client, (f) => f.type === "send_e2ee" && f.kind === "commit");
   const r = await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "after the revocation" });
   assert.equal(r.state, "unsent");
+  // Checked as the refusal returns, before any later operation of the engine ran (each one runs
+  // after this through its queue and its store): the removal is not confirmed yet.
+  assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
+  assert.equal(bob.s.bob.got.length, 2, "nothing sent while the removal is not confirmed");
   await settle();
-  if (bob.s.bob.got.length === 2) {
-    assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
-  } else {
-    // A merged removal makes bob owe an update (A2): his commit can show alice her own removal in
-    // the log before recover(), and she then sends; never before the removal was merged.
-    assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "sent only after the removal was merged");
-  }
+  // A merged removal makes bob owe an update (A2): his commit can show alice her own removal in
+  // the log before recover(), and she then sends; never before the removal was merged.
+  if (bob.s.bob.got.length > 2) assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "sent only after the removal was merged");
   await alice.s.alice.e2ee.recover();
   await until(() => bob.s.bob.got.length === 3, "sent after the merge");
   assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "the revoked device left the routing roster");
