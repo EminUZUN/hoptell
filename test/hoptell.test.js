@@ -840,8 +840,8 @@ test("rate limit stops runaway senders", async (t) => {
   t.after(() => w.close());
   const a = await w.mcp("alice");
   await w.mcp("bob");
-  const results = [];
-  for (let i = 0; i < 32; i++) results.push(await a.call("send_message", { to: "bob", message: `m${i}` }));
+  // All at once: one at a time, a loaded machine can take longer than the relay's 10-second window.
+  const results = await Promise.all(Array.from({ length: 32 }, (_, i) => a.call("send_message", { to: "bob", message: `m${i}` })));
   assert.equal(results.filter((r) => /rate limit/.test(r)).length, 2);
 });
 
