@@ -1,5 +1,7 @@
 test:
   image: node:${NODE}
+  variables:
+    GIT_DEPTH: 0 # full history: a compatibility test runs an earlier relay from it
   parallel:
     matrix:
       - NODE: ["22", "24"]

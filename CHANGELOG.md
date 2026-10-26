@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Session titles: `HOPTELL_TITLE=<text>` shows a short title next to the session's name in other
+  sessions' `list_peers`, for example `emin-mac-61034 (host: mac) title: "review docs" online`.
+  The title is a label only: messages still go to the name, and no access decision reads it.
+  hoptell removes control and invisible characters and keeps at most 80 characters.
+  `HOPTELL_TITLE=off` sends none. Titles need an updated relay; earlier relays ignore them.
+- `list_peers` now shows the host as `(host: <host>)`.
+
 ## 0.3.0 (2026-10-15)
 
 This release adds a large set of features and changes the relay protocol. Upgrade the relay

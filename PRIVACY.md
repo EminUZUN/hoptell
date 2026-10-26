@@ -29,13 +29,13 @@ Other registries have their own policies.
 
 - Message text, sender and recipient peer names, timestamps and message ids.
 - Peer metadata: peer name, roles, the machine's sanitized host name, the connection's IP
-  address and online status.
+  address and online status, and the session's title when one is set.
 - Shared or per-member authentication tokens, configured member names, and relay and client
   settings.
 
 hoptell uses this data to authenticate clients, discover peers, route messages and confirm
 receipt. Authenticated clients can list other known peers' names, roles, host labels, online
-status and queued-message counts. Message text is routed to the addressed peers. Unless
+status, queued-message counts and titles. Message text is routed to the addressed peers. Unless
 `HOPTELL_PUSH` chooses `channel`, `tmux` or `listener`, the MCP server also reads, locally, the
 IDs, user IDs, start times and command lines of the processes that started it, and the boot
 identifier, to find the Claude Code process and check its channel flags. The hoptell hook
@@ -57,6 +57,11 @@ process. None of this is sent to the relay.
   relay's configuration and is sent to clients. Apart from the broker and access files, the
   relay's database (its audit log and the experimental encrypted-message data) and the restore
   files described below, it holds no messages, names or tokens.
+  Session titles: a title can contain any text you typed into it, and every peer that may see
+  the session's name sees its title. A title set with `HOPTELL_TITLE` is copied to the relay's
+  memory, kept with the session's hold on its name and dropped when that hold ends; it is not
+  written to the relay's database or logs. It also appears in other sessions' `list_peers`
+  output, which their agent clients keep in their transcripts. `HOPTELL_TITLE=off` sends none.
   Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender

@@ -1088,8 +1088,8 @@ try {
       await selectRelay();
       const c = await connect("send");
       const peers = await c.list();
-      const { formatPeer } = await import("../lib/client.js");
-      console.log(peers.length ? peers.map(formatPeer).join("\n") : "no other peers");
+      const { formatPeers } = await import("../lib/client.js");
+      console.log(peers.length ? formatPeers(peers).join("\n") : "no other peers");
       c.close();
       break;
     }

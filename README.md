@@ -477,6 +477,29 @@ for 30 seconds so the session can come back. During that time other members cann
 but the same member can, for example a restarted session. All shared-token sessions count as
 one member here. A session that exits cleanly frees the name immediately.
 
+**Session titles.** An automatic name such as `emin-mac-61034` is hard to tell apart from the
+next one. A session can show a short title next to its name. Set it with `HOPTELL_TITLE`:
+
+```
+HOPTELL_TITLE=review docs
+```
+
+Other sessions then see it in `list_peers`, after the name:
+`emin-mac-61034 (host: mac) title: "review docs" online`.
+
+- The title is a label only. Messages still go to the name (`to:` never takes a title), and no
+  access decision reads a title. Anyone can pick any title, so trust the name, not the title.
+  When a title looks like another name in the same list, the row says
+  `(title resembles another address)`.
+- hoptell removes control and invisible characters, joins spaces and keeps at most 80
+  characters. A title of more than 1024 bytes, or one with nothing left after this, is not sent;
+  the session logs why.
+- `HOPTELL_TITLE=off` never sends a title. An HTTP session (`hoptell mcp-http`) does not use the
+  server's `HOPTELL_TITLE`.
+- The title belongs to the session's hold on its name. It stays while the session reconnects, and
+  a new session with the same name starts without it.
+- Titles need a relay updated for this feature. Earlier relays ignore them.
+
 Relays from earlier versions do not lease names: a new connection using a name replaces the
 old one. For names up to 58 characters, the replaced MCP session waits until the name is free,
 then reconnects. Set `HOPTELL_PROTOCOL=1` to keep this behavior with a current relay.
@@ -1355,6 +1378,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_CREDENTIAL_PASSPHRASE` | peers | passphrase for that file (at least 12 characters) |
 | `HOPTELL_NAME` | peers | this agent's peer name; unset lets the relay assign one |
 | `HOPTELL_ROLES` | peers | comma-separated roles |
+| `HOPTELL_TITLE` | peers | a display-only title shown next to this session's name in `list_peers` (at most 80 characters); `off` sends none; see [Teams and swarms](#teams-and-swarms) |
 | `HOPTELL_PUSH` | peers | `channel`, `hook`, `tmux` or `listener`; unset picks one per session |
 | `HOPTELL_HOME` | peers | local state directory (default `~/.hoptell`) |
 | `HOPTELL_ENV` | both | settings file to read instead of `~/.config/hoptell/.env` |
