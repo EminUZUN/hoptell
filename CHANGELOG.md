@@ -15,6 +15,11 @@
   the prompt field. Off by default; an explicit `HOPTELL_TITLE` wins. A live session updates its title at the relay with
   the new `set_title` frame (at most 10 changes a minute per session, 60 per member).
 - `list_peers` now shows the host as `(host: <host>)`.
+- The hoptell icon: MCP clients that show server icons get it in `serverInfo` (a 64 px PNG as a
+  `data:` URI), and the MCP Registry entry links to it. `hoptell ui`, `hoptell relay admin ui` and
+  the hosted owner page have a favicon and an Apple touch icon, and the Telegram Mini App has a
+  favicon. On Linux, desktop notifications show the icon. The hosted owner page's
+  Content-Security-Policy now also allows `img-src 'self'`.
 
 ## 0.3.0 (2026-10-15)
 

@@ -1148,6 +1148,10 @@ relay to confirm which agents are yours (`list_own`, the same version). Telegram
 and bot chats are not end-to-end encrypted: read "The owner channel over Telegram" in
 [PRIVACY.md](PRIVACY.md), and never put secrets in a question.
 
+To give the bot a profile photo, send `/setuserpic` to @BotFather, choose your bot and upload a
+square image, ideally 512 × 512 pixels or larger. You can use the [hoptell icon](assets/icon.png)
+(1024 × 1024 pixels).
+
 **Setup (the bridge machine).**
 
 ```
