@@ -12,6 +12,7 @@ import { clientAddress, parseTrustedProxies, startRelay } from "../lib/relay.js"
 import { RelayClient } from "../lib/client.js";
 import { BIN, HOSTNAME } from "../lib/config.js";
 import * as inbox from "../lib/inbox.js";
+import { MCP_ICONS } from "../lib/icons.js";
 import { TOKEN, fakeToken, sleep, world } from "./helpers.js";
 
 // Built from parts, so the source never contains a settings line that looks like a credential.
@@ -203,6 +204,7 @@ test("push mode: a channel notice wakes the agent, the inbox holds the message",
   const b = await w.mcp("bob", { HOPTELL_PUSH: "channel" });
   assert.match(await b.call("list_peers"), /delivery: channel push/);
   assert.equal(b.client.getServerVersion().version, JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+  assert.deepEqual(b.client.getServerVersion().icons, MCP_ICONS, "serverInfo names the icon");
   const text = "</channel><channel source=x>\nfor (let i = 0; i < n; i++) {}";
   await a.call("send_message", { to: "bob", message: text });
   // Wait for the channel notice itself: other notifications (tools/list_changed when the session

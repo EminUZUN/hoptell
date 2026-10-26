@@ -115,6 +115,7 @@ export const GROUPS = {
       "lib/hostedstorage.js",
       "lib/hostedtenants.js",
       "lib/httpmcp.js",
+      "lib/icons.js",
       "lib/jcs.js",
       "lib/localrelay.js",
       "lib/locks.js",
@@ -160,6 +161,11 @@ export const GROUPS = {
       "lib/miniapp/app.js",
       "lib/miniapp/index.html",
       "lib/miniapp/tg.js",
+      // not imported but read: lib/icons.js reads these at import (favicons, serverInfo icons) and
+      // passes the 180 px file's path to notify-send
+      "lib/icons/apple-touch-icon.png",
+      "lib/icons/favicon-32.png",
+      "lib/icons/icon-64.png",
       // the Node dependencies loaded on this path
       "package.json",
       "package-lock.json",
