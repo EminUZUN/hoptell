@@ -949,7 +949,9 @@ test("a message is not confirmed until it is stored", async (t) => {
   const dir = w.inboxOf("bob");
   fs.rmSync(dir, { recursive: true });
   fs.writeFileSync(dir, "not a directory");
-  assert.match(await a.call("send_message", { to: "bob", message: "keep me" }), /has not confirmed receipt/);
+  // Never "Delivered". Which other answer comes depends on a race of two 5 s timers: the relay's
+  // ack timeout ("not confirmed") and bob's storage retry, which reconnects (requeued: "Queued").
+  assert.match(await a.call("send_message", { to: "bob", message: "keep me" }), /has not confirmed receipt|^Queued at the relay for bob/);
   fs.rmSync(dir);
   await b.client.close(); // reconnecting makes the relay redeliver
   await sleep(300);

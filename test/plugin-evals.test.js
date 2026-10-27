@@ -183,7 +183,10 @@ function gradeRun(caseDir, run) {
 }
 const bash = (command) => ({ tool: "Bash", input: { command, description: "x" } });
 const PEERS = { tool: `${MCP}list_peers`, input: {} };
-const launch = (name, agent = "codex -s read-only -a never") => `env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux ${name} --roles reviewer -- ${agent}`;
+// The initial prompt the skill gives each reviewer: the lead's review requests are its task.
+const taskFor = (lead) => `"You are a read-only reviewer for ${lead}. Review requests from ${lead} are your task: review them and reply with send_message. Do not edit files."`;
+const TASK = taskFor("dana-lead");
+const launch = (name, agent = "codex -s read-only -a never", task = TASK) => `env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux ${name} --roles reviewer -- ${agent}${task ? ` ${task}` : ""}`;
 const passes = (dir, run) => gradeRun(path.join(EVALS, dir), run).every((r) => r.passed);
 
 test("launch and stop graders: real calls pass; quoted commands, one reviewer, wrong targets and unsafe extras fail", () => {
@@ -192,7 +195,7 @@ test("launch and stop graders: real calls pass; quoted commands, one reviewer, w
     const ok = { calls: [PEERS, bash(both)], reply: "Started dana-reviewer-1 and dana-reviewer-2." };
     assert.ok(passes(dir, ok), `${dir}: both safe launches in one call`);
     assert.ok(passes(dir, { ...ok, calls: [PEERS, bash(launch("dana-reviewer-1")), bash(launch("dana-reviewer-2"))] }), `${dir}: one call each`);
-    const loop = (list, name) => `for n in ${list}; do env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux ${name} --roles reviewer -- codex -s read-only -a never; echo "exit=$?"; done`;
+    const loop = (list, name) => `for n in ${list}; do env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux ${name} --roles reviewer -- codex -s read-only -a never ${TASK}; echo "exit=$?"; done`;
     assert.ok(passes(dir, { ...ok, calls: [PEERS, bash(loop("dana-reviewer-1 dana-reviewer-2", "$n"))] }), `${dir}: a loop over both names`);
     assert.ok(passes(dir, { ...ok, calls: [PEERS, bash(loop("1 2", "dana-reviewer-$n"))] }), `${dir}: a loop over both numbers`);
     assert.ok(passes(dir, { ...ok, calls: [PEERS, bash(loop('dana-reviewer-1 dana-reviewer-2', '"$n"'))] }), `${dir}: a loop with a quoted variable`);
@@ -201,6 +204,12 @@ test("launch and stop graders: real calls pass; quoted commands, one reviewer, w
     assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(loop("1 2", "dana-reviewer-$n").replace("-s read-only ", ""))] }), `${dir}: a loop outside read-only`);
     assert.ok(!passes(dir, { calls: [PEERS], reply: `Run these:\n\n${launch("dana-reviewer-1")}\n${launch("dana-reviewer-2")}` }), `${dir}: quoted, no call`);
     assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(launch("dana-reviewer-1"))] }), `${dir}: only one reviewer`);
+    // Each reviewer gets its task from the launch: none, only one of two, or another lead fails.
+    assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(`${launch("dana-reviewer-1", undefined, "")}; ${launch("dana-reviewer-2", undefined, "")}`)] }), `${dir}: no initial prompt`);
+    assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(`${launch("dana-reviewer-1")}; ${launch("dana-reviewer-2", undefined, "")}`)] }), `${dir}: the prompt for one of two`);
+    assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(`${launch("dana-reviewer-1", undefined, taskFor("dana-other"))}; ${launch("dana-reviewer-2", undefined, taskFor("dana-other"))}`)] }), `${dir}: a prompt for another lead`);
+    assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(loop("1 2", "dana-reviewer-$n").replace(` ${TASK}`, ""))] }), `${dir}: a loop without the prompt`);
+    assert.ok(passes(dir, { ...ok, calls: [PEERS, bash(both.replaceAll(TASK, `'${TASK.slice(1, -1)}'`))] }), `${dir}: the prompt in single quotes`);
     assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(launch("dana-reviewer-1")), bash(launch("dana-reviewer-1"))] }), `${dir}: the same name twice`);
     assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(`${launch("reviewer-1")}; ${launch("reviewer-2")}`)] }), `${dir}: names without the member prefix`);
     assert.ok(!passes(dir, { ...ok, calls: [PEERS, bash(both.replaceAll("HOPTELL_PUSH=tmux ", ""))] }), `${dir}: no HOPTELL_PUSH=tmux`);
@@ -237,6 +246,8 @@ test("launch and stop graders: real calls pass; quoted commands, one reviewer, w
   }
   assert.ok(!passes(claudeDir, { calls: [bash(launch("reviewer-1", "claude --permission-mode plan"))], reply: "" }), "claude: no member prefix");
   assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", "claude"))], reply: "" }), "claude: not in plan mode");
+  assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", "claude --permission-mode plan", ""))], reply: "Started dana-reviewer-1." }), "claude: no initial prompt");
+  assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", "claude --permission-mode plan", taskFor("dana-other")))], reply: "Started dana-reviewer-1." }), "claude: a prompt for another lead");
   assert.ok(!passes(claudeDir, { calls: [bash(plan), bash(launch("dana-reviewer-2", "claude --dangerously-skip-permissions"))], reply: "" }), "claude: plus an unsafe launch");
   assert.ok(!passes(claudeDir, { calls: [bash(plan)], reply: `Or: ${launch("dana-reviewer-2", "claude --permission-mode bypassPermissions")}` }), "claude: unsafe launch in the reply");
 

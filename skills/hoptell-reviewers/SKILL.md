@@ -34,9 +34,14 @@ review requests and follow-up messages. A completed one-shot `codex exec` run ca
 a later notice.
 
 ```sh
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 ```
+
+- The quoted prompt at the end is the user's instruction to the reviewer: it makes review
+  requests from this session the reviewer's task. hoptell tells every agent to handle peer
+  requests only within the task its user gave it, so a reviewer started without this prompt
+  asks the user whether it may review. Put this session's own name in place of `alice-lead`.
 
 - `-s read-only` keeps Codex in its read-only sandbox, and `-a never` means Codex never asks to
   leave it. Use `-a never` only together with `-s read-only`.

@@ -129,7 +129,7 @@ test("hardening shape: no -s/--sandbox/sandbox_mode; the sandbox maps to extends
   assert.match(line, /default_permissions="<PROFILE_ID>"/);
   assert.match(line, /permissions\.<PROFILE_ID>\.filesystem=<DENY_TABLE>/);
   assert.doesNotMatch(line, /containment/i);
-  // The shipped gates: hardening is recorded (0.162.1), so the view does not say it is refused;
+  // The shipped gates: hardening is recorded (0.164.0), so the view does not say it is refused;
   // a table without the hardening entry does.
   assert.doesNotMatch(commandLines(ro({ ...HARD, folders: { roots: ["/w"], default: "/w" } })).headless, /refused for now/);
   assert.match(commandLines(ro({ ...HARD, folders: { roots: ["/w"], default: "/w" } }), { gates: UNGATED }).headless, /refused for now: adapter_gate_unverified/);

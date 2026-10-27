@@ -50,7 +50,13 @@ export async function device(t, w, member, { sessions = [member], dir = tmpDir(t
       deliver: async (m) => void got.push(m),
       onTransfer: async (x) => {
         const r = await d.staging.intake(x);
-        if (r.fetch && autoFetch) d.fetches.push(d.staging.fetch(r.t_id, (f) => client.rpc(f)));
+        if (r.fetch && autoFetch) {
+          const p = d.staging.fetch(r.t_id, (f) => client.rpc(f));
+          // Handled here, as lib/transfers.js does: an announcement delivered again (a slow run)
+          // starts another fetch, whose injected crash no test awaits. Tests read `fetches`.
+          p.catch(() => {});
+          d.fetches.push(p);
+        }
         return r;
       },
     });

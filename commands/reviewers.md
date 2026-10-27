@@ -12,7 +12,8 @@ Arguments: $ARGUMENTS
 - The first argument is how many reviewers to start (default 1). The second is the agent:
   `codex` (default) or `claude`.
 - Start Codex with `-s read-only -a never` and Claude Code with `--permission-mode plan`, unless
-  the user asks for edits.
+  the user asks for edits. End each launch with the initial prompt from the skill, naming this
+  session as the lead, so that its review requests are the reviewer's task.
 - Pick names that fit this session's member prefix, start the reviewers, help the user see them
   in their own terminal, and wait until `list_peers` shows them online.
 - Report the names and how to attach to each one.

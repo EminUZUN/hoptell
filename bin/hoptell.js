@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HOSTNAME, NAME_RE, NAME_RULE, REF_RE, checkName, defaultHome, envAuth, envContactsSelf, envCredentialStore, envNotify, envSwitch, loadEnv, parseProtocol, parseRoles } from "../lib/config.js";
+import { HOSTNAME, NAME_RE, NAME_RULE, REF_RE, checkName, defaultHome, envAuth, envContactsSelf, envCredentialStore, envNotify, envSwitch, loadEnv, parseProtocol, parseRoles, testBarrier } from "../lib/config.js";
 import { profileKey } from "../lib/profiles.js";
 import { memberOfStoreDir, storeParts } from "../lib/session.js";
 import { errnoWords, plural, wrap } from "../lib/words.js";
@@ -19,7 +19,7 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
     if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
     loadEnv();
     const wake = await import("../lib/wake.js");
-    code = wake[HOOKS[process.argv[2]]]({ home: defaultHome(process.env, os.homedir()), env: process.env, barrier: process.env.HOPTELL_WAKE_TEST_BARRIER || null });
+    code = wake[HOOKS[process.argv[2]]]({ home: defaultHome(process.env, os.homedir()), env: process.env, barrier: testBarrier(process.env, "WAKE") });
   } catch {
     code = 0;
   }
@@ -361,7 +361,7 @@ try {
     }
     case "grants": {
       // grants [show] | allow <selector> [--until <seconds>] | deny <selector> | deny-forever member:<id>
-      //        | remove <selector> | default allow|deny | visible all|grantees   (publish with --yes)
+      //        | remove <selector> | default allow|deny | visible all|grantees | publish   (publish with --yes)
       const [sub = "show", arg] = args.filter((a, i) => !a.startsWith("--") && !["--until", "--rev", "--relay"].includes(args[i - 1]));
       // A selector the relay would refuse is refused before the preview, not only at --yes.
       if (["allow", "deny", "deny-forever", "remove"].includes(sub) && arg !== undefined) {
@@ -371,8 +371,8 @@ try {
         }
       }
       // The command's shape, --until and --rev are checked before anything is opened or asked.
-      const grantsUsage = "usage: hoptell grants [show] | allow|deny <'*'|group:<name>|member:<id>> [--until <seconds>] | deny-forever member:<id> | remove <selector> | default allow|deny | visible all|grantees [--yes --rev N]";
-      const shaped = sub === "show" || (["allow", "deny", "remove"].includes(sub) && arg) || (sub === "deny-forever" && arg?.startsWith("member:")) || (sub === "default" && ["allow", "deny"].includes(arg)) || (sub === "visible" && ["all", "grantees"].includes(arg));
+      const grantsUsage = "usage: hoptell grants [show] | allow|deny <'*'|group:<name>|member:<id>> [--until <seconds>] | deny-forever member:<id> | remove <selector> | default allow|deny | visible all|grantees | publish [--yes --rev N]";
+      const shaped = sub === "show" || (sub === "publish" && arg === undefined) || (["allow", "deny", "remove"].includes(sub) && arg) || (sub === "deny-forever" && arg?.startsWith("member:")) || (sub === "default" && ["allow", "deny"].includes(arg)) || (sub === "visible" && ["all", "grantees"].includes(arg));
       if (!shaped) {
         const needs = { allow: "a selector", deny: "a selector", remove: "a selector", "deny-forever": "a member:<id> selector", default: "allow or deny", visible: "all or grantees" }[sub];
         fail(`${needs ? `grants ${sub} needs ${needs}` : `unknown grants command ${JSON.stringify(String(sub).slice(0, 40))}`}\n${grantsUsage}`, 2);
@@ -383,7 +383,14 @@ try {
       await selectRelay();
       const c = await connect("send");
       try {
-        const cur = (await c.rpc({ type: "grants_get" })).grants;
+        const got = await c.rpc({ type: "grants_get" });
+        const cur = got.grants;
+        // After a relay restore that lost the access state (design 4.4), the relay waits for this
+        // member to publish its grants again: until then, sends to it fail as for an unknown name.
+        const pendingNote = () =>
+          got.pending
+            ? `\nThe relay was restored from a backup and lost its record of your latest grants. Until you publish them again,\nsends to your sessions fail with "unknown peer" and queued messages wait. If the grants above are what you want,\npublish them as they are with: hoptell grants publish --yes --rev ${cur.revision}\n(or change them first with the commands in hoptell grants --help).`
+            : "";
         const show = (g) => {
           console.log(`Revision ${g.revision ?? "?"}: default ${g.default}; visible to ${g.visible === "grantees" ? "those you allow only" : "everyone"}.`);
           for (const e of g.entries) console.log(`  ${e.action.padEnd(5)} ${e.selector}${e.until ? ` until ${new Date(e.until).toISOString()}` : ""}${e.requests === "blocked" ? " (no contact requests)" : ""}`);
@@ -391,6 +398,7 @@ try {
         };
         if (sub === "show") {
           show(cur);
+          if (got.pending) console.log(pendingNote());
           break;
         }
         const others = (sel) => cur.entries.filter((e) => e.selector !== sel);
@@ -402,6 +410,7 @@ try {
         else if (sub === "remove" && arg) next = { ...cur, entries: others(arg) };
         else if (sub === "default" && ["allow", "deny"].includes(arg)) next = { ...cur, default: arg };
         else if (sub === "visible" && ["all", "grantees"].includes(arg)) next = { ...cur, visible: arg };
+        else if (sub === "publish") next = { ...cur }; // the same grants again (after a relay restore)
         else fail(grantsUsage, 2);
         console.log("These grants say who may reach your sessions through this relay (your machine's contacts decide too).");
         show({ ...next, revision: `${cur.revision} -> ${cur.revision + 1}` });
@@ -418,7 +427,7 @@ try {
         if (rev === undefined || !/^\d+$/.test(rev)) fail(`--yes needs --rev <revision> from the preview (now ${cur.revision})`, 2);
         if (Number(rev) !== cur.revision) fail(`the grants changed since that preview (revision ${rev}, now ${cur.revision}): look at the preview again`, 1);
         const r = await c.rpc({ type: "grants_put", base_revision: Number(rev), grants: { ...rest, entries } });
-        console.log(`Published (revision ${r.revision}).`);
+        console.log(`Published (revision ${r.revision}).${got.pending ? " The relay delivers messages to your sessions again." : ""}`);
       } catch (e) {
         if (e.code === "stale") fail("the grants changed meanwhile (another session or machine): run the command again", 1);
         throw e;
@@ -1135,6 +1144,8 @@ try {
         else replyTo = parseRef(rest[1]);
         rest = rest.slice(2);
       }
+      // A name never starts with "-": before the recipient, anything else is a mistyped option.
+      if (rest[0]?.startsWith("-") && rest[0] !== "--") fail(`unknown option ${rest[0].slice(0, 40)} for hoptell send (see hoptell send --help); nothing was sent`, 2);
       if (rest[0] === "--") rest = rest.slice(1);
       let [to, ...words] = rest;
       if (!to || !words.length) fail("send needs a recipient and a message\nusage: hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>", 2);
@@ -1237,6 +1248,26 @@ try {
       const { ownSelf, stamp } = await import("../lib/quarantine.js");
       const review = await import("../lib/reviewsets.js");
       const reviewSets = new review.ReviewSetStore({ home: home() });
+      // A message the contacts hold ends the wait as in a session (the fixed held text, never its
+      // body), once: a later wait does not report the same hold again.
+      const notices = await import("../lib/notices.js");
+      let ended = false;
+      const heldText = (place) => {
+        const fresh = contacts.heldUnreported({ store: place.dir });
+        return fresh.length ? { fresh, note: notices.heldNote(contacts.heldFor({ store: place.dir })) } : null;
+      };
+      const reportHeld = (place, first) => {
+        const h = heldText(place);
+        if (!h) return false;
+        process.stdout.write(`${first ? notices.HELD_WAIT : ""}${h.note}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : contacts.noteHeldReported({ store: place.dir }, h.fresh)));
+        return true;
+      };
+      const finish = () => {
+        if (ended) return;
+        ended = true;
+        if (holdAt) reportHeld(holdAt, false); // held after the printed messages: named after them
+        done();
+      };
       const named = (e) => {
         // hoptell wait can also wait for the name instead of stopping.
         if (/^the name is in use by another session: /.test(e.message) && !waitForName) e.message += " (or use --wait-for-name)";
@@ -1253,22 +1284,34 @@ try {
             const v = contacts.verdict(m, place.session, null, { self: client.protocolInUse === 2 ? ownSelf(client.member) : null });
             if (v !== "allow") {
               await contacts.hold(place.dir, place.session, m, v);
-              return confirm();
+              confirm();
+              if (!idle && !ended && reportHeld(place, true)) {
+                ended = true;
+                clearTimeout(timer);
+                done();
+              }
+              return;
             }
+            if (ended) return; // the wait already ended: the relay keeps it for a later receiver
             clearTimeout(timer);
             // Confirm only once printed; on a write error the relay keeps the message. Printed, it
             // reached this session: this member may reply to it once even where the sender's
             // grants would refuse it (a reply allowance), as with an agent session.
             process.stdout.write(`${format(m)}\n`, (err) => (err ? fail(`cannot write output: ${err.message}`) : confirm({ released: true })));
             clearTimeout(idle);
-            idle = setTimeout(done, 500); // also collect messages arriving together
+            idle = setTimeout(finish, 500); // also collect messages arriving together
           })
           // A storage problem leaves the message unconfirmed: the relay keeps it for a later receiver.
           .catch((e) => console.error(`hoptell: a message could not be stored and stays with the relay: ${e.message}`));
       }, secs * 1000, { waitForName, replace }).catch(named);
       if (!idle) {
-        timer = setTimeout(() => {
-          console.log(`No messages within ${secs}s.`);
+        timer = setTimeout(async () => {
+          if (ended) return;
+          ended = true;
+          // Messages held for this name and not released yet are still listed, as by listen.
+          const place = await holdPlace(c).catch(() => null);
+          const held = place ? notices.heldNote(contacts.heldFor({ store: place.dir })) : "";
+          console.log(`No messages within ${secs}s.${held}`);
           c.close();
         }, Math.max(0, deadline - Date.now()));
       }
@@ -1306,7 +1349,7 @@ try {
       // The id's form is checked before the apply lock creates anything in the home.
       if (ids.length && !REF_RE.test(ids[0].toLowerCase())) fail(`"${ids[0].slice(0, 80)}" is not a proposal id: use an id that hoptell apply lists`, 2);
       const h = home();
-      const pause = a.barrierFor(process.env.HOPTELL_APPLY_TEST_BARRIER || null);
+      const pause = a.barrierFor(testBarrier(process.env, "APPLY"));
       if (!recovering && !ids.length) {
         const list = a.listPending(h);
         if (!list.length) console.log("No proposals are waiting for you.");
@@ -1457,8 +1500,10 @@ try {
       // idle agent wakes, once: a restarted listener does not exit again for the same hold.
       await contacts.adopt(); // held messages a crash left without their request join it first
       let lastDir = null;
+      let lastState = null;
       while (!out) {
         const r = resolve();
+        lastState = r.state;
         if (r.state === "legacy") {
           // Protocol 1: the messages the owner released (legacy store), then the legacy inbox, each
           // file claimed until it is printed or moved to quarantine (a failed move keeps it).
@@ -1540,7 +1585,18 @@ try {
       }
       if (!out) {
         const held = lastDir ? notices.heldNote(contacts.heldFor({ store: lastDir })) : "";
-        process.stdout.write(`No messages within ${secs}s.${held}\nStart the listener again to keep receiving.\n`);
+        // Files hoptell 0.2 left for this name are read here only for a protocol-1 relay; else
+        // they wait for a session with this name (lib/engine.js moves them), so say so.
+        let left = "";
+        if (!bySession && lastState !== "legacy") {
+          const dir = path.join(home(), "inbox", target);
+          let n = 0;
+          try {
+            n = fs.readdirSync(dir).filter((f) => /^\d{13}-\d{8}-[0-9a-f]{8}\.json$/.test(f)).length;
+          } catch {}
+          if (n) left = `\n${n} message file${n === 1 ? "" : "s"} that hoptell 0.2 left for ${target} ${n === 1 ? "waits" : "wait"} in ${dir}: a session with HOPTELL_NAME=${target} reads them, or moves them into its own storage when it connects to a current relay.`;
+        }
+        process.stdout.write(`No messages within ${secs}s.${held}${left}\nStart the listener again to keep receiving.\n`);
         break;
       }
       if (out.held) {

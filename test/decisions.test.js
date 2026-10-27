@@ -345,11 +345,44 @@ test("settings: a crash during writeDurable leaves the old file; the restart lis
   writeRecord(filesFor(dir, "k1").runtime, { key: "k1", peer: "bob", generation: 1, mcp: { pid: process.pid, start: processInfo(process.pid).start } });
   writeRecord(filesFor(dir, "k2").runtime, { key: "k2", peer: "gone", generation: 1, mcp: { pid: 999999, start: "Thu Jan  1 00:00:00 1970" } });
   const done = await decisions.settings.set({ home, ctx, key: "relays.lab.name", value: "me", token: cur.token });
-  assert.deepEqual(done.restart, ["bob"]);
+  // "maybe" when this process started within a second of the write (startedBefore, below).
+  assert.deepEqual([...done.restart, ...done.restartMaybe], ["bob"]);
   const rows = await decisions.settings.list({ home, ctx });
-  assert.deepEqual(rows.find((r) => r.key === "relays.lab.name").restart, ["bob"]);
+  const row = rows.find((r) => r.key === "relays.lab.name");
+  assert.deepEqual([...row.restart, ...row.restartMaybe], ["bob"]);
   await openContacts(home, { notify: false });
-  assert.deepEqual((await decisions.settings.list({ home, ctx })).find((r) => r.key === "contacts.default").restart, [], "the policy is read again without a restart");
+  const policy = (await decisions.settings.list({ home, ctx })).find((r) => r.key === "contacts.default");
+  assert.deepEqual([...policy.restart, ...policy.restartMaybe], [], "the policy is read again without a restart");
+});
+
+test("settings: a session started in the same second as the change may need a restart; the list says so, not that it does", async (t) => {
+  // Start times have whole-second resolution: the true start is in [started, started + 1000).
+  assert.equal(decisions.startedBefore(10_000, 9_000), null, "started after the change");
+  assert.equal(decisions.startedBefore(10_000, 10_000), null, "the change in its first millisecond: started before or with it");
+  assert.equal(decisions.startedBefore(10_000, 10_400), "maybe");
+  assert.equal(decisions.startedBefore(10_000, 10_999), "maybe");
+  assert.equal(decisions.startedBefore(10_000, 11_000), "yes");
+  assert.equal(decisions.startedBefore(null, 11_000), null, "an unknown start is not guessed");
+  // The same on a real record: this process, with the file's time set around its start.
+  const { home, ctx, relaysFile } = settingsHome(t);
+  const { startedAtMs } = await import("../lib/host.js");
+  const started = startedAtMs(processInfo(process.pid).start);
+  assert.notEqual(started, null, "this platform reports process start times");
+  writeRecord(filesFor(ensureWakeDir(home), "k1").runtime, { key: "k1", peer: "bob", generation: 1, mcp: { pid: process.pid, start: processInfo(process.pid).start } });
+  writeRecord(filesFor(ensureWakeDir(home), "k2").runtime, { key: "k2", peer: "", generation: 1, mcp: { pid: process.pid, start: processInfo(process.pid).start } });
+  const at = async (mtime) => {
+    fs.utimesSync(relaysFile, new Date(mtime), new Date(mtime));
+    const r = (await decisions.settings.list({ home, ctx })).find((x) => x.key === "relays.lab.name");
+    return { restart: r.restart, maybe: r.restartMaybe };
+  };
+  const unnamed = `a session without a name yet (MCP server pid ${process.pid})`;
+  assert.deepEqual(await at(started - 5000), { restart: [], maybe: [] });
+  const same = await at(started + 500);
+  assert.deepEqual(same.restart, [], "never claimed within the same second");
+  assert.deepEqual(new Set(same.maybe), new Set(["bob", unnamed]));
+  const later = await at(started + 3000);
+  assert.deepEqual(new Set(later.restart), new Set(["bob", unnamed]));
+  assert.deepEqual(later.maybe, []);
 });
 
 test("encryption-violation: plaintext from a contact whose encryption is required is shown only; the setting releases it", async (t) => {

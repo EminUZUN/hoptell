@@ -144,6 +144,12 @@ test("an option without its value is refused (exit 2) and nothing runs or change
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stderr, /^hoptell: --[a-z-]+ needs a value \(see hoptell send --help\); nothing was sent/);
   }
+  // A name never starts with "-": an unknown option before the recipient is refused, not sent to.
+  for (const args of [["send", "--bogus", "bob", "hi"], ["send", "--ttl", "10m", "-x", "bob", "hi"]]) {
+    const r = s.run(args, relay);
+    assert.equal(r.status, 2, args.join(" "));
+    assert.match(r.stderr, /^hoptell: unknown option -{1,2}[a-z]+ for hoptell send \(see hoptell send --help\); nothing was sent/);
+  }
   assert.deepEqual(tree(s.root), before, "nothing changed");
   assert.equal(fs.existsSync(path.join(s.root, "stub.log")), false, "no service manager was called");
 });
@@ -328,7 +334,13 @@ test("telegram: a word or option a subcommand does not take is refused (exit 2)"
   for (const argv of [["pair", "--all"], ["status", "extra"], ["run", "now"], ["sessions", "x"], ["unpair", "x"], ["key", "next", "x"], ["setup", "x"]]) {
     errs.length = 0;
     assert.equal(await telegramCommand(argv, deps), 2, argv.join(" "));
-    assert.match(errs.join("\n"), /usage:/, argv.join(" "));
+    assert.match(errs.join("\n"), new RegExp(`^hoptell telegram: ${argv[0]} does not take ("${argv.at(-1)}"|${argv.at(-1)})[ ;].*\\(see hoptell telegram --help\\)$`), argv.join(" "));
+  }
+  // An option of another subcommand names the one that takes it.
+  for (const [argv, owner] of [[["run", "--name", "x"], "setup"], [["status", "--name", "x"], "setup"], [["pair", "--all"], "unpair"]]) {
+    errs.length = 0;
+    assert.equal(await telegramCommand(argv, deps), 2, argv.join(" "));
+    assert.equal(errs.join("\n"), `hoptell telegram: ${argv[0]} does not take ${argv[1]}; ${argv[1]} is an option of telegram ${owner} (see hoptell telegram --help)`);
   }
   assert.equal(await telegramCommand(["unpair"], deps), 0);
 });

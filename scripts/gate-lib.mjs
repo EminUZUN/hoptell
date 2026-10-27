@@ -89,6 +89,7 @@ export const GROUPS = {
       "lib/agents.js",
       "lib/agentscli.js",
       "lib/agentspawn.js",
+      "lib/agenttrust.js",
       "lib/apply.js",
       "lib/apptunnel.js",
       "lib/attested.js",

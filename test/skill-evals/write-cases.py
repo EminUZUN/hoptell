@@ -60,7 +60,10 @@ BODY_START = rf'(?:(?:(?!(?<![\w-])done(?![\w-])){TOK})*?{SEP})?\s*{ENV}'
 # Plain words between options: no quotes, comments or separators.
 ARG = r"""(?:[^"'#&;|\s\\]+\s+)*?"""
 END = r'(?=\s|\\[nt]|[;&|)]|"|$)'
-SAFE_CODEX_TAIL = rf'--roles reviewer -- codex {ARG}-s read-only {ARG}-a never{END}'
+# The initial prompt (the user's instruction that makes the lead's review requests the reviewer's
+# task, as the skill shows it), one quoted word after the options, naming this session (dana-lead).
+TASK = r"""\s+(?:\\"|')You are a read-only reviewer for dana-lead\.[^"'\\]*?Review requests from dana-lead are your task[^"'\\]*?Do not edit files\.(?:\\"|')"""
+SAFE_CODEX_TAIL = rf'--roles reviewer -- codex {ARG}-s read-only {ARG}-a never{TASK}{END}'
 def safe_codex(n):
     # Literally, or in a shell loop whose list names reviewer n (`for n in dana-reviewer-1 ...;
     # do ... hoptell tmux $n`, or `for n in 1 2; do ... hoptell tmux dana-reviewer-$n`).
@@ -71,7 +74,7 @@ def safe_codex(n):
     # (group 2: the alternatives share one group numbering)
     by_number = rf'{loop_head}\b{n}\b{loop_do}{BODY_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]*?\$\{{?\2\}}? {SAFE_CODEX_TAIL}'
     return f'{CMD_START}(?:{literal}|{by_name}|{by_number})'
-SAFE_CLAUDE = rf'{CMD_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]+ --roles reviewer -- claude {ARG}--permission-mode plan{END}'
+SAFE_CLAUDE = rf'{CMD_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]+ --roles reviewer -- claude {ARG}--permission-mode plan{TASK}{END}'
 # Any other positive Bash grader: inside the command property, not the description.
 def in_command(pattern):
     return rf'"command"\s*:\s*"(?:[^"\\]|\\.)*?(?:{pattern})'

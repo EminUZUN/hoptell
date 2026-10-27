@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { forgetSave, journalFile, listJournals, readJournal, recoverSave, saveTransfer } from "../lib/transfersave.js";
+import { forgetSave, journalFile, listJournals, readJournal, recoverSave, sameShown, saveTransfer, shownOf } from "../lib/transfersave.js";
 import { incomingDir } from "../lib/transferin.js";
 import { allowTransfers, device, pattern, sendFile, sha, transferRelay, until } from "./transfer-helpers.js";
 import { tmpDir } from "./mls-helpers.js";
@@ -165,6 +165,72 @@ test("TR7: recovery at each journal phase; the temporary file renamed away is fo
     assert.deepEqual(temps(s.out), [], point);
     assert.equal(entry(s).state, "removed");
   }
+});
+
+test("TR7: recovery never acts on a recycled inode: an unrelated file with the recorded device and inode, at the temporary path or the destination, is reported, never deleted or taken as saved", async (t) => {
+  // Linux reuses a freed inode number at once. Each case writes the journal as if an unrelated
+  // file had received the recorded inode, which is otherwise not deterministic.
+  const recycled = (s, file) => {
+    const j = readJournal(s.bob.dir, s.t);
+    const st = fs.lstatSync(file, { bigint: true });
+    fs.writeFileSync(journalFile(s.bob.dir, s.t), JSON.stringify({ ...j, temp_id: { ...j.temp_id, dev: String(st.dev), ino: String(st.ino) } }));
+    return j;
+  };
+  // At the temporary path.
+  {
+    const s = await staged(t);
+    const dest = path.join(s.out, "c.txt");
+    await assert.rejects(save(s, dest, { fault: crash("after-created") }), /crash/);
+    const j = readJournal(s.bob.dir, s.t);
+    fs.unlinkSync(j.temp);
+    fs.writeFileSync(j.temp, "someone else's file");
+    recycled(s, j.temp);
+    assert.equal((await recover(s)).state, "attention");
+    assert.equal(fs.readFileSync(j.temp, "utf8"), "someone else's file", "not deleted");
+    assert.equal(entry(s).state, "staged", "the staging copy is kept");
+  }
+  // At the destination.
+  {
+    const s = await staged(t);
+    const dest = path.join(s.out, "d.txt");
+    await assert.rejects(save(s, dest, { fault: crash("after-created") }), /crash/);
+    const j = readJournal(s.bob.dir, s.t);
+    fs.unlinkSync(j.temp);
+    fs.writeFileSync(dest, "someone else's file");
+    recycled(s, dest);
+    assert.equal((await recover(s)).state, "attention");
+    assert.equal(fs.readFileSync(dest, "utf8"), "someone else's file");
+    assert.equal(entry(s).state, "staged", "not taken as saved: the staging copy is kept");
+  }
+  // A record without the size and SHA-256 cannot tell a recycled inode apart: reported.
+  {
+    const s = await staged(t);
+    const dest = path.join(s.out, "e.txt");
+    await assert.rejects(save(s, dest, { fault: crash("after-created") }), /crash/);
+    const j = readJournal(s.bob.dir, s.t);
+    fs.writeFileSync(journalFile(s.bob.dir, s.t), JSON.stringify({ ...j, temp_id: { dev: j.temp_id.dev, ino: j.temp_id.ino } }));
+    assert.equal((await recover(s)).state, "attention");
+    assert.ok(fs.existsSync(j.temp), "the temporary file is kept");
+  }
+});
+
+test("TR7: with --overwrite, a same-size change within the same millisecond after confirmation is detected", async (t) => {
+  const s = await staged(t);
+  const dest = path.join(s.out, "same-size.txt");
+  fs.writeFileSync(dest, "shown");
+  fs.utimesSync(dest, 1000, 1000); // a whole second, so 500 microseconds later is the same millisecond
+  const confirm = async () => (fs.writeFileSync(dest, "SWAPD"), fs.utimesSync(dest, 1000.0005, 1000.0005), true);
+  await assert.rejects(save(s, dest, { overwrite: true, confirm }), (e) => e.code === "changed");
+  assert.equal(fs.readFileSync(dest, "utf8"), "SWAPD");
+  assert.equal(entry(s).state, "staged");
+});
+
+test("TR7: the shown file is compared to the nanosecond: the same device, inode, size and millisecond times with other nanoseconds is a change", () => {
+  const st = (mtimeNs, ctimeNs) => ({ dev: 1n, ino: 2n, size: 5n, mtimeNs, ctimeNs, mtimeMs: mtimeNs / 1000000n, ctimeMs: ctimeNs / 1000000n });
+  const shown = shownOf(st(1000000001n, 1000000001n));
+  assert.equal(sameShown(st(1000000001n, 1000000001n), shown), true);
+  assert.equal(sameShown(st(1000999999n, 1000000001n), shown), false, "mtime within the same millisecond");
+  assert.equal(sameShown(st(1000000001n, 1000999999n), shown), false, "ctime within the same millisecond");
 });
 
 test("TR7: crashes after the O_EXCL create, during the fill, after the sync and hash, before the created write, and that write failing keep the file and the journal as ambiguous; after the created write recovery removes the file by inode", async (t) => {

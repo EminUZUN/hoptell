@@ -25,6 +25,10 @@ Thanks for helping. hoptell aims to stay small, so please keep that in mind.
      the newest npm release older than this checkout's version and tests all eight combinations
      of old and current relays, senders and receivers. To choose a release, use
      `npm run test:compat -- --version x.y.z`. It requires network access, but no model logins.
+   - Race and crash tests pause hoptell at named steps with `HOPTELL_APPLY_TEST_BARRIER`,
+     `HOPTELL_READER_TEST_BARRIER` and `HOPTELL_WAKE_TEST_BARRIER`. hoptell reads them only in
+     a source checkout (with `test/` next to `lib/`). The npm package has no `test/` folder, so
+     an installed hoptell ignores them.
 3. Keep commits focused, and describe *why* in the message.
 4. Update README.md and CHANGELOG.md when behavior or settings change, PRIVACY.md when data
    handling changes, and .env.example when a setting is added.

@@ -2,7 +2,7 @@
 // "Adapters"): the generated argument lists against fixtures, refused flags, the run-only server
 // in each CLI's own configuration, the per-spawn help check, the version warning, the approval
 // view's command lines. No real CLI is run here; the help texts are fixtures captured from
-// codex-cli 0.162.1 and Claude Code 2.1.296.
+// codex-cli 0.164.0 and Claude Code 2.1.296.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -18,11 +18,11 @@ import { agentsCommand } from "../lib/agentscli.js";
 
 const FIX = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const HELP = {
-  codexExec: fs.readFileSync(path.join(FIX, "help", "codex-exec-0.162.1.txt"), "utf8"),
-  codex: fs.readFileSync(path.join(FIX, "help", "codex-0.162.1.txt"), "utf8"),
+  codexExec: fs.readFileSync(path.join(FIX, "help", "codex-exec-0.164.0.txt"), "utf8"),
+  codex: fs.readFileSync(path.join(FIX, "help", "codex-0.164.0.txt"), "utf8"),
   claude: fs.readFileSync(path.join(FIX, "help", "claude-2.1.296.txt"), "utf8"),
-  // `codex features list` with the run's -c features.<name>=false overrides (0.162.1).
-  codexFeatures: fs.readFileSync(path.join(FIX, "help", "codex-features-0.162.1.txt"), "utf8"),
+  // `codex features list` with the run's -c features.<name>=false overrides (0.164.0).
+  codexFeatures: fs.readFileSync(path.join(FIX, "help", "codex-features-0.164.0.txt"), "utf8"),
 };
 const EXPECTED = JSON.parse(fs.readFileSync(path.join(FIX, "agent-adapter-plans.json"), "utf8"));
 
@@ -123,20 +123,20 @@ test("adapter gates: Gemini and agy and Codex in tmux are refused for MCP isolat
   assert.equal(gateRefusal("agy", "headless"), "mcp_isolation_unverified");
   assert.equal(gateRefusal("agy", "tmux"), "mcp_isolation_unverified");
   assert.equal(gateRefusal("codex", "tmux"), "mcp_isolation_unverified");
-  // Codex headless passed its gates on one exact binary of 0.162.1 with the read-only argument
+  // Codex headless passed its gates on one exact binary of 0.164.0 with the read-only argument
   // shape (test/agents-gates.test.js checks the record): only that binary and shape run.
   const [b] = GATES.codex.headless.modes.plain.passed.binaries;
   const ro = gateShape(profileOf("codex", "read-only"), "headless");
   const facts = { version: b.version, digest: b.launcher, native: b.native, shape: ro };
   assert.equal(gateRefusal("codex", "headless"), null, "the approval view: not refused on every binary");
   assert.equal(gateRefusal("codex", "headless", facts), null);
-  assert.equal(gateRefusal("codex", "headless", { ...facts, version: "0.162.2" }), "adapter_gate_unverified", "another version");
+  assert.equal(gateRefusal("codex", "headless", { ...facts, version: "0.164.1" }), "adapter_gate_unverified", "another version");
   assert.equal(gateRefusal("codex", "headless", { ...facts, digest: "0".repeat(64) }), "adapter_gate_unverified", "another launcher");
   assert.equal(gateRefusal("codex", "headless", { ...facts, native: "0".repeat(64) }), "adapter_gate_unverified", "another native binary");
   assert.equal(gateRefusal("codex", "headless", { ...facts, native: null }), "adapter_gate_unverified", "no native binary found");
   assert.equal(gateRefusal("codex", "headless", { ...facts, shape: gateShape(profileOf("codex", "workspace-write"), "headless") }), "adapter_gate_unverified", "workspace-write was not gated");
   assert.equal(gateRefusal("codex", "headless", {}), "adapter_gate_unverified", "no facts");
-  assert.equal(GATES.codex.headless.modes.plain.family, "0.162");
+  assert.equal(GATES.codex.headless.modes.plain.family, "0.164");
   assert.equal(gateRefusal("claude", "headless"), "adapter_gate_unverified");
   assert.equal(gateRefusal("claude", "tmux"), "adapter_gate_unverified");
   assert.equal(gateRefusal("nope", "headless"), "adapter_gate_unverified");
@@ -178,23 +178,23 @@ test("help check: version and help are read from the binary, cached per digest a
   };
   const prof = profileOf("codex", "read-only");
   assert.throws(() => checkCli(w.home, prof, "headless", bin, { env: {} }), /PATH/);
-  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.162.1", HELP.codexExec) }), { version: "0.162.1", digest: digestOf(bin), native: null, untested: false });
+  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.164.0", HELP.codexExec) }), { version: "0.164.0", digest: digestOf(bin), native: null, untested: false, features: HELP.codexFeatures });
   assert.deepEqual(calls, ["--version", "exec --help", "features list"]);
   calls.length = 0;
-  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.162.1", "nothing") }), { version: "0.162.1", digest: digestOf(bin), native: null, untested: false }, "cached for this digest and version");
-  assert.deepEqual(calls, ["--version"]);
+  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.164.0", "nothing") }), { version: "0.164.0", digest: digestOf(bin), native: null, untested: false, features: HELP.codexFeatures }, "cached for this digest and version");
+  assert.deepEqual(calls, ["--version", "features list"], "the help is cached; the feature list is read every time");
   // Another version: read again; untested (not the version the tests ran against), but its help
   // still lists everything: warn and run (its gates decide separately).
-  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.170.0", HELP.codexExec) }), { version: "0.170.0", digest: digestOf(bin), native: null, untested: true });
+  assert.deepEqual(checkCli(w.home, prof, "headless", bin, { run: fake("0.170.0", HELP.codexExec) }), { version: "0.170.0", digest: digestOf(bin), native: null, untested: true, features: HELP.codexFeatures });
   // A changed binary with the same version string is checked again.
   fs.appendFileSync(bin, "# changed\n");
-  const r = checkCli(w.home, prof, "headless", bin, { run: fake("0.162.1", HELP.codexExec.replace(/-o, --output-last-message/g, "--last-message")) });
+  const r = checkCli(w.home, prof, "headless", bin, { run: fake("0.164.0", HELP.codexExec.replace(/-o, --output-last-message/g, "--last-message")) });
   assert.equal(r.code, "cli_flags_changed");
   assert.deepEqual(r.missing, ["-o"]);
   // The help cannot be read: refused, not assumed.
   const failing = checkCli(w.home, profileOf("codex", "workspace-write"), "tmux", bin, {
     run: (_c, a) => {
-      if (a[0] === "--version") return "codex-cli 0.162.1";
+      if (a[0] === "--version") return "codex-cli 0.164.0";
       throw Object.assign(new Error("x"), { code: "ETIMEDOUT" });
     },
   });
@@ -203,7 +203,7 @@ test("help check: version and help are read from the binary, cached per digest a
 });
 
 test("features check: every Codex feature the run turns off must be listed as off by `codex features list` with the same overrides; a missing row or one left on is cli_flags_changed", (t) => {
-  assert.deepEqual(featuresNotOff(HELP.codexFeatures, CODEX_FEATURES_OFF), [], "0.162.1 with the run's overrides");
+  assert.deepEqual(featuresNotOff(HELP.codexFeatures, CODEX_FEATURES_OFF), [], "0.164.0 with the run's overrides");
   // Codex ignores an unknown feature name: its row is simply missing.
   assert.deepEqual(featuresNotOff(HELP.codexFeatures, ["apps", "no_such_feature"]), ["feature no_such_feature (not in the feature list)"]);
   assert.deepEqual(featuresNotOff(HELP.codexFeatures.replace(/^(hooks\s+\S+\s+)false/m, "$1true"), CODEX_FEATURES_OFF), ["feature hooks stays on"]);
@@ -223,7 +223,7 @@ test("features check: every Codex feature the run turns off must be listed as of
   const w = agentsWorld(t);
   const bin = path.join(w.base, "codex");
   fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  const run = (_c, args) => (args[0] === "--version" ? "codex-cli 0.162.1" : args[0] === "features" ? HELP.codexFeatures.replace(/^computer_use .*\n/m, "") : HELP.codexExec);
+  const run = (_c, args) => (args[0] === "--version" ? "codex-cli 0.164.0" : args[0] === "features" ? HELP.codexFeatures.replace(/^computer_use .*\n/m, "") : HELP.codexExec);
   const r = checkCli(w.home, profileOf("codex", "read-only"), "headless", bin, { run });
   assert.equal(r.code, "cli_flags_changed");
   assert.deepEqual(r.missing, ["feature computer_use (not in the feature list)"]);
@@ -236,9 +236,9 @@ test("help check: the real path runs the binary with the given environment (a sh
   const help = path.join(w.base, "help.txt");
   fs.writeFileSync(help, HELP.codexExec);
   // #!/usr/bin/env sh: like the npm shims of codex and claude, it starts only with PATH set.
-  const features = path.join(FIX, "help", "codex-features-0.162.1.txt");
-  fs.writeFileSync(bin, `#!/usr/bin/env sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.162.1"; exit 0; fi\nif [ "$1 $2" = "exec --help" ]; then cat '${help}'; exit 0; fi\nif [ "$1 $2" = "features list" ]; then cat '${features}'; exit 0; fi\nexit 3\n`, { mode: 0o755 });
-  assert.deepEqual(checkCli(w.home, profileOf("codex", "read-only"), "headless", bin, { env: { PATH: "/usr/bin:/bin" } }), { version: "0.162.1", digest: digestOf(bin), native: null, untested: false });
+  const features = path.join(FIX, "help", "codex-features-0.164.0.txt");
+  fs.writeFileSync(bin, `#!/usr/bin/env sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.164.0"; exit 0; fi\nif [ "$1 $2" = "exec --help" ]; then cat '${help}'; exit 0; fi\nif [ "$1 $2" = "features list" ]; then cat '${features}'; exit 0; fi\nexit 3\n`, { mode: 0o755 });
+  assert.deepEqual(checkCli(w.home, profileOf("codex", "read-only"), "headless", bin, { env: { PATH: "/usr/bin:/bin" } }), { version: "0.164.0", digest: digestOf(bin), native: null, untested: false, features: HELP.codexFeatures });
   const r = checkCli(w.home, profileOf("codex", "read-only"), "tmux", bin, { env: { PATH: "/usr/bin:/bin" } });
   assert.equal(r.code, "cli_flags_changed", "the top-level help is not served by this fake");
 });
@@ -276,6 +276,47 @@ test("native binary: Codex's npm launcher starts one platform binary, found next
   assert.match(nativeBinary("codex", link).problem, /2 native codex binaries/);
 });
 
+test("help check: the cached help belongs to one native binary, and the feature list is read fresh with an empty CODEX_HOME and folder (the run ignores config.toml)", (t) => {
+  const w = agentsWorld(t);
+  const pkg = path.join(w.base, "lib", "node_modules", "@openai", "codex");
+  fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+  const launcher = path.join(pkg, "bin", "codex.js");
+  fs.writeFileSync(launcher, "#!/usr/bin/env node\n", { mode: 0o755 });
+  const vendor = path.join(pkg, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin");
+  fs.mkdirSync(vendor, { recursive: true });
+  const native = path.join(vendor, "codex");
+  fs.writeFileSync(native, "native-A", { mode: 0o755 });
+  const userHome = path.join(w.base, "user-codex");
+  fs.mkdirSync(userHome);
+  fs.writeFileSync(path.join(userHome, "config.toml"), "[features]\nnew_unreviewed_capability = false\n");
+  const calls = [];
+  let features = HELP.codexFeatures;
+  const run = (_command, args, opts = {}) => {
+    if (args[0] === "--version") return "codex-cli 0.164.0\n";
+    calls.push({ args: args.join(" "), opts, entries: opts.env?.CODEX_HOME && fs.existsSync(opts.env.CODEX_HOME) ? fs.readdirSync(opts.env.CODEX_HOME) : null });
+    return args[0] === "features" ? features : HELP.codexExec;
+  };
+  const prof = profileOf("codex", "read-only");
+  const env = { PATH: "/usr/bin:/bin", CODEX_HOME: userHome };
+  const a = checkCli(w.home, prof, "headless", launcher, { env, run });
+  assert.equal(a.native, digestOf(native));
+  const probe = calls.find((c) => c.args.startsWith("features"));
+  assert.notEqual(probe.opts.env.CODEX_HOME, userHome, "not the user's CODEX_HOME");
+  assert.deepEqual(probe.entries, [], "an empty one");
+  assert.equal(probe.opts.cwd, probe.opts.env.CODEX_HOME, "run from it, outside any project");
+  assert.equal(probe.opts.env.PATH, env.PATH, "otherwise the run's environment");
+  assert.equal(fs.existsSync(probe.opts.env.CODEX_HOME), false, "removed afterwards");
+  // Another native binary behind the same launcher and version: its help is read again, and its
+  // own feature list (a new feature on) is what the result carries.
+  calls.length = 0;
+  fs.writeFileSync(native, "native-B", { mode: 0o755 });
+  features = `${HELP.codexFeatures}new_unreviewed_capability                under development  true\n`;
+  const b = checkCli(w.home, prof, "headless", launcher, { env, run });
+  assert.equal(b.native, digestOf(native));
+  assert.deepEqual(calls.map((c) => c.args.split(" ")[0]), ["exec", "features"], "help and feature list read for the new native binary");
+  assert.match(b.features, /new_unreviewed_capability +under development +true/);
+});
+
 test("command: the profile's absolute path is checked; otherwise the adapter's binary on PATH", (t) => {
   const w = agentsWorld(t);
   const dir = path.join(w.base, "bin");
@@ -301,7 +342,7 @@ test("approval view: the generated command line for each mode, in the CLI and th
   assert.deepEqual(Object.keys(lines), ["headless", "tmux"]);
   assert.match(lines.headless, /codex exec --ignore-user-config --ignore-rules --ephemeral --json -s read-only -c 'approval_policy="never"' -c features\.apps=false (-c features\.\w+=false )+-c 'web_search="disabled"' -c agents\.max_threads=1 -C \S+ -o '<home>\/agents\/runs\/<run>\/result' .* -c 'mcp_servers\.hoptell\.default_tools_approval_mode="approve"' - < task/);
   assert.ok(lines.headless.includes('"mcp", "--run", "<run>", "--home", "<home>"'));
-  assert.match(lines.headless, / - < task {3}\(adapter gates passed on codex 0\.162\.1 \(launcher 61b0194f3bb6, native 74c6a6d263f4\); other binaries or arguments refused: adapter_gate_unverified\)$/);
+  assert.match(lines.headless, / - < task {3}\(adapter gates passed on codex 0\.164\.0 \(launcher 61b0194f3bb6, native d8990e3ee7ac\); other binaries need your one-time approval \(hoptell agents trust-cli\), other arguments are refused: adapter_gate_unverified\)$/);
   assert.match(commandLines(profileOf("codex", "workspace-write")).headless, /\(refused for this profile: its arguments \(sandbox workspace-write\) were not gated: adapter_gate_unverified\)$/);
   assert.match(lines.tmux, /-a on-request/);
   assert.match(lines.tmux, /\(refused for now: mcp_isolation_unverified\)$/);

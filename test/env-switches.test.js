@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { BIN, envAuth, envChoice, envCredentialStore, envElicitation, envNotify, envOwnerChannel, envSwitch } from "../lib/config.js";
+import { BIN, ROOT, envAuth, envChoice, envCredentialStore, envElicitation, envNotify, envOwnerChannel, envSwitch, testBarrier } from "../lib/config.js";
 import { readSettings, settingsProblem } from "../lib/settings.js";
 import { createEngine } from "../lib/engine.js";
 import { settingsContext } from "../lib/decisions.js";
@@ -230,4 +230,23 @@ test("doctor reports refused switches as failures and the others as warnings", (
   assert.match(r.stdout, /relay login.*not checked: fix the settings above first/);
   assert.doesNotMatch(r.stdout, /token.*set \(not shown\)/);
   assert.doesNotMatch(r.stdout, /relay login.*(accepted|refused|failed)/i);
+});
+
+test("test barriers are read only in a source checkout; the package ships no test/ folder", () => {
+  const env = { HOPTELL_APPLY_TEST_BARRIER: "/tmp/b", HOPTELL_READER_TEST_BARRIER: "/tmp/r", HOPTELL_WAKE_TEST_BARRIER: "/tmp/w" };
+  // This suite runs from a checkout: the barriers work here.
+  assert.equal(testBarrier(env, "APPLY"), "/tmp/b");
+  assert.equal(settingsFor(env).barriers.reader, "/tmp/r");
+  // An installed package (no test/ folder) reads none of them.
+  for (const kind of ["APPLY", "READER", "WAKE"]) assert.equal(testBarrier(env, kind, false), null, kind);
+  const files = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).files;
+  assert.ok(!files.some((f) => /^\.?\/?test(\/|$)/.test(f)), "test/ is not in the package");
+  // Nothing else in the shipped code reads a barrier variable directly (lib/files.js only sets
+  // the reader's for its helper process).
+  const shipped = (dir) => fs.readdirSync(path.join(ROOT, dir), { recursive: true }).filter((f) => /\.(m?js)$/.test(f)).map((f) => path.join(dir, f));
+  for (const f of [...shipped("lib"), ...shipped("bin")]) {
+    const src = fs.readFileSync(path.join(ROOT, f), "utf8");
+    if (f === path.join("lib", "read-helper.mjs")) continue; // its environment comes only from lib/files.js
+    assert.doesNotMatch(src.replace(/^\s*\/\/.*$/gm, ""), /env\.HOPTELL_[A-Z]+_TEST_BARRIER(?!\s*=[^=])/, f);
+  }
 });

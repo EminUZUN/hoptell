@@ -158,3 +158,33 @@ test("a crash after the move, then a changed contacts policy: the retry stores n
   assert.match(textOf(await e.call("read_inbox")), /Inbox empty/);
   assert.equal(quarantined(e), 0, "not adopted a second time");
 });
+
+test("doctor counts the files 0.2 left for every name, and listen <name> says they wait", async (t) => {
+  const home = mkHome(t, "upgd");
+  oldMessage(home, "mac-4242", "an automatic name's message");
+  oldMessage(home, "mac-4242", "another one");
+  oldMessage(home, "erin", "a former HOPTELL_NAME's message");
+  const { doctor } = await import("../lib/doctor.js");
+  const inboxLine = async (env) => {
+    const lines = [];
+    await doctor({ HOPTELL_HOME: home, HOPTELL_NOTIFY: "off", ...env }, (l) => lines.push(l), { homedir: "/nonexistent-home" });
+    return lines.find((l) => /inbox: /.test(l)) ?? lines.join("\n");
+  };
+  // Without HOPTELL_NAME (automatic names), or with another name: every leftover is counted.
+  const auto = await inboxLine({});
+  assert.match(auto, /3 pending message files for other names: erin \(1\), mac-4242 \(2\) \(left by hoptell 0\.2/);
+  assert.match(auto, /read them with hoptell 0\.2\.2\)/);
+  const named = await inboxLine({ HOPTELL_NAME: "erin" });
+  assert.match(named, /1 pending message file for erin \(a session with this name reads them/);
+  assert.match(named, /2 pending message files for other names: mac-4242 \(2\)/);
+  // A new name without a folder yet: the others are still counted.
+  const fresh = await inboxLine({ HOPTELL_NAME: "frank" });
+  assert.match(fresh, /inbox\/frank does not exist yet; hoptell creates it on first use; 3 pending message files for other names: erin \(1\), mac-4242 \(2\)/);
+  // listen <name>: no session yet, so nothing is shown, and the leftover files are named.
+  const { spawnSync } = await import("node:child_process");
+  const { BIN } = await import("../lib/config.js");
+  const r = spawnSync(process.execPath, [BIN, "listen", "erin", "1"], { env: { PATH: process.env.PATH, HOME: "/nonexistent-home", HOPTELL_HOME: home, HOPTELL_NOTIFY: "off" }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^No messages within 1s\.\n1 message file that hoptell 0\.2 left for erin waits in .*inbox\/erin: a session with HOPTELL_NAME=erin reads them, or moves them into its own storage when it connects to a current relay\.\n/);
+  assert.equal(pendingOld(path.join(home, "inbox", "erin")).length, 1, "listen leaves them for the session");
+});

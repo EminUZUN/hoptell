@@ -869,3 +869,34 @@ test("hoptell tmux refuses another delivery mode and hoptell channel flags", { s
   assert.match(ok.stderr, new RegExp(`session hoptell-${tc2} is running; attach with`), "started (not refused as already existing)");
   assert.match(fs.readFileSync(path.join(w.home, "sessions", `${tc2}.env`), "utf8"), /^HOPTELL_PUSH="tmux"$/m);
 });
+
+test("hoptell tmux passes a reviewer's initial prompt to the agent intact, after the Codex settings", { skip: !hasTmux }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const name = `tc3p${process.pid}`;
+  w.onClose(() => endSession(`hoptell-${name}`));
+  // A stand-in "codex" that records its arguments and stays running like an interactive agent.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-fake-codex-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const out = path.join(dir, "argv.json");
+  const codex = path.join(dir, "codex");
+  fs.writeFileSync(codex, `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)));\nsetTimeout(() => {}, 30000);\n`, { mode: 0o755 });
+  const prompt = `You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files. ('quotes', "double", $HOME, \`x\`; <lead name> & more)`;
+  const r = await w.cli(["tmux", name, "--roles", "reviewer", "--", codex, "-s", "read-only", "-a", "never", prompt], { HOPTELL_PUSH: "tmux" });
+  assert.equal(r.code, 0, r.stderr);
+  let argv = null;
+  for (let i = 0; i < 100 && !argv; i++) {
+    try {
+      argv = JSON.parse(fs.readFileSync(out, "utf8"));
+    } catch {
+      await sleep(50);
+    }
+  }
+  assert.ok(argv, "the agent started");
+  assert.equal(argv[0], "-c");
+  assert.match(argv[1], /^mcp_servers\.hoptell\.env=\{/);
+  assert.deepEqual(argv.slice(2), ["-s", "read-only", "-a", "never", prompt], "the prompt is the last argument, unchanged");
+  // The injector started next to it, as for a session without a prompt.
+  const windows = spawnSync("tmux", ["list-windows", "-t", `=hoptell-${name}`, "-F", "#{window_name}"], { encoding: "utf8" }).stdout.trim().split("\n");
+  assert.deepEqual(windows.sort(), ["agent", "injector"]);
+});

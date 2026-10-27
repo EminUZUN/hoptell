@@ -1,14 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-27)
+
+This release adds a large set of features and changes the relay protocol. Upgrade the relay
+and every client together; see "Upgrading" at the end of this entry.
 
 - Claude Code plugin: skills and slash commands for reviewer agents and the owner channel.
   The skills `hoptell-reviewers`, `hoptell-owner-channel` and `hoptell-safe-ops` cover starting
   and stopping reviewers, asking the owner over Telegram, and stopping sessions safely. The
   commands are `/hoptell:reviewers`, `/hoptell:review`, `/hoptell:ask-owner` and
   `/hoptell:peers`. Reviewers start read-only: Codex with `-s read-only -a never`, Claude Code
-  in plan mode. The skills come with the plugin, not with the npm package. See "Working with
-  reviewer agents" in the README.
+  in plan mode. Each launch ends with an initial prompt that makes the lead session's review
+  requests the reviewer's task, so the reviewer does not have to ask you first. The skills come
+  with the plugin, not with the npm package. See "Working with reviewer agents" in the README.
 - Contacts: messages from your own member now skip the default hold. When the relay states that
   the sender signed in as the same member as the receiving session (same member id and realm,
   neither side hosted), the message reaches the agent without a grant. Blocks, a default of
@@ -45,16 +49,11 @@
   began listening but before startup finished. The signal is now kept, and the reload runs once
   startup is complete.
 
-## 0.3.0 (2026-10-15)
-
-This release adds a large set of features and changes the relay protocol. Upgrade the relay
-and every client together; see "Upgrading" at the end of this entry.
-
 - Agent spawning: an agent session can start another agent on the same machine for one task,
   within limits you set in a profile (`~/.hoptell/agents/profiles/<id>.json`, schema
   `schema/agent-profile.schema.json`). New MCP tools: `spawn_agent`, `list_agents` and
   `stop_agent`. Only Codex in headless mode with its `read-only` sandbox is enabled, on the tested
-  Codex 0.162.1 build; other CLIs and modes are refused. A profile is used only while its content
+  Codex 0.164.0 build; other CLIs and modes are refused. A profile is used only while its content
   is exactly what you approved. List profiles with `hoptell agents profiles`. To approve a Codex
   profile from the CLI, read the warning and run `hoptell agents profile approve <id>
   --accept-read-risk`; `hoptell ui` also shows the warning before approval. The warning says that
@@ -63,8 +62,13 @@ and every client together; see "Upgrading" at the end of this entry.
   `stop` and `result` manage them. A run gets its own hoptell MCP server with six tools, excluding
   `spawn_agent` and `ask_owner`. Codex can still create its own sub-agents in `plain` mode;
   hardening mode turns them off. See "Spawning agents" in the README.
+- Spawning is tested on Codex 0.164.0; other builds need a one-time approval
+  (`hoptell agents trust-cli <profile>`) of that exact binary for the `plain` mode. Every spawn
+  checks the binary's help, its feature list and local managed Codex configuration again, and
+  refuses when a check fails. Path-deny hardening needs the tested build. Codex 0.162.1 users can
+  approve their binary or update Codex.
 - Optional path-deny hardening for spawned Codex runs (`"codex": {"headlessMode": "hardening"}`
-  in the profile, Codex 0.162.1 only): Codex's OS sandbox is asked to deny reads of the hoptell
+  in the profile, Codex 0.164.0 only): Codex's OS sandbox is asked to deny reads of the hoptell
   home, your relays file, the token files it names, and CODEX_HOME. It is hardening, not
   containment; the default mode stays `plain`.
 - The owner channel over Telegram: agents can ask you a question with the new `ask_owner` tool,
@@ -114,7 +118,9 @@ and every client together; see "Upgrading" at the end of this entry.
   command and the relay's options.
 - `hoptell wait` now earns a reply allowance for the messages it prints, as an agent session
   does: you can reply once to a message you received, even when the sender's grants do not let
-  you reach them.
+  you reach them. When your contacts hold a message it was waiting for, `hoptell wait` now ends
+  with the same fixed notice as an agent session (who sent it and the `hoptell contacts show`
+  command, never the text) instead of "No messages".
 - `hoptell relay admin` views (`status`, `members`, `store` and the others) no longer create an
   empty relay store in a directory without relay state: they say that no relay state is there.
 - `hoptell grants` refuses an invalid selector before the preview, not only when publishing.
@@ -123,8 +129,10 @@ and every client together; see "Upgrading" at the end of this entry.
   the `workspace-write` sandbox).
 - `hoptell contacts show` no longer offers `allow` or `allow-once` for unencrypted messages from
   a contact whose encryption is required, since those commands are refused.
-- A credential that cannot be saved in the OS keychain (for example `hoptell device enroll`)
-  now shows how to use the encrypted credential file instead.
+- A credential that cannot be saved in the OS keychain (for example `hoptell device enroll`),
+  or a machine without one (Linux without Secret Service), now shows how to use the encrypted
+  credential file instead: set `HOPTELL_CREDENTIAL_STORE=file` and
+  `HOPTELL_CREDENTIAL_PASSPHRASE`.
 - Received encrypted messages are marked as end-to-end encrypted, and their Sender line names
   the member's id as an id (not as its name).
 - A message shown again because an earlier read did not acknowledge it now says so, instead of
@@ -140,6 +148,13 @@ and every client together; see "Upgrading" at the end of this entry.
 - Fixed: `hoptell telegram run` exited with code 13 when the relay restarted; it now waits and
   reconnects.
 - Fixed: a relay backup whose first step met a database lock failed instead of being retried.
+- Fixed: `hoptell doctor` listed a running hook-delivery session with an automatic name as
+  `peer :`, because its record was written before the relay's welcome named it. The record now
+  gets the name from the welcome, and a session without a name yet is shown with its MCP
+  server's process id. The `hoptell ui` Settings page names these sessions the same way.
+- Fixed: the `hoptell ui` Settings page listed sessions that started in the same second as a
+  settings change as running with the older value. Start times have whole-second resolution, so
+  hoptell cannot tell for those: they are now listed as "may be running with an older value".
 - Fixed: when a managed `contacts.json` was missing, unreadable or invalid, outgoing sends
   ignored its encryption policy and went out as plaintext, even to contacts whose encryption is
   required. Agent sessions, `hoptell send`, the owner-channel bridge and spawned runs now refuse
@@ -148,6 +163,12 @@ and every client together; see "Upgrading" at the end of this entry.
   published its grants again got a different answer from a send to an unknown name, so any
   member could tell which names exist, hidden members included. A pending member now answers
   `unknown peer`, matching an unknown name.
+- After such a restore, every member is pending, also members that never changed their grants,
+  and before this nothing told them. The relay now tells the member itself (never other
+  senders): `hoptell grants` and `hoptell doctor` say that the relay waits for its grants and
+  give the command, and an agent session's `read_inbox` mentions it. `hoptell grants publish`
+  publishes the current grants unchanged. `hoptell relay admin status` counts the pending
+  members, and the restore summary says what each member runs.
 - Fixed: in a new install, the owner's verified answers to `ask_owner` were held by contacts
   until you allowed your own member. Signed owner-channel messages that the agent's machine
   verified, sent by your own member, now reach the agent without a grant; blocks and a
@@ -273,10 +294,11 @@ and every client together; see "Upgrading" at the end of this entry.
   a private admin socket in the state directory; with it stopped, they open the store themselves.
   Online backups (`backup <dir>`) and an offline, resumable `restore` that never rolls
   authorization back: grants, denies and used reply allowances stay as they are, and if the
-  access state was lost, messages to each member wait until that member publishes its grants
-  again. With the experimental encrypted messages, a restore makes each conversation replace
-  its group before its next commit, and encrypted messages accepted after the backup are lost.
-  `ui` serves a read-only page on loopback. The relay now opens its store at every start.
+  access state was lost, sends to each member fail with `unknown peer` and queued messages wait
+  until that member publishes its grants again (`hoptell grants publish`). With the
+  experimental encrypted messages, a restore makes each conversation replace its group before
+  its next commit, and encrypted messages accepted after the backup are lost. `ui` serves a
+  read-only page on loopback. The relay now opens its store at every start.
 - `hoptell ui`: the owner's pages on 127.0.0.1, without JavaScript, for what waits for a
   decision, contacts, devices, settings and a doctor summary. A single-use launch link opens the
   session; the Host, Origin and Sec-Fetch-Site are checked, and every form carries a token bound
@@ -444,7 +466,10 @@ and every client together; see "Upgrading" at the end of this entry.
   refused.
 - `hoptell telegram` subcommands and `hoptell local-relay` refuse words and options they do not
   take (such as `telegram pair --all`, or `local-relay status --purge`) instead of ignoring them.
-  `hoptell hook-header --help` prints its help.
+  The message names what was refused and, for an option of another subcommand, which one takes
+  it (`telegram run --name x`: "--name is an option of telegram setup"). `hoptell send` refuses
+  an unknown option before the recipient (`send --bogus bob hi`) instead of reading it as the
+  name. `hoptell hook-header --help` prints its help.
 - A setting with a value it does not accept is no longer read silently as its default. The relay,
   an agent session, or a command refuses to start for `HOPTELL_REQUIRE_MEMBERS`,
   `HOPTELL_OWNER_APP`, `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_AUTH` and `HOPTELL_CREDENTIAL_STORE`,
@@ -473,7 +498,8 @@ and every client together; see "Upgrading" at the end of this entry.
   storage of the first session that connects to an upgraded relay with that `HOPTELL_NAME`. They
   are then shown and acknowledged like any other message, and the contacts decide who reaches
   the agent. Sessions without `HOPTELL_NAME` had automatic names, so their messages stay where
-  they are (`hoptell doctor` counts them): read them with 0.2.2 before you upgrade.
+  they are (`hoptell doctor` counts them for every name, and `hoptell listen <name>` says when
+  some wait): read them with 0.2.2 before you upgrade.
 - The owner channel needs a relay of this version (`to_member`, `list_own`). The Mini App also
   needs `HOPTELL_OWNER_APP=on` on the relay and, when the bridge does not reach the relay at its
   public `wss://` address, `HOPTELL_APP_URL` on the bridge.

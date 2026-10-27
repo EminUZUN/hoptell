@@ -92,16 +92,17 @@ async function setup(t, { policy = null, token = null, stateDir = null, fault = 
   t.after(() => relay.close());
   const clients = [];
   t.after(() => clients.forEach((c) => c.close()));
-  const open = async ({ got, held = false, ...o }) => {
+  const open = async ({ got, held = false, notices = null, ...o }) => {
     const c = new RelayClient({ url: s.url, reconnect: false, ...o });
     clients.push(c);
     // A receiver's listener goes on before the hello: queued messages arrive right after it.
     if (got) c.on("message", (m, confirm) => (got.push(m), confirm({ released: !held })));
+    if (notices) c.on("notice", (n) => notices.push(n));
     await c.start().ready(5000);
     return c;
   };
   /** A member-token session (`mode` "send": a send-only client). */
-  const connect = (who, mode = "peer", o = {}) => open({ token: tok(who), name: mode === "send" ? `${who}-cli${o.n ?? ""}` : who, mode, got: o.got, held: o.held });
+  const connect = (who, mode = "peer", o = {}) => open({ token: tok(who), name: mode === "send" ? `${who}-cli${o.n ?? ""}` : who, mode, got: o.got, held: o.held, notices: o.notices });
   /** A session signed in at the scripted provider ({groups, iat, opaque}) or broker ({family, at}). */
   const signIn = (who, claims, mode = "peer", kind = "oidc") =>
     open({ signIn: async () => ({ kind, issuer: kind === "broker" ? "b1" : IDP, token: JSON.stringify({ sub: who, ...claims }), expiresAt: Date.now() + 300_000 }), name: mode === "send" ? `${who}-cli` : who, mode });
@@ -1067,6 +1068,109 @@ test("pending recipients after a restore: a new send answers as an unknown name 
   s.access.invalidate(`${IDP}|dave`, "sign-out");
   assert.equal(s.access.decide(stale, pendingTo, { send: true }), "deny");
   assert.equal(s.access.decide(stale, unknownTo, { send: true }), "deny");
+});
+
+test("pending recipients: the member itself is told (welcome notice, grants_get), never other members; publishing clears it for its sessions", async (t) => {
+  const s = await setup(t, { stateDir: pendingState(t, {}) });
+  (await s.connect("alice")).close();
+  await sleep(100);
+  writePending(s.stateDir, { [ID.alice]: null, [ID.carol]: null });
+  s.access.reloadRestore();
+  // alice connects: its own session learns that the relay waits for its grants.
+  const notices = [];
+  await s.connect("alice", "peer", { notices });
+  assert.ok(await until(() => notices.some((n) => n.kind === "grants_pending")));
+  assert.deepEqual(notices.filter((n) => n.kind === "grants_pending").map((n) => n.pending), [true]);
+  const aliceCli = await s.connect("alice", "send");
+  const mine = await aliceCli.rpc({ type: "grants_get" });
+  assert.equal(mine.pending, true);
+  assert.equal(mine.grants.revision, 0);
+  // Another member learns nothing about alice or carol: no notice, no flag, the same answers.
+  const bobNotices = [];
+  await s.connect("bob", "peer", { notices: bobNotices });
+  const bobCli = await s.connect("bob", "send");
+  assert.equal((await bobCli.rpc({ type: "grants_get" })).pending, undefined, "bob is not pending");
+  await sleep(200);
+  assert.deepEqual(bobNotices.filter((n) => n.kind === "grants_pending"), []);
+  // alice publishes the same grants: its session is told that it is not pending any more.
+  const cur = mine.grants;
+  await aliceCli.rpc({ type: "grants_put", base_revision: cur.revision, grants: { default: cur.default, visible: cur.visible, entries: cur.entries } });
+  assert.ok(await until(() => notices.filter((n) => n.kind === "grants_pending").length === 2));
+  assert.equal(notices.filter((n) => n.kind === "grants_pending").at(-1).pending, false);
+  assert.equal((await aliceCli.rpc({ type: "grants_get" })).pending, undefined);
+  assert.deepEqual(pendingOf(s.stateDir), { [ID.carol]: null }, "carol is still pending");
+  assert.equal((await sendTo(bobCli, "alice", "flows again")).ok, true);
+  await sleep(200);
+  assert.deepEqual(bobNotices.filter((n) => n.kind === "grants_pending"), [], "bob was told nothing");
+});
+
+test("pending recipients: accepting a contact request republishes the grants, and the member's sessions are told it is not pending", async (t) => {
+  const s = await setup(t, { policy: POLICY(), stateDir: pendingState(t, {}) });
+  const aliceCli = await s.connect("alice", "send");
+  await publish(aliceCli, { default: "deny", visible: "all", entries: [] });
+  (await s.connect("alice")).close();
+  const bobNotices = [];
+  const bob = await s.connect("bob", "peer", { notices: bobNotices });
+  await bob.rpc({ type: "contact_request", to: "alice", reason: "review" });
+  writePending(s.stateDir, { [ID.alice]: 1 });
+  s.access.reloadRestore();
+  const notices = [];
+  await s.connect("alice", "peer", { notices });
+  assert.ok(await until(() => notices.some((n) => n.kind === "grants_pending" && n.pending === true)));
+  const [req] = (await aliceCli.rpc({ type: "contact_requests" })).requests;
+  await aliceCli.rpc({ type: "contact_request_answer", request: req.id, action: "accept" });
+  assert.equal(s.access.isPending(ID.alice), false, "the accept published the grants");
+  assert.ok(await until(() => notices.some((n) => n.kind === "grants_pending" && n.pending === false)), "told without a grants_put");
+  await sleep(200);
+  assert.deepEqual(bobNotices.filter((n) => n.kind === "grants_pending"), [], "bob was told nothing");
+});
+
+test("pending recipients: hoptell grants and doctor tell the member, grants publish clears it, an agent session's read_inbox mentions it", async (t) => {
+  const { execFile } = await import("node:child_process");
+  const { BIN } = await import("../lib/config.js");
+  const { existingInstall } = await import("./helpers.js");
+  const { createEngine } = await import("../lib/engine.js");
+  const { readSettings } = await import("../lib/settings.js");
+  const { GRANTS_PENDING } = await import("../lib/notices.js");
+  const s = await setup(t, { stateDir: pendingState(t, {}) });
+  (await s.connect("alice")).close();
+  await sleep(100);
+  writePending(s.stateDir, { [ID.alice]: null });
+  s.access.reloadRestore();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-access-pend-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "empty.env"), "");
+  const home = existingInstall(path.join(root, "home"));
+  const env = { PATH: process.env.PATH, HOME: root, HOPTELL_ENV: path.join(root, "empty.env"), HOPTELL_HOME: home, HOPTELL_NOTIFY: "off", HOPTELL_RELAY: s.url, HOPTELL_TOKEN: tok("alice"), HOPTELL_NAME: "alice" };
+  const cli = (...args) => new Promise((resolve) => execFile(process.execPath, [BIN, ...args], { env, timeout: 20_000 }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr })));
+  // An agent session of alice: read_inbox carries the fixed note while the relay waits.
+  const e = createEngine(readSettings({ env: { ...env, HOPTELL_PUSH: "listener" }, homedir: root, pid: process.pid }), { findHost: () => null });
+  t.after(() => e.stop());
+  await e.start();
+  await until(() => e.session.state === "bound", 5000);
+  let inbox = "";
+  assert.ok(await until(async () => (inbox = (await e.call("read_inbox")).content[0].text).includes(GRANTS_PENDING), 5000), inbox);
+  const shown = await cli("grants");
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(shown.stdout, /^Revision 0: default allow; visible to everyone\.\n {2}\(no entries\)\n\nThe relay was restored from a backup and lost its record of your latest grants\. Until you publish them again,\nsends to your sessions fail with "unknown peer" and queued messages wait\./);
+  assert.match(shown.stdout, /hoptell grants publish --yes --rev 0\n/);
+  const doc = await cli("doctor");
+  assert.match(doc.stdout, /warn +grants: the relay was restored and waits for member alice to publish its grants again: .* hoptell grants publish --yes --rev 0/);
+  // publish previews first, then publishes the same grants and clears the mark.
+  const preview = await cli("grants", "publish");
+  assert.equal(preview.code, 0, preview.stderr);
+  assert.match(preview.stdout, /Revision 0 -> 1: default allow; visible to everyone\.[\s\S]*Nothing published yet\. Run the same command with --yes --rev 0/);
+  assert.equal(s.access.isPending(ID.alice), true, "a preview publishes nothing");
+  const pub = await cli("grants", "publish", "--yes", "--rev", "0");
+  assert.equal(pub.code, 0, pub.stderr);
+  assert.match(pub.stdout, /Published \(revision 1\)\. The relay delivers messages to your sessions again\./);
+  assert.equal(s.access.isPending(ID.alice), false);
+  assert.deepEqual(s.access.grantsOf(ID.alice).entries, []);
+  assert.equal(s.access.grantsOf(ID.alice).default, "allow");
+  assert.doesNotMatch((await cli("grants")).stdout, /restored/);
+  assert.doesNotMatch((await cli("doctor")).stdout, /grants: the relay was restored/);
+  assert.ok(await until(async () => !(await e.call("read_inbox")).content[0].text.includes(GRANTS_PENDING), 5000), "the session was told it is not pending any more");
+  assert.equal((await cli("grants", "publish", "extra")).code, 2, "publish takes no selector");
 });
 
 test("pending recipients: a reply under an existing reply allowance is held; the allowance is neither consulted nor used", async (t) => {

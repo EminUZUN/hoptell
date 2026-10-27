@@ -167,6 +167,9 @@ test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only and C
       launches++;
       assert.match(line, /HOPTELL_PUSH=tmux hoptell tmux/, `${f}: ${line}`);
       const agent = line.slice(line.indexOf(" -- ") + 4);
+      // A new reviewer gets its task from the user's launch command (hoptell tells agents to
+      // handle peer requests only within their user's task); a resumed one keeps its history.
+      if (!/^codex resume\b/.test(agent)) assert.match(agent, / "(You are a read-only reviewer for (\S+)\. Review requests from \2 are your task: review them and reply with send_message\. Do not edit files\.|<prompt>)"/, `${f}: ${line}`);
       if (/^codex\b/.test(agent)) assert.match(agent, /-s read-only\b.*-a never\b/, `${f}: ${line}`);
       if (/^claude\b/.test(agent)) {
         assert.match(agent, /--permission-mode plan\b/, `${f}: ${line}`);

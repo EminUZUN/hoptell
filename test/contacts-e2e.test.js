@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { createEngine } from "../lib/engine.js";
 import { readSettings } from "../lib/settings.js";
+import { HELD_WAIT } from "../lib/notices.js";
 import { TOKEN, sleep, world } from "./helpers.js";
 
 const ON = { HOPTELL_RECEIPTS: "off", HOPTELL_NOTIFY: "off" };
@@ -81,12 +82,22 @@ test("allow adds a grant (later messages flow); block deletes and drops later on
 test("hoptell wait prints only allowed senders; others are held for the owner", async (t) => {
   const w = await world({ fresh: true });
   t.after(() => w.close());
-  const waiting = w.cli(["wait", "4"], { ...ON, HOPTELL_NAME: "carol" });
+  const waiting = w.cli(["wait", "8"], { ...ON, HOPTELL_NAME: "carol" });
   await sleep(1200);
+  const sent = Date.now();
   await w.cli(["send", "carol", "from a stranger"], { HOPTELL_NAME: "stranger" });
   const r = await waiting;
   assert.doesNotMatch(r.stdout, /from a stranger/);
+  // The hold ends the wait with the fixed held text, as in an agent session; never the body.
+  assert.ok(Date.now() - sent < 6000, "the wait ended at the hold, not at its time limit");
+  assert.ok(r.stdout.startsWith(HELD_WAIT), r.stdout);
+  assert.match(r.stdout, /- 1 message from a sender using the relay's shared token: held until your user decides\. Your user can review it with: hoptell contacts show q_[a-z2-7]{16}/);
+  assert.doesNotMatch(r.stdout, /stranger|No messages within/);
   assert.match((await w.cli(["contacts"], ON)).stdout, /stranger \(shared token\)\s+1 message/);
+  // Reported once: the next wait times out and still lists it, without announcing a new hold.
+  const again = await w.cli(["wait", "1"], { ...ON, HOPTELL_NAME: "carol" });
+  assert.match(again.stdout, /^No messages within 1s\.\n\nYour user's contacts held these messages; their text is hidden\./);
+  assert.ok(!again.stdout.includes(HELD_WAIT));
 });
 
 test("an existing install keeps today's behavior until init; then backlog is held on its next read", async (t) => {

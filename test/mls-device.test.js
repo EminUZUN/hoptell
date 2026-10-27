@@ -415,3 +415,17 @@ test("revoking this device: the signed revocation is pending until the relay con
   assert.equal(fresh.store.record().status, "revoked");
   assert.equal(w.directory.list(w.members.alice.id).find((d) => d.device === device).revoked.by, "device");
 });
+
+test("enroll without an OS keychain says how to use the encrypted file instead (no login hint)", async (t) => {
+  const w = await deviceRelay(t);
+  const dir = tmpDir(t);
+  const contacts = memoryContacts();
+  const none = { kind: "none", available: () => false };
+  const store = deviceStore({ home: dir, profile: "relay-test", driver: createFakeDriver({ seed: dir, now: w.clock.now }), keychainBackend: none, machine: "machine-a", now: w.clock.now, own: ownFor(contacts, dir, "relay-test") });
+  const client = await w.client("alice");
+  await assert.rejects(store.enroll(client), (e) => {
+    assert.match(e.message, /no OS keychain is available here; to keep it in an encrypted file instead, set HOPTELL_CREDENTIAL_STORE=file and HOPTELL_CREDENTIAL_PASSPHRASE \(at least 12 characters\)/);
+    assert.doesNotMatch(e.message, /hoptell login/);
+    return true;
+  });
+});

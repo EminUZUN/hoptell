@@ -688,7 +688,10 @@ decision on something that changed meanwhile is refused and the new state is sho
 shows contact requests and proposals, and prints their commands (`hoptell contacts requests`,
 `hoptell apply`). Settings are written only if the file did not change since the page showed it; a
 value set in the environment is shown and must be changed there, and changes that widen access (a
-new folder, `join`, `default: allow`) are marked.
+new folder, `join`, `default: allow`) are marked. A setting also names the running sessions with
+hook delivery that started before its file last changed and still use the older value. A session
+that started within the same second may or may not, and is listed as "may be running with an
+older value".
 
 With the experimental encrypted messages (`HOPTELL_EXPERIMENTAL_E2EE=1`), each contact's
 `encryption` (off, preferred, required) is a setting too, where lowering it is marked as widening,
@@ -751,6 +754,7 @@ hoptell grants deny member:<id> | remove <selector>
 hoptell grants deny-forever member:<id>          # deny, and no contact requests from it
 hoptell grants default allow|deny                # for senders no entry names
 hoptell grants visible all|grantees              # grantees: others do not see you in lists
+hoptell grants publish                           # the same grants again (after a relay restore)
 ```
 
 Each `grants` command shows the result and the current revision first, and publishes nothing.
@@ -762,6 +766,15 @@ checked whenever a message is delivered, also for messages already waiting.
 
 A sender your grants or the policy refuse gets the same answer as for a name that does not exist,
 and broadcasts report only how many sessions they reached.
+
+**After a relay restore.** If the relay is restored from a backup and its access state was lost,
+it no longer knows whether your latest grants are the ones in the backup. Until you publish them
+again, a send to your sessions fails with `unknown peer` (as for a name that does not exist, so
+nobody learns which names are members) and queued messages wait. This applies to every member,
+also members that never changed their grants. Your sessions are told: `hoptell grants` and
+`hoptell doctor` say so, and an agent session's `read_inbox` mentions it. Check your grants with
+`hoptell grants`, then publish them with `hoptell grants publish --yes --rev N`, or change them
+first. The relay admin sees who is still pending with `hoptell relay admin grants`.
 
 **Replies.** If you send a message to someone your grants refuse by default, they may reply to it
 once within 7 days, but only after your message passed the relay's policy and their machine's
@@ -1114,9 +1127,13 @@ only when you want them.
 messages. Use `hoptell tmux` with the `reviewer` role:
 
 ```sh
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 ```
+
+The quoted prompt is your instruction to the reviewer, so review requests from your session
+(`alice-lead` here) are its task. Agents handle peer requests only within the task you gave
+them; a reviewer started without such a prompt asks you whether it may review.
 
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
 Plan mode suits a source review: Claude Code's usual tool permissions still apply, and it is not
@@ -1157,9 +1174,28 @@ HOPTELL_PUSH=tmux hoptell tmux <name> --roles reviewer -- codex resume -s read-o
 
 An agent session of yours can start another agent on the same machine for one task, within
 limits you set in advance. Only one setup is enabled: Codex in headless mode with its
-`read-only` sandbox, on the tested Codex 0.162.1 build. Before each run, hoptell checks the
-installed Codex files against that build and refuses others. Other CLIs, Codex in tmux and other
-argument shapes are refused too.
+`read-only` sandbox, on the tested Codex 0.164.0 build. Before each run, hoptell checks the
+installed Codex files against that build and refuses others, unless you approved that exact
+binary (see "Other Codex builds" below). Other CLIs, Codex in tmux and other argument shapes are
+refused too.
+
+**Other Codex builds.** Users update Codex, so a build hoptell has not gate-tested can run in the
+`plain` mode after you approve that exact binary once: `hoptell agents trust-cli <profile>` shows
+the Codex version, its launcher and native binary digests, the features that are new or whose
+default changed against the tested build, and the checks below. It approves only after you type
+`trust` in a terminal. At every spawn of an approved untested binary, hoptell checks again that
+the help of `codex exec` still lists the flags the adapter uses, that `codex features list` with
+the run's overrides shows every feature hoptell turns off as off and no feature on that was not
+on in a gated build, and that no local managed Codex configuration (`/etc/codex`, and on macOS the
+`com.openai.codex` managed preferences) is present. If any check fails, the spawn is refused, even
+for an approved binary. The approval does not cover what only a gate run observes: the sandbox,
+the approvals and the tool catalog. As for tested builds, the plain mode does not check
+cloud-delivered Codex configuration. An update is a new binary and needs a new approval.
+`hoptell agents trust-cli --list` lists approvals, and `--revoke <digest prefix>` removes one.
+No MCP tool, peer message or setting can approve a binary. The command also refuses inside an
+agent run and without a terminal, but that is a second line of defense, not the boundary.
+Path-deny hardening never runs on an untested binary. Runs on one are marked "untested CLI,
+approved by you" in `hoptell agents list`, in the run log and in the audit log.
 
 **Profiles.** A profile is a JSON file you write in `~/.hoptell/agents/profiles/<id>.json`
 (schema: `schema/agent-profile.schema.json`). It names the CLI, the mode and sandbox, the folders a
@@ -1217,12 +1253,12 @@ The hoptell tools limit what hoptell gives a run, not what the process can read:
 says, a run uses your account. Use spawning only for tasks and folders you would trust with your
 hoptell files.
 
-**Path-deny hardening (opt-in, codex-cli 0.162.1 only).** A read-only Codex headless profile can
+**Path-deny hardening (opt-in, codex-cli 0.164.0 only).** A read-only Codex headless profile can
 set `"codex": {"headlessMode": "hardening"}`. Changing the mode changes the profile, so you approve
 it again. In this mode hoptell starts Codex with a per-run permission profile that asks Codex's OS
 sandbox to deny reads of the hoptell home, your relays file and the token files it names, and
 CODEX_HOME. Writes and network access stay denied, as in `plain`, and Codex sub-agents are turned
-off. The mode is available only on the exact Codex 0.162.1 binaries of its gate record; any other
+off. The mode is available only on the exact Codex 0.164.0 binaries of its gate record; any other
 version is refused (`adapter_gate_unverified`).
 
 What was tested: hoptell's gate run showed Codex's sandbox enforcing this profile for commands
@@ -1515,6 +1551,7 @@ hoptell ack <receipt> (<name> | --session <folder>)     # acknowledges messages 
 hoptell doctor [--relay-check] [--fix] # checks settings, relay, login, inbox and tmux; never prints the token
 hoptell agents profiles              # agent profiles and their approval state (see "Spawning agents")
 hoptell agents profile approve <id> [--accept-read-risk]
+hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
 hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
 hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it
@@ -1711,8 +1748,8 @@ Session titles, the plugin skills and the `UserPromptSubmit` hook were tested on
 2026-10-26 and 2026-10-27 with Claude Code 2.1.310 and 2.1.311, with Codex CLI
 0.164.0 as a reviewer.
 
-Spawning agents (`spawn_agent`) needs Codex CLI 0.162.1 exactly; see [Spawning
-agents](#spawning-agents). A listener must be started by the client and does not, by itself, wake an
+Spawning agents (`spawn_agent`) is tested on Codex CLI 0.164.0; other Codex builds need a
+one-time approval (`hoptell agents trust-cli`); see [Spawning agents](#spawning-agents). A listener must be started by the client and does not, by itself, wake an
 idle session. The elicitation results come from separate probe servers. hoptell's optional question
 during `read_inbox` (`HOPTELL_ELICITATION=read_inbox`) asks only in sessions on MCP revisions
 2025-06-18 and 2025-11-25 with form questions; behavior of other client versions is untested.

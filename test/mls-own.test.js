@@ -168,11 +168,16 @@ test("A1 upgrade remedies: a device-signed revocation removes the unconfirmed de
       assert.notEqual(a1.driver.signing, false);
       await a1.store.revoke(await w.client("alice"), a2.device);
     } else w.directory.revoke({ member: a1.id, device: a2.device, by: { kind: "admin" } });
-    const commits = w.db.get("SELECT count(*) AS n FROM e2ee_log WHERE group_id = ?", gid).n;
+    // Commits that change the roster: after a removal the other members each owe one update
+    // commit (the fresh-update policy, A2), which lands on its own timing and changes nothing.
+    const rosterCommits = () => w.db.all("SELECT requester_device, roster_delta FROM e2ee_log WHERE group_id = ?", gid).filter((r) => { const d = JSON.parse(r.roster_delta); return d.add.length || d.remove.length; });
+    const commits = rosterCommits().length;
     await s.e2ee.recover();
     await until(() => bob.s.bob.got.length === 2, `${how}: sent after the removal`);
     assert.ok(!w.ds.roster(gid).some((d) => d.device === a2.device), `${how}: removed`);
-    assert.equal(w.db.get("SELECT count(*) AS n FROM e2ee_log WHERE group_id = ?", gid).n, commits + 1, `${how}: with one commit`);
+    const changed = rosterCommits().slice(commits);
+    assert.equal(changed.length, 1, `${how}: with one commit`);
+    assert.deepEqual([changed[0].requester_device, JSON.parse(changed[0].roster_delta).remove], [a1.device, [a2.device]], `${how}: a1 removed a2`);
     assert.deepEqual(a1.contacts.doc.own[w.realm].unconfirmed, [], `${how}: no longer unconfirmed once removed`);
   }
 });

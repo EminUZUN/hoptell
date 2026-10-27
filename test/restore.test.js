@@ -527,6 +527,10 @@ test("restore, authorization: lost access state holds every member until it publ
   assert.deepEqual(a.putGrants(ID.alice, 1, { default: "allow", visible: "all", entries: [] }), { revision: 2 });
   assert.equal(a.decide({ memberId: ID.bob }, { memberId: ID.alice }), "allow", "alice published: no longer held");
   assert.equal(a.decide({ memberId: ID.alice }, { memberId: ID.bob }), "hold", "bob still pending");
+  // relay admin status counts who must still publish (the restore itself is complete).
+  const status = await cli(["relay", "admin", "status"], { stateDir: dir });
+  assert.match(status.stdout, /^restore: none\nwarning: 2 members must publish grants again after a restore; sends to them fail with "unknown peer" until then \(hoptell relay admin grants lists them; each runs hoptell grants publish\)$/m);
+  assert.equal(JSON.parse((await cli(["relay", "admin", "status", "--json"], { stateDir: dir })).stdout).grantsPending, 2);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "access", "allowances.json"), "utf8")).entries.length, 0, "no allowance survives");
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "access", "requests.json"), "utf8")).pending, []);
 });

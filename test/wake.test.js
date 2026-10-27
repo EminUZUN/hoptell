@@ -7,6 +7,8 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { BIN } from "../lib/config.js";
+import { processInfo, startedAtMs } from "../lib/host.js";
+import { hookSessionLabel } from "../lib/wake.js";
 import { COALESCE_MS, HELD_NOTICE, NOTICE } from "../lib/notices.js";
 import { sleep, world } from "./helpers.js";
 
@@ -119,6 +121,45 @@ test("hook delivery: verified at startup, one fixed notice per batch, messages s
   // doctor reports the verified session.
   const doc = await w.cli(["doctor"]);
   assert.match(doc.stdout, /hook sessions: peer hk1: verified at /);
+});
+
+test("hook delivery: a session with an automatic name is listed by that name once the welcome names it", { skip: !supported }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const host = await fakeClaude(w, t);
+  await host.sessionStart({ session_id: "conv-auto" });
+  await host.startMcp(undefined); // no HOPTELL_NAME: the relay's welcome assigns the name
+  let doc = "";
+  for (let i = 0; i < 40; i++) {
+    doc = (await w.cli(["doctor"])).stdout;
+    if (/hook sessions: peer [A-Za-z0-9][A-Za-z0-9_-]*: verified at /.test(doc)) break;
+    await sleep(250);
+  }
+  assert.match(doc, /hook sessions: peer [A-Za-z0-9][A-Za-z0-9_-]*: verified at /, doc);
+  assert.doesNotMatch(doc, /peer :/);
+  // Before a name is known, a record is still named readably.
+  assert.equal(hookSessionLabel({ peer: "", pid: 4242 }), "a session without a name yet (MCP server pid 4242)");
+  assert.equal(hookSessionLabel({ peer: "alice" }), "alice");
+});
+
+test("hook delivery: a composed session (relays file) with an automatic name is listed by that name too", { skip: !supported }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-relays-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const relays = path.join(dir, "relays.json");
+  fs.writeFileSync(relays, JSON.stringify({ version: 1, default: "lab", relays: [{ alias: "lab", url: w.env.HOPTELL_RELAY, tokenEnv: "T_LAB", join: true }] }), { mode: 0o600 });
+  const host = await fakeClaude(w, t);
+  await host.sessionStart({ session_id: "conv-composed" });
+  await host.startMcp(undefined, { HOPTELL_RELAYS: relays, T_LAB: w.env.HOPTELL_TOKEN });
+  let doc = "";
+  for (let i = 0; i < 40; i++) {
+    doc = (await w.cli(["doctor"])).stdout;
+    if (/hook sessions: peer [A-Za-z0-9][A-Za-z0-9_-]*: verified at /.test(doc)) break;
+    await sleep(250);
+  }
+  assert.match(doc, /hook sessions: peer [A-Za-z0-9][A-Za-z0-9_-]*: verified at /, doc);
+  assert.doesNotMatch(doc, /without a name yet/);
 });
 
 test("hook delivery: a message the contacts hold wakes the session with the fixed held notice, once, never its text", { skip: !supported }, async (t) => {
@@ -517,4 +558,13 @@ test("hook registration for HTTP sessions: SessionStart's id, hook-header prints
   host.send({ op: "exit" });
   for (let i = 0; i < 50 && hostOfRegistration(w.home, id); i++) await new Promise((r) => setTimeout(r, 100));
   assert.equal(hostOfRegistration(w.home, id), null, "once the process ended, the id names nothing");
+});
+
+test("startedAtMs: a session's start time from processInfo, on this platform and from lstart", () => {
+  const at = startedAtMs(processInfo(process.pid).start);
+  assert.ok(Number.isFinite(at), "the start of this process is known");
+  assert.ok(Math.abs(at - (Date.now() - process.uptime() * 1000)) < 5000, "within a few seconds of the real start");
+  assert.equal(startedAtMs("Thu Jan  1 00:00:00 1970"), 0, "lstart is read in UTC");
+  assert.equal(startedAtMs("not a time"), null);
+  assert.equal(startedAtMs(undefined), null);
 });

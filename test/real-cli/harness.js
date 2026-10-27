@@ -4,6 +4,7 @@
 // Everything is temporary: the hoptell home, the relay (a test relay, never the user's), the home
 // folder of the agent and, for Codex, a CODEX_HOME holding only a copy of the auth file. A Codex
 // trace (it holds auth material) is read only on a pipe, by catalog-tap.mjs, and never stored.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +94,8 @@ export async function realWorld(t, { cli, command, profile = {}, env = {} }) {
     relaysFile,
     agentsMax: 4,
     spawner: { name: "owner", roles: ["lead"], front: "stdio", client: null },
+    // The spawning tools' private capability (agentTools): stop_agent stops only runs it spawned.
+    caller: crypto.randomBytes(32).toString("base64url"),
     links: new Map([["local", { wireName: "me-owner", peers: () => owner.list() }]]),
     deps: { hoptell: { node: process.execPath, bin: BIN } },
   };

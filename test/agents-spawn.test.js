@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -191,9 +192,11 @@ test("spawn: the run's relays file has only the granted aliases; the supervisor'
   // The spawner becomes unreachable: the relay token goes away before the run answers.
   fs.rmSync(s.token);
   fs.writeFileSync(gate, "");
-  const rec = await ended(s.ctx.home, r.run);
+  let rec = await ended(s.ctx.home, r.run);
+  // The supervisor records the delivery after the exit; a loaded machine can show it gone first.
+  for (const end = Date.now() + 10_000; !rec.delivery && Date.now() < end; await sleep(50)) rec = readRun(s.ctx.home, r.run);
   assert.equal(rec.state, "exited");
-  assert.equal(rec.delivery.state, "undelivered");
+  assert.equal(rec.delivery?.state, "undelivered");
   const listed = (await listAgents(s.ctx.home, { state: "all" })).find((x) => x.run === r.run);
   assert.equal(listed.delivery.state, "undelivered");
   const out = [];
@@ -607,7 +610,9 @@ test("registration: stdio only with a profile at start; never in a run's server,
   let s = await w.mcp("plain");
   assert.ok(!(await toolNames(s.client)).some((n) => SPAWN_TOOLS.includes(n)), "no profile: no spawn tools");
   ensureAgentsDirs(w.home);
-  writeProfile(w.home, profileDoc(w.home, { folders: { roots: ["/tmp"], default: "/tmp" } }));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-roots-")); // outside the home: on Linux the home lies under /tmp
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  writeProfile(w.home, profileDoc(w.home, { folders: { roots: [work], default: work } }));
   s = await w.mcp("owner");
   const names = await toolNames(s.client);
   for (const n of SPAWN_TOOLS) assert.ok(names.includes(n), n);
@@ -622,7 +627,9 @@ test("registration: loopback HTTP only for clients added with --agents", async (
   const w = await world();
   t.after(() => w.close());
   ensureAgentsDirs(w.home);
-  writeProfile(w.home, profileDoc(w.home, { folders: { roots: ["/tmp"], default: "/tmp" } }));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-roots-")); // outside the home: on Linux the home lies under /tmp
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  writeProfile(w.home, profileDoc(w.home, { folders: { roots: [work], default: work } }));
   const boot = { env: w.env, homedir: w.home, cwd: w.home, pid: process.pid, hostname: "testhost" };
   const h = await startMcpHttp({ home: w.home, port: 0, engineFor: httpSessions(boot), serve: httpServe(boot) });
   t.after(() => h.close());
