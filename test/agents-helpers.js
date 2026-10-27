@@ -5,7 +5,30 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { agentsPaths, ensureAgentsDirs } from "../lib/agents.js";
-import { startSupervisor } from "../lib/agentruns.js";
+import { runPaths, signalChecked, startSupervisor } from "../lib/agentruns.js";
+import { sameIdentity } from "../lib/host.js";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Wait until `fn()` holds, checked every 50 ms; throws naming `what` after `ms`. */
+export async function waitUntil(fn, what, ms = 20_000) {
+  for (const end = Date.now() + ms; !fn(); await sleep(50)) if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+}
+
+/**
+ * SIGKILL the supervisor of a running headless run whose agent prints `first` (the fake agent's
+ * "sleep" mode prints "partial answer"), and wait until the supervisor is gone. The agent writes
+ * to a pipe the supervisor reads: a write after the supervisor is gone fails (EPIPE) and ends the
+ * agent, so the kill waits until that output reached the run's output file. Returns what
+ * signalChecked returned.
+ */
+export async function killSupervisor(home, rec, first = "partial answer") {
+  const output = runPaths(home, rec.run).output;
+  await waitUntil(() => fs.existsSync(output) && fs.readFileSync(output, "utf8").includes(first), "the agent's first output");
+  const r = signalChecked(rec.supervisor, "SIGKILL");
+  await waitUntil(() => !sameIdentity(rec.supervisor), "the killed supervisor to be gone");
+  return r;
+}
 
 /** A temporary hoptell home and a separate folder for roots; removed after the test. */
 export function agentsWorld(t) {

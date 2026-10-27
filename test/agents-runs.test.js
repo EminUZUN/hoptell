@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { agentsWorld } from "./agents-helpers.js";
+import { agentsWorld, killSupervisor } from "./agents-helpers.js";
 import { agentCommand, launchDetached } from "../lib/tmux.js";
 import { readAudit, withAgentsLock } from "../lib/agents.js";
 import { TREE_HARD, TREE_MAX, createRunFiles, isLive, processTree, listRuns, newRunId, prune, readRun, runPaths, signalChecked, startSupervisor, stopProcess, stopRun, supervise, sweep, updateRun, agentEnv, cutUtf8 } from "../lib/agentruns.js";
@@ -788,8 +788,7 @@ test("supervision: a killed supervisor; the sweep stops the agent if it matches,
   let rec = await startSupervisor(w.home, a.run, { env: supEnv(w, a.run) });
   t.after(() => cleanup(readRun(w.home, a.run)?.agent));
   assert.equal(rec.state, "running");
-  assert.equal(signalChecked(rec.supervisor, "SIGKILL"), "signalled");
-  for (let i = 0; i < 300 && sameIdentity(rec.supervisor); i++) await sleep(50);
+  assert.equal(await killSupervisor(w.home, rec), "signalled");
   assert.ok(sameIdentity(rec.agent), "the agent outlives its supervisor (own process group)");
   assert.equal(isLive(readRun(w.home, a.run)), false, "a record whose supervisor is gone does not count");
   const changed = await sweep(w.home, { deps: { graceMs: 500 } });
@@ -802,8 +801,7 @@ test("supervision: a killed supervisor; the sweep stops the agent if it matches,
   const b = await makeRun(w, { plan: { command: process.execPath, args: [FAKE, "sleep"], stdin: "task", result: { from: "stdout" } } });
   rec = await startSupervisor(w.home, b.run, { env: supEnv(w, b.run) });
   t.after(() => cleanup(rec.agent));
-  signalChecked(rec.supervisor, "SIGKILL");
-  for (let i = 0; i < 300 && sameIdentity(rec.supervisor); i++) await sleep(50);
+  assert.equal(await killSupervisor(w.home, rec), "signalled");
   await updateRun(w.home, b.run, (r) => {
     r.agent = { ...r.agent, start: "Thu Jan  1 00:00:00 1970" };
   });
