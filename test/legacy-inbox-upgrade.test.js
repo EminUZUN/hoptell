@@ -95,7 +95,7 @@ test("a 0.2 inbox from a sender the contacts hold back goes to the quarantine, n
   assert.ok(await until(() => pendingOld(old.dir).length === 0));
   const r = textOf(await e.call("read_inbox"));
   assert.doesNotMatch(r, /held back after the upgrade/);
-  assert.match(r, /1 message from 1 sender is waiting for your user's decision/);
+  assert.match(r, /1 message from a sender the relay did not authenticate: held until your user decides\. Your user can review it with: hoptell contacts show q_[a-z2-7]{16}/);
   const q = path.join(e.session.store.dir, "quarantine");
   assert.equal(fs.readdirSync(q).filter((f) => f.endsWith(".json")).length, 1);
 });

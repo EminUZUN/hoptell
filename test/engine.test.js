@@ -51,6 +51,7 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       titleAuto: false,
       roles: ["rev", "back"],
       push: "hook",
+      contactsSelf: "allow",
       relay: { url: "ws://127.0.0.1:1", token: "t".repeat(20), auth: "token", protocol: 1, profile: "work", credentialStore: "auto", passphrase: null },
       snapshotRoots: "[]",
       relaysFile: "/nonexistent-home/.config/hoptell/relays.json",

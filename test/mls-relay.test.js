@@ -82,6 +82,49 @@ test("device frames are for members on protocol 2: a shared-token connection is 
   assert.equal((await refusal(c.rpc({ type: "device_list" }))).code, "member_only");
 });
 
+test("device requests: at most 30 per 10 s per connection, encrypted-message requests 120; on Date.now unless a test passes devices.rateNow", async (t) => {
+  // Date.now stands still unless moved: the window is decided by the clock alone, not by speed.
+  let real = Date.now();
+  t.mock.method(Date, "now", () => real);
+  const burst = async (c) => {
+    for (let i = 0; i < 30; i++) await c.rpc({ type: "device_list" });
+    assert.equal((await refusal(c.rpc({ type: "device_list" }))).code, "rate_limited");
+  };
+  // Without the option (as production starts it): Date.now's window.
+  const w = await deviceRelay(t);
+  const c = await w.client("alice");
+  await burst(c);
+  real += 10_000;
+  assert.ok(Array.isArray((await c.rpc({ type: "device_list" })).devices), "the window slid with Date.now");
+  // With the option: its clock alone moves the window.
+  let rate = 0;
+  const w2 = await deviceRelay(t, { rateNow: () => rate });
+  const c2 = await w2.client("alice");
+  await burst(c2);
+  real += 10_000;
+  assert.equal((await refusal(c2.rpc({ type: "device_list" }))).code, "rate_limited", "Date.now does not move it");
+  rate += 10_000;
+  assert.ok(Array.isArray((await c2.rpc({ type: "device_list" })).devices), "rateNow moves it");
+  // The encrypted-message window the same way (answered or refused for another reason: counted).
+  const ask = (c) => c.rpc({ type: "conversation", peer: "m_nobody" }).then(() => "answered", (x) => x.code);
+  const e2eeBurst = async (c) => {
+    for (let i = 0; i < 120; i++) assert.notEqual(await ask(c), "rate_limited");
+    assert.equal(await ask(c), "rate_limited");
+  };
+  const e = await deviceRelay(t, { e2ee: true });
+  const ec = await e.client("alice");
+  await e2eeBurst(ec);
+  real += 10_000;
+  assert.notEqual(await ask(ec), "rate_limited", "the window slid with Date.now");
+  const e2 = await deviceRelay(t, { e2ee: true, rateNow: () => rate });
+  const ec2 = await e2.client("alice");
+  await e2eeBurst(ec2);
+  real += 10_000;
+  assert.equal(await ask(ec2), "rate_limited", "Date.now does not move it");
+  rate += 10_000;
+  assert.notEqual(await ask(ec2), "rate_limited", "rateNow moves it");
+});
+
 test("enrollment: the pin must be the relay's own computation; idempotent; another key is refused; bounded", async (t) => {
   const w = await deviceRelay(t);
   const alice = await w.member("alice");

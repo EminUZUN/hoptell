@@ -214,7 +214,7 @@ test("required at the receiver: a message this device decrypted is shown as encr
   let after = "";
   await until(async () => /waiting for your user's decision/.test((after += await read())), 3000);
   assert.doesNotMatch(after, /claims encryption/, after);
-  assert.match(after, /1 message from 1 sender is waiting for your user's decision/, after);
+  assert.match(after, /1 message from member alice \(authenticated by the relay\): held because your user's contacts require encryption from this sender/, after);
 });
 
 test("required: no fallback; a relay without the e2ee capability (an older relay) carries no plaintext to that contact", async (t) => {

@@ -12,6 +12,8 @@ import { createSession } from "../lib/mcp.js";
 import { readRelaysFile } from "../lib/relays.js";
 import { startRelay } from "../lib/relay.js";
 import { readSettings } from "../lib/settings.js";
+import { contactsFile, freshContacts } from "../lib/contacts.js";
+import { HELD_WAIT } from "../lib/notices.js";
 import { existingInstall, fakeToken, sleep } from "./helpers.js";
 
 const textOf = (r) => r.content[0].text;
@@ -37,7 +39,7 @@ async function setup(t, { labJoin = true, withDefault = true, workJoin = true, e
   const relays = readRelaysFile(file, { env, homedir: dir });
   const c = createComposer(settings, relays, { keepAlive: true });
   t.after(() => c.stop());
-  beforeStart?.(c);
+  beforeStart?.(c, home);
   await c.start();
   // A peer "bob" on each relay, and a sender "carol" on lab.
   const peer = (relay, name) => {
@@ -480,13 +482,13 @@ test("a read cancelled right after its take, or failing after it, loses nothing 
     assert.match(cancelled, /cancelled/, `${mode}: ${cancelled.slice(0, 200)}`);
     lab.link.take = real;
     // A failure after the take.
-    const first = c.links[0].engine; // the composer asks the first link for the decisions line
-    const realDecisions = first.link.pendingDecisions;
-    first.link.pendingDecisions = () => {
+    const first = c.links[0].engine; // the composer asks every link for the parts of the decisions lines
+    const realDecisions = first.link.decisionParts;
+    first.link.decisionParts = () => {
       throw new Error("simulated");
     };
     assert.match(textOf(await c.call("read_inbox")), /simulated/, mode);
-    first.link.pendingDecisions = realDecisions;
+    first.link.decisionParts = realDecisions;
     let out = "";
     assert.ok(await until(async () => new RegExp(`keep me \\(${mode}\\)`).test((out = textOf(await c.call("read_inbox"))))), `${mode}: ${out}`);
     // Every mode ends with a receipt in a composed session; acknowledging it removes the message.
@@ -723,4 +725,25 @@ test("overlapping reads on a protocol-1 relay: every receipt they return stays u
   await c.stop();
   const dir = inbox.fileOf(lab.session.store, "").replace(/\/$/, "");
   assert.deepEqual(claimedIn(dir), [], "no claim is left behind");
+});
+
+test("contacts: a message held on a non-default relay wakes a wait once and is listed with its request; never its text", async (t) => {
+  // A managed home (everyone "ask"); a shared-token sender is held.
+  const { c, peer } = await setup(t, { beforeStart: (_c, home) => fs.writeFileSync(contactsFile(home), JSON.stringify(freshContacts()), { mode: 0o600 }) });
+  const carol = peer("lab", "carol");
+  await carol.ready();
+  const lab = c.links.find((l) => l.alias === "lab").engine;
+  assert.ok(await until(() => lab.link.status().state !== "pending"));
+  await sleep(300);
+  const waiting = c.call("wait_for_message", { timeout_seconds: 20 });
+  await sleep(300);
+  await carol.send("alice", "CANARY-composer-held");
+  const out = textOf(await waiting);
+  assert.ok(out.startsWith(HELD_WAIT), out);
+  assert.match(out, /1 message from a sender using the relay's shared token: held until your user decides\. Your user can review it with: hoptell contacts show q_[a-z2-7]{16}/);
+  assert.doesNotMatch(out, /CANARY-composer-held|carol/);
+  // The scheduler's list carries it as a held entry of the lab link; a repeated wait does not return for it.
+  assert.ok((await c.noticeList()).some((f) => /^held:lab\/q_[a-z2-7]{16}\//.test(f)));
+  assert.match(textOf(await c.call("wait_for_message", { timeout_seconds: 1 })), /^No messages within 1s\./);
+  assert.match(textOf(await c.call("read_inbox")), /hoptell contacts show q_/);
 });

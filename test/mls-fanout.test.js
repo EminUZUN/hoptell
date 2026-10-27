@@ -42,6 +42,20 @@ async function until(fn, what = "condition", ms = 5000) {
   }
 }
 
+const RATE_WINDOW_MS = 10_000; // the relay's rate windows (lib/relay.js)
+/**
+ * The clock of the relay's per-connection rate windows (device requests: 30 per 10 s, a pass that
+ * seals copies asks device_list for each; encrypted-message requests: 120 per 10 s). It stands
+ * still, so the limits count requests, never time: a pass is refused at the same request however
+ * fast the machine is. open() moves it one whole window on (every earlier request leaves the
+ * window); each connection of this file opens it when the relay refuses a request (connect()), so
+ * a refused pass is retried by the engine's own pacing without waiting 10 s.
+ */
+function rateWindow() {
+  let t = Date.now();
+  return { now: () => t, open: () => (t += RATE_WINDOW_MS) };
+}
+
 /**
  * A device of `member` (a home with its store, enrolled), and sessions on it: open(session,
  * {roles}) connects that session with its roles and an e2ee engine recording deliveries.
@@ -71,6 +85,15 @@ async function device(t, w, member, { sessions = [], contacts = memoryContacts()
 async function connect(w, member, name, roles = []) {
   const rc = new RelayClient({ url: w.url, token: w.members[member].token, name, mode: "peer", roles, reconnect: false });
   rc.on("error", () => {});
+  if (w.rate) {
+    // A refusal for the rate limit opens the window (see rateWindow).
+    const rpc = rc.rpc.bind(rc);
+    rc.rpc = (...a) =>
+      rpc(...a).catch((e) => {
+        if (e.code === "rate_limited") w.rate.open();
+        throw e;
+      });
+  }
   rc.start();
   await rc.ready(5000);
   return rc;
@@ -118,8 +141,8 @@ function loseAnswer(client, pred, { send = true } = {}) {
 const isApp = (f) => f.type === "send_e2ee" && f.kind === "app";
 /**
  * An explicit replace() after heavy traffic: the relay may refuse it for its per-connection rate
- * limit before anything changes (an explicit operation is not retried for its caller); the test
- * waits the window out, so what it checks never depends on timing.
+ * limit before anything changes (an explicit operation is not retried for its caller); the refusal
+ * opened the window (connect()), so the test asks again at once.
  */
 async function replaced(e2ee, peer) {
   for (let i = 0; ; i++) {
@@ -127,7 +150,6 @@ async function replaced(e2ee, peer) {
       return await e2ee.replace(peer);
     } catch (e) {
       if (e.code !== "rate_limited" || i >= 15) throw e;
-      await settle(1000);
     }
   }
 }
@@ -138,7 +160,9 @@ const appOps = (w) => w.db.get("SELECT count(*) AS n FROM e2ee_ops WHERE kind = 
  * sessions bob [reviewer] and bob-2 [reviewer] on one device; carol [reviewer], not pinned.
  */
 async function team(t, { relay = {}, limits, alicePins = ["bob"] } = {}) {
-  const w = await deviceRelay(t, { e2ee: true, ...relay });
+  const rate = rateWindow();
+  const w = await deviceRelay(t, { e2ee: true, rateNow: rate.now, ...relay });
+  w.rate = rate;
   const contacts = memoryContacts();
   contacts.doc.encryption = [{ realm: w.realm, mode: "preferred" }];
   const alice = await device(t, w, "alice", { contacts, limits, sessions: [{ name: "alice", roles: ["reviewer"] }] });
@@ -642,6 +666,7 @@ test("a replacement after a 20-copy fan-out: every accepted copy is sealed again
   // The relay records each accepted copy's op (a rate-limited request is refused before that);
   // its queue is no measure, as bob's device takes the copies from it as they arrive.
   const ops = appOps(w);
+  w.rate.open(); // the passes under test start with empty windows
   await bob.s.bob.e2ee.replace(alice.id);
   await until(() => appOps(w) === ops + 20, "all 20 copies sealed again and accepted", 15_000);
   assert.ok(limited > 0, "a pass was stopped by the relay's rate limit");
@@ -695,6 +720,7 @@ async function twentyNew(t) {
       if (e.code === "rate_limited") limited++;
       throw e;
     });
+  team_.w.rate.open(); // the pass under test starts with an empty window
   return { ...team_, limited: () => limited };
 }
 
@@ -703,8 +729,9 @@ test("recover(): a pass the relay's rate limit stops runs again on its own until
   const fresh = alice.engine(alice.s.alice.client, "alice");
   t.after(() => fresh.e2ee.close());
   await fresh.e2ee.recover(); // the one explicit call
-  await until(() => appOps(w) === 20, "all 20 copies sent", 15_000);
   assert.ok(limited() > 0, "the first pass was stopped by the rate limit");
+  assert.ok(appOps(w) < 20, "not every copy was sent by the first pass");
+  await until(() => appOps(w) === 20, "all 20 copies sent", 15_000);
   assert.ok(Object.values((await stateOf(alice)).logical).every((L) => L.state === "sent"));
 });
 
@@ -714,6 +741,7 @@ test("close(): the scheduled passes stop", async (t) => {
   await fresh.e2ee.recover();
   assert.ok(limited() > 0);
   fresh.e2ee.close();
+  w.rate.open(); // the window is open: a pass that still ran would be accepted
   const ops = appOps(w);
   await settle(4000);
   assert.equal(appOps(w), ops, "nothing more after close()");
@@ -838,7 +866,7 @@ test("retained send state: completed fan-outs reach the bound; the next fan-out 
   const ops = appOps(w);
   await replaced(alice.s.alice.e2ee, bob.id);
   await settle(400);
-  // (Recovery may wait out the relay's per-connection rate limit; the bound never refuses it.)
+  // (Recovery may meet the relay's per-connection rate limit, which opens the window; the bound never refuses it.)
   await until(async () => (await alice.s.alice.e2ee.recover(), appOps(w) === ops + 6), "every accepted copy sealed again in the new group, none refused by the bound", 30_000);
   assert.ok(Object.values((await stateOf(alice)).logical).every((L) => L.state === "sent"));
   await bounded(alice, limits);
@@ -867,10 +895,7 @@ test("retained send state: an accepted large body keeps its reservation; smaller
       n++;
       await bounded(alice, limits);
     } catch (e) {
-      if (e.code === "rate_limited") {
-        await settle(1000); // the relay's device-request limit, not the bound
-        continue;
-      }
+      if (e.code === "rate_limited") continue; // the relay's device-request limit, not the bound (the refusal opened the window)
       assert.equal(e.code, "storage_full");
       break;
     }

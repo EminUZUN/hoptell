@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Contacts: eligible messages from your own member now bypass the default hold. When the relay
+  states that the sender signed in as the same member as the receiving session (same member id
+  and realm, with neither side hosted), the message can reach the agent without a grant. Other
+  senders follow the usual contacts policy. Blocks, a default of `block` and `required`
+  encryption still apply. `HOPTELL_CONTACTS_SELF=hold` disables this exception; an invalid value
+  prevents startup. Spawned agent runs take the value of the session that spawned them.
+- Contacts: a held message now wakes the receiving session like a delivered one, with a fixed
+  notice and never its text: the hook and tmux notices, the channel notice, and the end of a
+  `wait_for_message` call or of `hoptell listen`. `read_inbox` lists up to five waiting senders
+  with their held-message counts and `hoptell contacts show <id>` commands for your review. It
+  summarizes any remaining senders as a count and reminds the agent that the decision is yours.
+  The sender is named only when the relay authenticated it as a member. The sender's
+  acknowledgement is unchanged and does not reveal whether you held, blocked or accepted the
+  message.
+- Contacts: in a new install, `hoptell tmux` as the first hoptell command could make the home look
+  like an existing one, where every sender reaches your sessions. It now sets up the contacts
+  before it creates anything, as the other commands do.
+
 - Session titles: `HOPTELL_TITLE=<text>` shows a short title next to the session's name in other
   sessions' `list_peers`, for example `emin-mac-61034 (host: mac) title: "review docs" online`.
   The title is a label only: messages still go to the name, and no access decision reads it.

@@ -187,6 +187,12 @@ The raw results are in `results/triggers/{before,after}/`.
   The real test plays the user's part: it lists the request, shows it, and allows it with the
   printed `--rev` and `--policy-rev`. It also checks that the session tells the user about
   contacts and never runs `contacts allow` itself.
+
+  Later change: by default, eligible requests between sessions of the same non-hosted member in
+  the same realm no longer need a contacts grant (`HOPTELL_CONTACTS_SELF`); the usual blocks and
+  encryption requirements still apply. A held message now wakes its session with a notice. Step 3, the
+  troubleshooting row and the README now describe when a request is held. The real test checks
+  that the same-member request is not held and that the session never runs `contacts allow`.
 - **Socket path (a test fix, not a skill fix).** The macOS tmux socket path limit is 104 bytes,
   and tmux resolves `/var` to `/private/var`. When the temporary folder is too long, the test now
   gives its private tmux server a short `/tmp/hoptell-tmux-*` folder and removes it afterwards.

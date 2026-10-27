@@ -184,6 +184,7 @@ test("spawn: the run's relays file has only the granted aliases; the supervisor'
   const env = fs.readFileSync(p.env, "utf8");
   assert.doesNotMatch(env, /TOKEN|never/);
   assert.match(env, new RegExp(`HOPTELL_NAME="${r.name}"`));
+  assert.match(env, /^HOPTELL_CONTACTS_SELF=allow$/m, "the spawner's own-member setting (the default)");
   const sup = supervisorEnv(s.ctx.env, s.ctx.home, { run: r.run, name: r.name, roles: ["spawned"], pass: [] });
   for (const k of ["HOPTELL_TOKEN", "HOPTELL_RELAY", "OTHER_SECRET"]) assert.equal(sup[k], undefined, k);
   assert.equal(sup.HOPTELL_RELAYS, p.relays);
@@ -320,6 +321,18 @@ test("limits: concurrent spawns racing for the last slot (exactly one wins); the
   assert.equal((await spawnAgent(restarted, { profile: "codex-reviewer", task: "t" })).error, "limit_rate");
   // An hour later the rate allows again.
   assert.equal((await spawnAgent({ ...restarted, deps: { ...restarted.deps, now: () => Date.now() + 3_601_000 } }, { profile: "codex-reviewer", task: "t" })).error, undefined);
+});
+
+test("spawn: the run's settings file carries the spawner's HOPTELL_CONTACTS_SELF, not the environment's; an invalid value starts nothing", async (t) => {
+  const s = await spawnWorld(t, { profile: { confirm: "always" } });
+  const r = await spawnAgent({ ...s.ctx, contactsSelf: "hold", env: { ...s.ctx.env, HOPTELL_CONTACTS_SELF: "allow" } }, { profile: "codex-reviewer", task: "t" });
+  assert.equal(r.state, "pending-confirmation", r.message);
+  const p = runPaths(s.ctx.home, r.run);
+  assert.match(fs.readFileSync(p.env, "utf8"), /^HOPTELL_CONTACTS_SELF=hold$/m);
+  assert.equal(supervisorEnv({ ...s.ctx.env, HOPTELL_CONTACTS_SELF: "allow" }, s.ctx.home, { run: r.run, name: r.name, roles: ["spawned"], pass: [] }).HOPTELL_CONTACTS_SELF, undefined, "never from the spawner's environment");
+  const bad = await spawnAgent({ ...s.ctx, contactsSelf: "maybe" }, { profile: "codex-reviewer", task: "t" });
+  assert.equal(bad.error, "failed");
+  assert.match(bad.message, /HOPTELL_CONTACTS_SELF must be allow or hold/);
 });
 
 test("confirmation: pending-confirmation, the view, a stale token after a profile edit, discard, start, expiry", async (t) => {

@@ -373,14 +373,14 @@ test("holds: a new device of a pinned contact holds sending until the owner acce
   loseAnswer(alice.s.alice.client, (f) => f.type === "send_e2ee" && f.kind === "commit");
   const r = await alice.s.alice.e2ee.send({ to: { member: bob.id, session: "bob" }, body: "after the revocation" });
   assert.equal(r.state, "unsent");
+  // Checked as the refusal returns, before any later operation of the engine ran (each one runs
+  // after this through its queue and its store): the removal is not confirmed yet.
+  assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
+  assert.equal(bob.s.bob.got.length, 2, "nothing sent while the removal is not confirmed");
   await settle();
-  if (bob.s.bob.got.length === 2) {
-    assert.deepEqual(pinOf(contacts.doc, w.realm, bob.id).revoked?.map((r) => r.device), [bob2.device], "the trusted revocation is kept in the pins");
-  } else {
-    // A merged removal makes bob owe an update (A2): his commit can show alice her own removal in
-    // the log before recover(), and she then sends; never before the removal was merged.
-    assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "sent only after the removal was merged");
-  }
+  // A merged removal makes bob owe an update (A2): his commit can show alice her own removal in
+  // the log before recover(), and she then sends; never before the removal was merged.
+  if (bob.s.bob.got.length > 2) assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "sent only after the removal was merged");
   await alice.s.alice.e2ee.recover();
   await until(() => bob.s.bob.got.length === 3, "sent after the merge");
   assert.ok(!w.ds.roster(gid).some((d) => d.device === bob2.device), "the revoked device left the routing roster");
@@ -844,10 +844,13 @@ test("MII11 OpenMLS: an own-device admission deferred past the peer's epoch rete
   // message is delivered there.
   await acceptOwnDevices(b, extra);
   assert.equal(await old.e2ee.receive(commit, noop), "delivered");
-  await until(() => a.s.alice.got.length === 1, "the held message, decrypted");
-  assert.equal(a.s.alice.got[0].text, "never sealed in a pruned epoch");
+  // The receive queued the held message's send on the engine's serial queue; checkpoint() runs
+  // after it, so the device's catch-up, update and send are done here, without a time bound; the
+  // bound below covers alice's decryption only.
   // Epoch 7: its first send 8 days after joining updated first (the fresh-update policy, A2).
   assert.equal((await old.e2ee.checkpoint(a.id)).epoch, 7);
+  await until(() => a.s.alice.got.length === 1, "the held message, decrypted");
+  assert.equal(a.s.alice.got[0].text, "never sealed in a pruned epoch");
 });
 
 test("MII2: a Welcome into a group with an unaccepted device waits for the owner (the key is kept); with a trusted-revoked device it is refused", async (t) => {

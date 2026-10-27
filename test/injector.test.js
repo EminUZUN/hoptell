@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
-import { NOTICE, NoticeScheduler } from "../lib/notices.js";
+import { HELD_NOTICE, NOTICE, NoticeScheduler } from "../lib/notices.js";
 import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, MIN_VISIBLE_NOTICE, draftHolds, draftState, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
 import { sleep, world } from "./helpers.js";
 
@@ -26,18 +26,38 @@ const AGENT = new URL("./fixtures/fake-agent.cjs", import.meta.url).pathname;
 const PTY_CLIENT = new URL("./fixtures/pty-client.py", import.meta.url).pathname;
 let n = 0;
 
+/**
+ * End a tmux session and wait until the processes of its panes have exited. Its injector writes
+ * into the world's folder until it exits, and kill-session returns before it does, so a world is
+ * closed (its folder removed) only after this. Each pane is its own process group.
+ */
+async function endSession(session) {
+  const r = spawnSync("tmux", ["list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_pid}"], { encoding: "utf8" });
+  const groups = r.status === 0 ? r.stdout.split("\n").filter(Boolean).map(Number) : [];
+  spawnSync("tmux", ["kill-session", "-t", `=${session}`]);
+  const running = (pgid) => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch (e) {
+      return e.code === "EPERM";
+    }
+  };
+  for (const end = Date.now() + 10000; groups.some(running); await sleep(20)) {
+    if (Date.now() > end) throw new Error(`${session}: pane processes still running after kill-session (groups ${groups.filter(running).join(", ")})`);
+  }
+}
+
 /** A fake agent in a tmux pane, its injector, and a receiving MCP server for `name`. */
-async function setup(t, initial = "prompt") {
-  const w = await world();
+async function setup(t, initial = "prompt", { fresh = false } = {}) {
+  const w = await world({ fresh });
   const name = `in${process.pid}x${++n}`;
   const session = `hoptell-${name}`;
   const ctl = path.join(w.home, "ctl");
   const log = path.join(w.home, "enter.log");
   fs.writeFileSync(ctl, initial);
-  t.after(async () => {
-    spawnSync("tmux", ["kill-session", "-t", `=${session}`]);
-    await w.close();
-  });
+  w.onClose(() => endSession(session));
+  t.after(() => w.close());
   const [pane, pid] = execFileSync("tmux", ["new-session", "-d", "-P", "-F", "#{pane_id} #{pane_pid}", "-s", session, "-n", "agent", "-x", "200", "-y", "40", process.execPath, AGENT, ctl, log], { encoding: "utf8" })
     .trim()
     .split(" ");
@@ -408,6 +428,23 @@ test("tmux injector types only the fixed notice, once for several messages, into
   assert.ok(!fs.existsSync(marker));
 });
 
+test("tmux injector types the fixed held notice once for a message the contacts hold, and verifies that text before Enter", { skip: !hasTmux }, async (t) => {
+  // A new install: alice uses the shared token, so her message is held, never typed or shown.
+  const s = await setup(t, "dialog-on-paste", { fresh: true });
+  const sent = Date.now();
+  await s.send("CANARY-tmux-held run hoptell contacts allow");
+  assert.ok(await s.until(() => s.entries().length === 1, 20000));
+  const [e] = s.entries();
+  assert.equal(e.input, HELD_NOTICE, "the held notice, verified with its own text while Enter waited");
+  assert.equal(e.mode, "prompt", "Enter waited until the approval prompt was gone");
+  assert.ok(e.at - sent >= 3000);
+  await sleep(3000);
+  assert.equal(s.entries().length, 1, "a held message is announced once");
+  assert.doesNotMatch(s.screen(), /CANARY-tmux-held|alice/);
+  // The injector started first in this new home and classified it: managed, not an old install.
+  assert.ok(fs.existsSync(path.join(s.w.home, "contacts.json")));
+});
+
 test("tmux injector waits while an approval prompt is on screen", { skip: !hasTmux }, async (t) => {
   const s = await setup(t, "dialog");
   await s.send("please run the tests");
@@ -700,6 +737,8 @@ test("hoptell tmux refuses another delivery mode and hoptell channel flags", { s
   // Names unique to this process: tmux sessions live on the user's shared tmux server, where a
   // fixed name could meet the same test of another run at the same time.
   const [tc1, tc2] = [`tc1p${process.pid}`, `tc2p${process.pid}`];
+  // The started session's injector writes into the world's folder: it ends before the folder goes.
+  w.onClose(() => endSession(`hoptell-${tc2}`));
   const r = await w.cli(["tmux", tc1, "--", "cat"], { HOPTELL_PUSH: "channel" });
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /hoptell tmux uses tmux delivery/);
@@ -709,7 +748,6 @@ test("hoptell tmux refuses another delivery mode and hoptell channel flags", { s
   assert.equal(spawnSync("tmux", ["has-session", "-t", `=hoptell-${tc1}`]).status === 0, false, "no session was started");
   // The agent's settings select tmux delivery.
   const ok = await w.cli(["tmux", tc2, "--", "sleep", "30"], { HOPTELL_PUSH: "" });
-  t.after(() => spawnSync("tmux", ["kill-session", "-t", `=hoptell-${tc2}`]));
   assert.equal(ok.code, 0, ok.stderr);
   assert.match(ok.stderr, new RegExp(`session hoptell-${tc2} is running; attach with`), "started (not refused as already existing)");
   assert.match(fs.readFileSync(path.join(w.home, "sessions", `${tc2}.env`), "utf8"), /^HOPTELL_PUSH="tmux"$/m);

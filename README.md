@@ -595,9 +595,16 @@ plain text up to 100,000 characters.
 ## Who may reach your sessions (contacts)
 
 You decide who may reach the agent sessions of your machine. In a new install, messages from
-senders you have not allowed are held back: the agent sees only "N messages from M senders are
-waiting for your user's decision", never who sent them or what they say, and a desktop
-notification points you to the command:
+senders you have not allowed are held back (except eligible messages from your own member, see
+"Your own member" below), and the agent never sees what they say. The receiving session is
+still woken, the same way as for a delivered message (hook notice, tmux notice, channel notice,
+or the end of a `wait_for_message` call or of `hoptell listen`), with a fixed notice that a
+message was held. `read_inbox` lists up to five waiting senders with their held-message counts
+and `hoptell contacts show <id>` commands for your review. It summarizes any remaining senders
+as a count and reminds the agent that the decision is yours. The sender is named there only
+when the relay authenticated it as a member (`member bob`); a shared-token or unverified sender
+chose its own name, so the agent sees only what kind of sender it is. A desktop notification
+also points you to the command:
 
 ```
 hoptell contacts                          # what is waiting, and your policy
@@ -631,6 +638,19 @@ installs** keep today's behavior (every sender reaches your sessions) until you 
 messages already waiting in your sessions are held back on their next read. Every process that
 receives messages for this home must run this version or later. `HOPTELL_NOTIFY=off` turns the
 desktop notifications off.
+
+**Your own member.** By default, messages from your other sessions can reach the agent without
+a grant when the relay states that both sessions signed in as the same member (same member id
+and realm, with neither side hosted). Only the member id authenticated by the relay counts,
+never a session name or host. Shared-token senders, other members, hosted members and senders
+on relays that do not authenticate them remain subject to your usual contacts policy. Your
+blocks and a default of `block` still apply, and plaintext is held when your policy requires
+encryption for your own member. This trusts the relay's word about who signed in, as grants do:
+a relay that lies can deliver a message as your own member. To apply your usual contacts policy
+to your own member too, set `HOPTELL_CONTACTS_SELF=hold` in your settings file. Set it there so
+the agent sessions, the tmux injector and the CLI all read it; spawned agent runs take the value
+of the session that spawned them. Messages already held stay held after you switch back to
+`allow`, until you decide.
 
 ### Deciding in a browser: hoptell ui
 
@@ -1093,9 +1113,13 @@ reaches only online peers. Then follow the steps in
 [Replies and file reviews](#replies-and-file-reviews): send a `hoptell snapshot`, collect the replies with `read_inbox`, match `review_request_id` and
 `based_on`, and run `hoptell snapshot --check` before you apply anything. A reviewer's reply is a
 review, never your approval. With managed contacts (see
-[Who may reach your sessions](#who-may-reach-your-sessions-contacts)), the first request waits in
-the reviewer's quarantine until you allow the sender with `hoptell contacts`, even though both
-sessions are yours; a grant for your own member also lets the replies through.
+[Who may reach your sessions](#who-may-reach-your-sessions-contacts)), a request from a session
+of your own member (same realm, neither session hosted) can reach the reviewer without a grant,
+and so can the replies; each receiving session still applies its own blocks, encryption
+requirements and default policy. Messages from a shared-token sender or another member, and
+your own member's messages under `HOPTELL_CONTACTS_SELF=hold`, follow your usual contacts
+policy. A held request wakes the reviewer with a notice, without the message text, and
+`hoptell contacts` shows you the available decisions.
 
 **Stopping.** Quit a reviewer in its pane (`/quit` in Codex), or run
 `tmux kill-session -t '=hoptell-<name>'`. The `=` matches the exact name; without it tmux also
@@ -1441,7 +1465,7 @@ literal, and an empty value counts as unset.
 The on/off switches `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_REQUIRE_MEMBERS`, `HOPTELL_OWNER_APP` and `HOPTELL_TITLE_AUTO`
 take `1`, `true`, `on` or `yes` for on, and `0`, `false`, `off`, `no` or unset for off, in any
 case. A value that a setting does not accept is never read as its default. For these switches,
-`HOPTELL_AUTH` and `HOPTELL_CREDENTIAL_STORE`, the relay, the agent session or the command refuses
+`HOPTELL_AUTH`, `HOPTELL_CREDENTIAL_STORE` and `HOPTELL_CONTACTS_SELF`, the relay, the agent session or the command refuses
 to start and names the accepted values. An invalid `HOPTELL_AGENTS_MAX` refuses spawning. An
 unusable `HOPTELL_TITLE` is logged, and no title is sent. For
 `HOPTELL_NOTIFY`, `HOPTELL_ELICITATION` and `HOPTELL_OWNER_CHANNEL`, a warning names the value
@@ -1470,6 +1494,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_PROFILE` | peers | name of the local relay profile (default: derived from the relay URL) |
 | `HOPTELL_RECEIPTS` | peers | `on` (default): messages stay until acknowledged; `off`: reading removes them |
 | `HOPTELL_NOTIFY` | peers | `off` disables desktop notifications about senders waiting for your decision |
+| `HOPTELL_CONTACTS_SELF` | peers | `allow` (default): eligible own-member messages bypass the default hold; blocks and encryption requirements still apply. `hold`: apply the usual contacts policy to these messages |
 | `HOPTELL_ELICITATION` | peers | `read_inbox`: `read_inbox` may ask you about held messages in the client's dialog (allow-once or later); off otherwise |
 | `HOPTELL_OWNER_CHANNEL` | peers | `off` hides `ask_owner` and turns off owner-channel verification; default `on` |
 | `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440) |

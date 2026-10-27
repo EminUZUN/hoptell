@@ -10,6 +10,11 @@ import { IDENTITY, IDENTITY_LIMITS, TEXTS, UNDELIVERED_REASONS, ago } from "../l
 import { OWNER_CHAT, OWNER_USER, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, textProblems as problems, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
+// The bridge handles Telegram updates and agent messages one at a time, each with several durable
+// (fsynced) state writes, so under load a wait is bounded by the work it covers: this much for each
+// update or message queued before the awaited reply.
+const PER_UPDATE_MS = 4000;
+
 const SAMPLE = { n: 12, who: "codex-pc2", question: "Ship it?", choice: "yes", reason: "the hoptell server refused it", cmd: "xyz", name: "Main", total: 73, shown: 50, page: 2, pages: 5, excerpt: "Ship it?", when: "12 minutes ago", max: 3500, len: 3501 };
 const call = (key, f) => {
   if (typeof f !== "function") return f;
@@ -85,20 +90,21 @@ test("the sweep: every text the bridge sent in a broad scenario passes the scan"
   // Questions: a choice, a reply, a refused answer, an expired one.
   await alice.ask("Ship it?", { choices: ["yes", "no"] });
   await alice.ask("Which day?");
-  await until(() => tg.cards().length === 2, 4000, "cards");
+  await until(() => tg.cards().length === 2, 2 * PER_UPDATE_MS, "cards");
   const [choice, free] = tg.cards();
   tg.press(choice, 0);
   tg.say("Friday", { reply: tg.replyTo(free) });
-  await until(() => tg.calls("editMessageText").length >= 2, 4000, "answered");
+  await until(() => tg.calls("editMessageText").length >= 2, 2 * PER_UPDATE_MS, "answered");
   tg.press(choice, 1); // a late tap
   tg.say("and Monday", { reply: tg.replyTo(free) }); // the confirm offer
-  await until(() => tg.last(/^This question is already answered/), 4000, "confirm");
+  await until(() => tg.last(/^This question is already answered/), 2 * PER_UPDATE_MS, "confirm");
   const confirm = tg.last(/^This question is already answered/);
   tg.press(confirm, 0, { data: confirm.params.reply_markup.inline_keyboard[0][1].callback_data }); // Cancel
   // Commands and refusals.
-  for (const x of ["/help", "/pending", "/peers", "/agents", "/zed hi", "@all hi", "@ hi", "@nobody hi", "x".repeat(3501), "/msg"]) tg.say(x);
+  const commands = ["/help", "/pending", "/peers", "/agents", "/zed hi", "@all hi", "@ hi", "@nobody hi", "x".repeat(3501), "/msg"];
+  for (const x of commands) tg.say(x);
   tg.push({ message: { message_id: 9999, from: { id: OWNER_USER }, chat: { id: OWNER_CHAT, type: "private" } } }); // a sticker: no text
-  await until(() => tg.texts().includes("I can only pass on text messages for now."), 6000, "commands");
+  await until(() => tg.texts().includes("I can only pass on text messages for now."), (commands.length + 1) * PER_UPDATE_MS, "commands");
   const list = tg.last(/^Who should get your message\?/);
   tg.press(list, 0);
   await until(() => tg.last(/^✏️ Message to /), 4000, "prompt");
@@ -129,7 +135,7 @@ test("the sweep: every text the bridge sent in a broad scenario passes the scan"
   tg.say("Main", { reply: tg.replyTo(tg.last(/^New name for alice/)) });
   await until(() => tg.texts().some((x) => x.startsWith("Names can be")), 4000, "refused name");
   tg.say("@Main hi");
-  await until(() => tg.texts().some((x) => /^I don't know an agent called "Main"\. Did you mean/.test(x)), 4000, "alias hint");
+  await until(() => tg.texts().some((x) => /^I don't know an agent called "Main"\. Did you mean/.test(x)), 2 * PER_UPDATE_MS, "alias hint"); // after the rename to Main
   tg.say("/msg");
   await until(() => tg.calls("sendMessage").filter((c) => c.params.text === "Who should get your message?").length >= 2, 4000, "msg");
   const picker = tg.calls("sendMessage").filter((c) => c.params.text === "Who should get your message?").at(-1);
