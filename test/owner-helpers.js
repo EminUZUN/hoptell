@@ -21,7 +21,8 @@ export const OWNER_USER = 5550001;
 export const OWNER_CHAT = 5550001;
 export const BOT_ID = "7000001";
 /** The test bot's token (never a real one): the app's initData is signed with a key derived from it. */
-export const BOT_TOKEN = `${BOT_ID}:AAHtesttesttesttesttesttesttesttest00`;
+// Generated per run, so no token-shaped literal sits in the repository.
+export const BOT_TOKEN = `${BOT_ID}:${crypto.randomBytes(26).toString("base64url")}`;
 export const APP_KEY = appSecret(BOT_TOKEN);
 
 /**

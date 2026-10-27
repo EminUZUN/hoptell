@@ -2,6 +2,7 @@
 // tests of section 11, "The rule", "Settings", "Handles", "Questions").
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readAudit } from "../lib/ownerchannel.js";
 import { APP_KEY, agent, appClient, appSet, bridgeOn, fakeTelegram, initData, newKey, newOp, ownerRelay, paired, peopleOf, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
@@ -116,6 +117,6 @@ test("app: requests with more or other fields than allowed are refused; the page
 test("app: initData of another user, or signed with another bot's token, gets not_you; the key is the derived one", async (t) => {
   const { app } = await setup(t);
   assert.equal((await app.open(initData({ user: { id: 42, first_name: "X" } }))).json.error, "not_you");
-  assert.equal((await app.open(initData({}, "7000002:AAHothertokenothertokenothertoken00"))).json.error, "not_you");
+  assert.equal((await app.open(initData({}, `7000002:${crypto.randomBytes(26).toString("base64url")}`))).json.error, "not_you");
   assert.ok(Buffer.isBuffer(APP_KEY) && APP_KEY.length === 32);
 });

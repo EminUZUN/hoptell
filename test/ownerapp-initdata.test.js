@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { appSecret, checkInitData, dataCheckString, hexEqual, parseForm, signInitData } from "../lib/ownerappauth.js";
 
-const TOKEN = "7000001:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const OTHER = "7000002:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const TOKEN = `7000001:${crypto.randomBytes(26).toString("base64url")}`;
+const OTHER = `7000002:${crypto.randomBytes(26).toString("base64url")}`;
 const USER = 5550001;
 const NOW = 1_800_000_000_000;
 const nowS = NOW / 1000;
@@ -25,7 +25,7 @@ test("initData: a valid one opens; a field Telegram adds later is part of the ch
 
 test("initData: wrong hash, another bot's token, a changed field, a repeated key, a missing user or auth_date", () => {
   const raw = signInitData(TOKEN, base());
-  assert.equal(check(raw.replace(/hash=[0-9a-f]{4}/, "hash=0000")).reason, "bad_hash");
+  assert.equal(check(raw.replace(/hash=([0-9a-f])/, (_, c) => `hash=${c === "0" ? "1" : "0"}`)).reason, "bad_hash");
   assert.equal(check(signInitData(OTHER, base())).reason, "bad_hash");
   assert.equal(check(raw.replace("query_id=AAH", "query_id=AAI")).reason, "bad_hash");
   assert.equal(check(`${raw}&query_id=AAH`).reason, "bad_hash");

@@ -2,6 +2,7 @@
 // "Sessions", "Revocation edges", "Rate limits", "Handles", "Early taps", "Old relay").
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { Crash, readAudit } from "../lib/ownerchannel.js";
 import { withLock } from "../lib/locks.js";
 import { peoplePath } from "../lib/ownerpeople.js";
@@ -146,7 +147,7 @@ test("sessions: --rotate with the bridge stopped: the old link answers 404; a br
 
 test("sessions: failed initData: 20 a minute (the defaults) lock out every session request for 5 minutes, with one chat line a day", async (t) => {
   const s = await setup(t);
-  const bad = initData({}, "7000001:AAHwrongwrongwrongwrongwrongwrong00");
+  const bad = initData({}, `7000001:${crypto.randomBytes(26).toString("base64url")}`);
   for (let i = 0; i < 20; i++) {
     const r = await s.app.open(bad);
     assert.equal(r.status, 403, `failure ${i + 1}: refused, never rate-limited first`);
@@ -164,7 +165,7 @@ test("sessions: failed initData: 20 a minute (the defaults) lock out every sessi
 test("sessions: per pairing, at most 10 sessions opened a minute (the defaults), also from new sessions; failures do not count", async (t) => {
   const s = await setup(t);
   const id = s.bridge.state().app.id;
-  const bad = initData({}, "7000001:AAHwrongwrongwrongwrongwrongwrong00");
+  const bad = initData({}, `7000001:${crypto.randomBytes(26).toString("base64url")}`);
   for (let i = 0; i < 5; i++) assert.equal((await s.app.open(bad)).status, 403);
   for (let i = 0; i < 10; i++) assert.equal((await appClient(s.r.http, id).open()).status, 200, `open ${i + 1}`);
   const eleventh = await appClient(s.r.http, id).open();
