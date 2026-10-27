@@ -394,28 +394,29 @@ test("MCP: HOPTELL_TITLE shows in other sessions' list_peers, never in message h
 // ---- compatibility --------------------------------------------------------------------------
 
 /**
- * The relay and client of deb1d00 (before titles), from the repository's history, in a temporary
- * folder that reuses this checkout's node_modules. null when git or that commit is not available.
+ * The relay and client of c256ac2 (before titles; the same tree as deb1d00 before the history was
+ * squashed), from the repository's history, in a temporary folder that reuses this checkout's
+ * node_modules. null when git or that commit is not available.
  */
 function oldRelease(t) {
   try {
-    execFileSync("git", ["-C", ROOT, "cat-file", "-e", "deb1d00^{commit}"], { stdio: "ignore" });
+    execFileSync("git", ["-C", ROOT, "cat-file", "-e", "c256ac2^{commit}"], { stdio: "ignore" });
   } catch {
     return null;
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-deb1d00-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-c256ac2-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const tar = execFileSync("git", ["-C", ROOT, "archive", "--format=tar", "deb1d00", "lib", "package.json"], { maxBuffer: 256 * 1024 * 1024 });
+  const tar = execFileSync("git", ["-C", ROOT, "archive", "--format=tar", "c256ac2", "lib", "package.json"], { maxBuffer: 256 * 1024 * 1024 });
   execFileSync("tar", ["-x", "-C", dir], { input: tar });
   fs.symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"));
   return dir;
 }
 
-test("compatibility: a new client on the deb1d00 relay; an old client on a new relay", async (t) => {
+test("compatibility: a new client on the c256ac2 relay; an old client on a new relay", async (t) => {
   const dir = oldRelease(t);
   // In CI the baseline must be there (the checkouts fetch full history): a missing one fails.
-  if (!dir && process.env.CI) assert.fail("the deb1d00 baseline is not in the git history; CI checkouts need full history (fetch-depth: 0, GIT_DEPTH: 0)");
-  if (!dir) return t.skip("the deb1d00 baseline is unavailable here (not in the git history, or git is missing)");
+  if (!dir && process.env.CI) assert.fail("the c256ac2 baseline is not in the git history; CI checkouts need full history (fetch-depth: 0, GIT_DEPTH: 0)");
+  if (!dir) return t.skip("the c256ac2 baseline is unavailable here (not in the git history, or git is missing)");
   const old = { relay: await import(path.join(dir, "lib/relay.js")), client: await import(path.join(dir, "lib/client.js")) };
   const token = fakeToken();
   // New client, old relay: the hello title is dropped, no cap, no titles, messages and receipts work.
