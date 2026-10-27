@@ -567,15 +567,15 @@ test("fav, unfav, alias and sessions: people.json from the bridge machine's CLI;
   assert.equal(people["me-alice"].rev, 2);
   assert.match(people["me-alice"].last_op, /^cli:[0-9a-f]{16}$/);
   for (const [bad, text] of [
-    ["bob", "That name is already used by another agent. Pick another."],
-    ["me-alice", "That name is already used by another agent. Pick another."],
-    ["alice", "That name is already used by another agent. Pick another."],
-    ["@x", 'Names can be 1 to 24 characters and can\'t start with @, / or an emoji, or contain "·". Pick another.'],
+    ["bob", "that name is already used by another agent\nPick another custom name."],
+    ["me-alice", "that name is already used by another agent\nPick another custom name."],
+    ["alice", "that name is already used by another agent\nPick another custom name."],
+    ["@x", 'invalid custom name\nUse 1 to 24 characters.\nDo not start with @, / or an emoji, or include "·".'],
   ]) {
     assert.equal(await s.cli(["alias", "bob", bad === "bob" ? "Main" : bad]), 1, bad);
     if (bad !== "bob") assert.equal(said(), `ERR hoptell telegram: ${text}`, bad);
   }
-  assert.equal(said(), 'ERR hoptell telegram: Names can be 1 to 24 characters and can\'t start with @, / or an emoji, or contain "·". Pick another.');
+  assert.equal(said(), 'ERR hoptell telegram: invalid custom name\nUse 1 to 24 characters.\nDo not start with @, / or an emoji, or include "·".');
   assert.equal(await s.cli(["unfav", "me-alice"]), 0);
   assert.equal(said(), "OUT Main (alice) is no longer a favourite.");
   assert.equal(await s.cli(["sessions"]), 0);
@@ -616,7 +616,7 @@ test("CLI: two names given at once: exactly one wins; a change waiting for the l
   const { readPeople, peoplePath } = await import("../lib/ownerpeople.js");
   const sessions = readPeople(s.home, { member: ME, owner: 5550001 }).sessions;
   assert.equal(Object.values(sessions).filter((e) => e.alias?.toLowerCase() === "main").length, 1);
-  assert.ok(s.lines.includes("ERR hoptell telegram: That name is already used by another agent. Pick another."));
+  assert.ok(s.lines.includes("ERR hoptell telegram: that name is already used by another agent\nPick another custom name."));
   // A change waiting for the lock while the owner unpairs: nothing is written.
   const { tryLock } = await import("../lib/locks.js");
   const release = tryLock(`${peoplePath(s.home)}.lock`);

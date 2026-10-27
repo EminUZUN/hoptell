@@ -978,6 +978,11 @@ try {
         }
       };
       if (ownerApp) log("owner app: /app/ is served for registered owner channel bridges (HOPTELL_OWNER_APP=on)");
+      // A kill -HUP that arrives while the relay starts is kept and run once it is ready, rather
+      // than ending the process (the default for SIGHUP).
+      let reload = null;
+      let reloadAsked = false;
+      if (membersFile || policyFile) process.on("SIGHUP", () => (reload ? reload() : (reloadAsked = true)));
       const relay = await startRelay({ host: opt("--host", process.env.HOPTELL_HOST), port, token: process.env.HOPTELL_TOKEN, members: initialMembers, hosts: hostsRead, requireMembers, realm, fingerprint, trustedProxies, oidc, access, devices, ownerApp: ownerApp ? { stateDir: stateDirectory } : null, audit, extraStats: () => ({ auditDropped: dropped(), ...storeStats() }), log });
       // The relay admin (design 4.4): its operations over this store, served on the admin socket.
       const { createAdmin, startAdminSocket, COUNTS_EVERY_MS } = await import("../lib/admin.js");
@@ -1015,7 +1020,7 @@ try {
       // kill -HUP and the admin socket's reload: re-read the members file (revoked tokens are
       // disconnected) and the policy file; on any problem keep the current list or policy.
       if (membersFile || policyFile) {
-        process.on("SIGHUP", () => {
+        reload = () => {
           let r;
           try {
             r = admin.reload({}, "relay");
@@ -1025,7 +1030,8 @@ try {
           if (r.policy) log(r.policy.ok ? "access policy reloaded" : `policy reload failed; keeping the active policy: ${r.policy.error}`);
           // Through the relay's logger, so --log-format json keeps every line JSON.
           if (r.members && !r.members.ok) log(r.members.applied ? `members reload applied changes but did not complete: ${r.members.error}` : `members reload failed; the active members list is unchanged: ${r.members.error}`);
-        });
+        };
+        if (reloadAsked) reload();
       }
       break;
     }

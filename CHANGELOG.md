@@ -41,6 +41,9 @@
 - Fixed: in a new install, running `hoptell tmux` as the first hoptell command could set the home
   up like an existing install, where every sender reaches your sessions. It now sets up the
   contacts first, as the other commands do.
+- Fixed: with a members or policy file configured, a `kill -HUP` could stop the relay after it
+  began listening but before startup finished. The signal is now kept, and the reload runs once
+  startup is complete.
 
 ## 0.3.0 (2026-10-15)
 

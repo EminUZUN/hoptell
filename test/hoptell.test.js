@@ -1537,10 +1537,23 @@ test("with --log-format json, a failed members reload is logged as JSON like eve
     proc.kill();
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  for (let i = 0; i < 50 && !/listening/.test(out); i++) await sleep(100);
+  // Send SIGHUP as soon as the listening line appears; the relay may still be
+  // finishing startup, so it must keep the request until reload is ready.
+  // The 30 s bounds fail stalled runs; successful waits end on the expected line.
+  const saw = (re) =>
+    new Promise((resolve, reject) => {
+      const check = () => re.test(out) && (done(), resolve());
+      const exit = (code) => (done(), reject(new Error(`the relay exited (${code}) before ${re}: ${out}`)));
+      const timer = setTimeout(() => (done(), reject(new Error(`no ${re} within 30 s: ${out}`))), 30_000);
+      const done = () => (clearTimeout(timer), proc.stdout.off("data", check), proc.off("exit", exit));
+      proc.stdout.on("data", check);
+      proc.on("exit", exit);
+      check();
+    });
+  await saw(/listening/);
   fs.writeFileSync(file, "{ not json");
   proc.kill("SIGHUP");
-  for (let i = 0; i < 50 && !/reload failed/.test(out); i++) await sleep(100);
+  await saw(/reload failed/);
   const lines = out.trim().split("\n").map((l) => JSON.parse(l)); // every line is JSON
   assert.ok(lines.some((l) => /^members reload failed; the active members list is unchanged: /.test(l.msg)), out);
 });
