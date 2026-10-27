@@ -15,8 +15,9 @@
 // 0.162.1 draws it; with "-edit" the draft's first characters (hidden when capped) change as the
 // approval prompt closes. "flash:<mode>" shows one frame with another draft for 700 ms (as a
 // capture taken mid-redraw or mid-resize can), then switches to <mode> with the draft unchanged.
-// "eflash:<mode>" switches to <mode> and edits the draft for good (as a person would), but the
-// screen shows the old draft again for 700 ms after 600 ms (a stale frame), then the edit.
+// "edit:<mode>" switches to <mode> and edits the draft for good (as a person would, but with no
+// key from a client). "stale" then shows the draft from before the edit for 700 ms (a stale
+// frame), then the edit again. Both write the mode back to the control file once shown.
 const fs = require("fs");
 const [ctl, log] = process.argv.slice(2);
 let input = "";
@@ -25,6 +26,7 @@ let onPaste = false;
 let selecting = false;
 let dialog = false;
 let display = null; // a passing frame: the draft shown instead of the real one
+let beforeEdit = ""; // the draft before "edit:", for "stale"
 const history = [];
 const SELECTION_FOOTER = "New activity · ⌃c copy · enter copy & follow · esc clear"; // as observed on Codex 0.162.1
 
@@ -96,24 +98,30 @@ setInterval(() => {
     setTimeout(draw, 700);
     return;
   }
-  if (m.startsWith("eflash:")) {
+  if (m.startsWith("edit:")) {
+    mode = m.slice(5);
+    beforeEdit = input;
+    input = `${input} and my own words`;
+    draw();
     try {
-      fs.writeFileSync(ctl, m.slice(7));
+      fs.writeFileSync(ctl, mode);
     } catch {
       // the next poll tries again
     }
-    mode = m.slice(7);
-    const old = input;
-    input = `${input} and my own words`;
+    return;
+  }
+  if (m === "stale") {
+    display = beforeEdit;
     draw();
+    try {
+      fs.writeFileSync(ctl, mode);
+    } catch {
+      // the next poll tries again
+    }
     setTimeout(() => {
-      display = old;
+      display = null;
       draw();
-      setTimeout(() => {
-        display = null;
-        draw();
-      }, 700);
-    }, 600);
+    }, 700);
     return;
   }
   onPaste = m === "dialog-on-paste";

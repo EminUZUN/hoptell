@@ -8,7 +8,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { HELD_NOTICE, NOTICE, NoticeScheduler } from "../lib/notices.js";
-import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, MIN_VISIBLE_NOTICE, draftHolds, draftState, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
+import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, MIN_VISIBLE_NOTICE, draftHolds, draftState, injector, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
 import { sleep, world } from "./helpers.js";
 
 // A private tmux server, never the developer's own sessions.
@@ -272,6 +272,110 @@ test("settleLook: a look whose pane size cannot be read keeps a change suspected
   // An unreadable size is never "ok", even with nothing suspected.
   assert.deepEqual(run([["notice", null, 0]]), ["wait"]);
   assert.deepEqual(run([["notice", S, 0]]), ["ok"]);
+});
+
+/**
+ * The injector's checks against a scripted screen and clock, with no tmux: each plain capture
+ * takes the next frame of `script` (then `steady`), and the clock moves only when told. A Codex
+ * layout 80 columns wide; a client key arrives with the paste (a key in another pane).
+ */
+function scriptedInjector(t) {
+  const W = 80;
+  const frame = (text) => {
+    if (!text) {
+      const line = "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m";
+      return { plain: ["• earlier output", "", "› Ask Codex to do anything", "", "  ? for shortcuts"], esc: ["• earlier output", "", line, "", "  ? for shortcuts"], x: 2, y: 2 };
+    }
+    const draft = text.match(new RegExp(`.{1,${W - 2}}`, "g")).map((r, i) => (i ? `  ${r}` : `› ${r}`));
+    const rows = ["• earlier output", "", ...draft, "", "  ? for shortcuts"];
+    return { plain: rows, esc: rows, x: draft.at(-1).length, y: 1 + draft.length };
+  };
+  const F = { empty: frame(""), notice: frame(NOTICE), edited: frame(`${NOTICE} and my own words`) };
+  const st = { now: 1e9, activity: 0, steady: F.empty, script: [], last: F.empty, enters: 0, logs: [] };
+  const next = () => st.script[0] ?? st.steady;
+  const run = (args) => {
+    const [cmd] = args;
+    if (cmd === "display-message") {
+      const format = args.at(-1);
+      const f = format === "#{cursor_x} #{cursor_y} #{pane_width}" ? st.last : next(); // promptEmpty reads after its capture
+      const known = { "#{pane_id} #{pane_pid} #{pane_dead}": "%1 100 0", "#{session_id}": "$1", "#{pane_in_mode}": "0", "#{pane_width}x#{pane_height}": `${W}x24` };
+      if (known[format]) return `${known[format]}\n`;
+      return `${format.replace("#{cursor_x}", f.x).replace("#{cursor_y}", f.y).replace("#{pane_in_mode}", 0).replace("#{pane_width}", W)}\n`;
+    }
+    if (cmd === "list-clients") return `${st.activity}\n`;
+    if (cmd === "capture-pane" && args.includes("-e")) {
+      const y = Number(args[args.indexOf("-S") + 1]) + 1;
+      return `${st.last.esc.slice(y - 1, y + 2).join("\n")}\n`;
+    }
+    if (cmd === "capture-pane") {
+      st.last = st.script.length ? st.script.shift() : st.steady;
+      return `${st.last.plain.join("\n")}\n`;
+    }
+    if (cmd === "if-shell") {
+      if (/paste-buffer/.test(args.at(-1))) {
+        st.steady = F.notice;
+        st.activity = Math.floor(st.now / 1000);
+      }
+      if (/send-keys .* Enter/.test(args.at(-1))) st.enters++;
+      return "";
+    }
+    return "";
+  };
+  t.mock.method(console, "log", (...a) => st.logs.push(a.join(" ")));
+  const inj = injector("%1", "100", { run, runStatus: () => 0, now: () => st.now, wait: async (ms) => (st.now += ms) });
+  /** One check after `ms`; `script`: the frames of its first captures, in order (all must be taken). */
+  const tick = async (ms, steady, script = []) => {
+    st.now += ms;
+    st.steady = F[steady];
+    st.script = script.map((k) => F[k]);
+    const r = await inj.send({ entries: ["m1.json"] });
+    assert.deepEqual(st.script, [], "every scripted frame was captured");
+    return r;
+  };
+  return { st, tick, inj };
+}
+
+/** Type the notice; a key arrives with it, so it stays pending. */
+async function typedWithKey(t) {
+  const x = scriptedInjector(t);
+  assert.equal(await x.inj.send({ entries: ["m1.json"] }), false);
+  assert.match(x.st.logs.join("\n"), /a key arrived; waiting for a quiet moment/);
+  return x;
+}
+
+test("injector: an edit seen only by the last look before Enter is a change; the next stale frame of the notice gets no Enter", async (t) => {
+  const { st, tick } = await typedWithKey(t);
+  // Past the idle time. The first three looks of the check show the notice; the one in submit,
+  // just before Enter, shows the edit.
+  assert.equal(await tick(9000, "edited", ["notice", "notice", "notice", "edited"]), false);
+  assert.equal(st.enters, 0);
+  assert.match(st.logs.join("\n"), /the draft changed after a key; checking that the change lasts/);
+  assert.equal(await tick(500, "notice"), false, "a stale frame of the notice");
+  assert.equal(st.enters, 0, "Enter on a single stale frame");
+  // The edit lasts: the person has it.
+  assert.deepEqual(await tick(600, "edited"), { covered: ["m1.json"] });
+  assert.equal(st.enters, 0);
+  assert.match(st.logs.join("\n"), /left to them/);
+});
+
+test("injector: an edit seen by the check's prompt look is a change, even when no later look shows it", async (t) => {
+  const { st, tick } = await typedWithKey(t);
+  // The draft look shows the notice, the prompt look the edit; then only the stale notice.
+  assert.equal(await tick(9000, "notice", ["notice", "notice", "edited"]), false);
+  assert.match(st.logs.join("\n"), /the draft changed after a key; checking that the change lasts/);
+  assert.equal(await tick(500, "notice"), false, "a stale frame of the notice");
+  assert.equal(st.enters, 0, "Enter on a single stale frame");
+  assert.doesNotMatch(st.logs.join("\n"), /left to them/);
+});
+
+test("injector: after a change was seen, a stable return to the notice is submitted once", async (t) => {
+  const { st, tick } = await typedWithKey(t);
+  assert.equal(await tick(9000, "notice", ["notice", "notice", "notice", "edited"]), false);
+  assert.equal(await tick(500, "notice"), false, "the return starts");
+  assert.equal(await tick(CHANGE_CONFIRM_MS + 100, "notice"), true, "a stable return");
+  assert.equal(st.enters, 1);
+  assert.match(st.logs.join("\n"), /submitted the inbox notice that was left in the prompt/);
+  assert.doesNotMatch(st.logs.join("\n"), /left to them/);
 });
 
 test("promptHolds: the prompt holds exactly the notice, with the cursor at its end", () => {
@@ -718,10 +822,15 @@ test("tmux injector never presses Enter on a passing frame that shows the notice
   assert.ok(await s.until(() => /↑/.test(s.screen()) && !/Do you want/.test(s.screen()), 10000), "the capped draft is back");
   await sleep(13000); // past the idle time after the key: the notice is pending, checked every tick
   assert.match(s.injectorLog(), /not submitted: (too little of the draft is visible|a key arrived and the draft is not fully visible)/);
-  // The pane grows (the whole draft fits) and the draft is edited for good; 600 ms later the
-  // screen shows the unedited notice for 700 ms (a stale frame), then the edit again.
-  fs.writeFileSync(s.ctl, "eflash:codex");
+  // The draft is edited for good (before the pane grows: the whole unedited notice is never on
+  // screen), and the pane grows. Once the injector has seen the edit, the screen shows the
+  // unedited notice for 700 ms (a stale frame), then the edit again.
+  fs.writeFileSync(s.ctl, "edit:codex");
+  assert.ok(await s.until(() => fs.readFileSync(s.ctl, "utf8") === "codex", 5000), "the edit was shown");
   execFileSync("tmux", ["kill-pane", "-t", catPane]);
+  assert.ok(await s.until(() => /the draft changed after a key; checking that the change lasts/.test(s.injectorLog()), 15000), "the edit was not seen");
+  fs.writeFileSync(s.ctl, "stale");
+  assert.ok(await s.until(() => fs.readFileSync(s.ctl, "utf8") === "codex", 5000), "the stale frame was shown");
   assert.ok(await s.until(() => /left to them/.test(s.injectorLog()), 15000), "the edited draft was not handed over");
   await sleep(2000);
   assert.deepEqual(s.entries(), [], "Enter was pressed on the person's draft");
