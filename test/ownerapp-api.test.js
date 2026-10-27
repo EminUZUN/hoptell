@@ -88,7 +88,7 @@ test("app: a settings change shows its line with Undo first, then applies; Undo 
   const p = await app.post("prefs", { h, op: newOp(), set: { fav: true } });
   assert.deepEqual(p.json, { ok: true, pending: true });
   await until(() => peopleOf(home)["me-alice"]?.fav === true, 4000, "applied");
-  const line = tg.last(/^From the app: alice is a favourite\.$/);
+  const line = tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/);
   assert.ok(line);
   assert.equal(line.params.reply_markup.inline_keyboard[0][0].text, "Undo");
   // The list shows it.

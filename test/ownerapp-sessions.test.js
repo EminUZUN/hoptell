@@ -86,6 +86,11 @@ test("sessions: /app off ends every session; a relay that keeps forwarding gets 
   const h = await s.handle();
   const token = s.app.token;
   const id = s.bridge.state().app.id;
+  // Any other argument is not "off": the usage, and the app stays on (it was answered as an unknown command).
+  s.tg.say("/app foo");
+  await until(() => s.tg.last(/^Use \/app to open the app, or \/app off to turn it off\.$/), 4000, "the usage");
+  assert.equal(s.bridge.state().app.on, true);
+  assert.ok(!s.tg.texts().some((x) => /^I don't know \/app/.test(x)));
   s.tg.say("/app off");
   await until(() => s.tg.last(/^The app is turned off\. Its links no longer work\.$/), 4000, "turned off");
   assert.equal(s.bridge.state().app.on, false);
@@ -98,7 +103,7 @@ test("sessions: /app off ends every session; a relay that keeps forwarding gets 
   assert.equal(d.status, 404);
   assert.equal(s.bridge.appSessions(), 0);
   s.tg.say("/app");
-  await until(() => s.tg.last(/^The app is turned off\. To turn it on, use hoptell telegram app --on on the computer running this bot\.$/), 4000, "the off text");
+  await until(() => s.tg.last(/^The app is off\. Stop the bot, run hoptell telegram app --on on its computer, then start the bot again and send \/app here\.$/), 4000, "the off text");
   assert.ok(!JSON.stringify(s.tg.sent).includes("web_app"), "no app button anywhere once off");
 });
 
@@ -150,7 +155,7 @@ test("sessions: failed initData: 20 a minute (the defaults) lock out every sessi
   const after = await s.app.open();
   assert.equal(after.status, 403);
   assert.equal(after.json.error, "not_you", "locked out, even with valid initData");
-  await until(() => s.tg.last(/^Someone is trying to open your hoptell app\. If it isn't you, send \/app off\.$/), 4000, "the line");
+  await until(() => s.tg.last(/^⚠️ Repeated attempts to open your hoptell app failed\. If this wasn't you, send \/app off\.$/), 4000, "the line");
   assert.equal(s.bridge.state().drops.app_initdata_bad_hash, 20);
   assert.equal(s.bridge.state().drops.app_initdata_lockout, 1);
   assert.ok(readAudit(s.home).every((e) => !JSON.stringify(e).includes("query_id")), "never initData in the audit");
@@ -204,7 +209,7 @@ test("early taps: a confirmation and an Undo tapped before they are active answe
   await until(() => s.tg.calls("answerCallbackQuery").filter((x) => x.params.text === "Just a moment, then tap again.").length === 2, 4000, "tap again");
   s.tg.releaseCalls();
   await until(() => peopleOf(s.home)["me-alice"]?.hidden === true && Object.values(s.bridge.state().targets).some((x) => x.kind === "undo" && !x.pending), 4000, "finalised");
-  const line = s.tg.last(/^From the app: alice is hidden\.$/);
+  const line = s.tg.last(/^🙈 From the app: alice is hidden from lists and favourites; new notes are skipped and won't appear later\. Questions still arrive\.$/);
   s.tg.press(line, 0);
   await until(() => !peopleOf(s.home)["me-alice"]?.hidden, 4000, "undone");
   s.tg.press(line, 0);
@@ -224,8 +229,8 @@ test("revocation: /app off while a settings line is on its way: never applied, t
   await sleep(200);
   s.tg.releaseCalls();
   const line = await (async () => {
-    await until(() => s.tg.last(/^From the app: alice is a favourite\.$/), 4000, "line");
-    return s.tg.last(/^From the app: alice is a favourite\.$/);
+    await until(() => s.tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/), 4000, "line");
+    return s.tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/);
   })();
   s.tg.releaseCalls();
   await until(() => s.tg.calls("editMessageText").some((c) => c.params.message_id === line.message_id && c.params.text === "Not changed: the app was turned off."), 6000, "the line says why");
@@ -243,10 +248,13 @@ test("revocation: /app off while a settings line is on its way: never applied, t
   assert.equal(s.bridge.state().outbox.filter((e) => e.origin === "a").length, 0);
 });
 
-test("old relay: without owner_app there is no registration, no button, and /app answers the off text", async (t) => {
+test("old relay: without owner_app there is no registration, no button, and /app says the app is on but can't be served", async (t) => {
   const s = await setup(t, { ownerApp: false });
+  assert.equal(s.bridge.state().app.on, true, "turned on here");
   s.tg.say("/app");
-  await until(() => s.tg.last(/^The app is turned off\./), 4000, "the off text");
+  await until(() => s.tg.last(/^The app is on, but the hoptell server can't serve it right now\./), 4000, "the not-served text");
+  assert.equal(s.tg.last(/^The app is on, but/).params.text, "The app is on, but the hoptell server can't serve it right now. Ask the server operator to check that the app is enabled and the bot is connected.");
+  assert.ok(!s.tg.texts().some((x) => /^The app is (turned )?off/.test(x)), "never the off text while it is on");
   s.tg.say("/msg");
   s.tg.say("/pending");
   await until(() => s.tg.last(/questions|No questions|waiting/i) && s.tg.texts().length >= 3, 4000, "lists");
@@ -295,7 +303,7 @@ test("early taps: Undo after its line is saved but before the people.json write 
   const release = await holdPeople(s.home);
   await s.app.post("prefs", { h, op: newOp(), set: { fav: true } });
   await until(() => Object.values(s.bridge.state().targets).some((x) => x.kind === "undo" && Number.isSafeInteger(x.msg)), 4000, "the line is saved");
-  const line = s.tg.last(/^From the app: alice is a favourite\.$/);
+  const line = s.tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/);
   s.tg.press(line, 0);
   await until(() => s.tg.calls("answerCallbackQuery").some((c) => c.params.text === "Just a moment, then tap again."), 4000, "tap again");
   assert.ok(!s.tg.calls("editMessageReplyMarkup").some((c) => c.params.message_id === line.message_id), "its button stays");
@@ -331,7 +339,7 @@ test("early taps: Undo after the people.json write but before finalisation (a cr
   assert.ok(Object.values(a.bridge.state().targets).some((x) => x.kind === "undo" && x.pending), "not finalised");
   // The restart's finalisation waits for people.json; the tap comes first.
   const release = await holdPeople(home);
-  const line = tg.last(/^From the app: alice is a favourite\.$/);
+  const line = tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/);
   tg.press(line, 0);
   const b = bridgeOn(t, { home, telegram: tg.client("b"), url: r.url, token: r.tokens.me, key });
   await until(() => tg.calls("answerCallbackQuery").some((c) => c.params.text === "Just a moment, then tap again."), 4000, "tap again");
@@ -396,7 +404,7 @@ test("stop: a settings write waiting for people.json's lock when the bridge halt
   const release = await holdPeople(s.home);
   await s.app.post("prefs", { h, op: newOp(), set: { fav: true } });
   await until(() => Object.values(s.bridge.state().targets).some((x) => x.kind === "undo" && Number.isSafeInteger(x.msg)), 4000, "the line is saved");
-  const line = s.tg.last(/^From the app: alice is a favourite\.$/);
+  const line = s.tg.last(/^From the app: alice is a favourite and is shown in your lists\.$/);
   // The bridge halts (a crash in an update) while the app's write waits for the lock.
   let finished = false;
   s.run.then(() => (finished = true));
@@ -426,7 +434,7 @@ test("undo: other buttons never push an Undo out, pending or active; Undo button
   await s.app.post("prefs", { h, op: newOp(), set: { hidden: true } });
   await until(() => undos().some((x) => !x.pending), 4000, "active");
   // Its line waits in Telegram (the bot's own updates wait for people.json, so not that lock).
-  s.tg.holdWhen = (method, params) => method === "sendMessage" && /^From the app: /.test(params.text ?? "");
+  s.tg.holdWhen = (method, params) => method === "sendMessage" && /^(🙈 )?From the app: /.test(params.text ?? "");
   await s.app.post("prefs", { h, op: newOp(), set: { hidden: false } });
   await until(() => s.tg.heldCalls.length === 1 && undos().some((x) => x.pending), 4000, "pending");
   // Ordinary buttons, more than the 20 kept: each reply to a closed card asks first.
@@ -442,7 +450,7 @@ test("undo: other buttons never push an Undo out, pending or active; Undo button
   assert.equal(others(), 20, "the other buttons are capped");
   s.tg.releaseCalls();
   await until(() => undos().every((x) => !x.pending), 6000, "finalised");
-  const line = s.tg.last(/^From the app: alice is shown again\.$/);
+  const line = s.tg.last(/^From the app: alice is shown again\. New notes can appear here\.$/);
   s.tg.press(line, 0);
   await until(() => peopleOf(s.home)["me-alice"]?.hidden === true, 4000, "its Undo works");
   // Past their own bound, the finalised Undo closest to expiry goes.

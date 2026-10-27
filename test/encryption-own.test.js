@@ -190,7 +190,7 @@ test("an outbox send prepared before the policy became required: refused for goo
   assert.deepEqual([q2, q3].map((x) => bridge.state().questions[x].status), ["expired", "expired"]);
   assert.equal(readAudit(home).filter((e) => e.event === "refused" && e.reason === "encryption_required" && e.kind === "status").length, 2);
   assert.equal(told().length, 2, "one more notice, for both statuses");
-  assert.match(told()[1].params.text, /^Messages to your agents are paused: .*For details, run hoptell telegram status on the computer running this bot\.$/);
+  assert.match(told()[1].params.text, /^⚠️ Messages to your agents are paused: .*Run hoptell telegram status on the bot's computer for details\.$/);
   assert.equal(alice.got.filter((m) => m.from === "me-owner").length, 0, "no status was sent either");
 });
 

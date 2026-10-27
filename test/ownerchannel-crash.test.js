@@ -68,7 +68,7 @@ async function scenario(t, crashAt) {
   assert.equal(new Set(answers.map((x) => x.nonce)).size, 1, "a redone send carries the same nonce");
   assert.equal(answers[0].text, "postgres", "the first answer wins");
   assert.ok(tg.cards().length <= 2);
-  if (tg.cards().length === 2) assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice asks \(sent again, the first copy may not have arrived\):\n/);
+  if (tg.cards().length === 2) assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice\nSent again: the first copy may not have arrived\.\n/);
   await a.bridge.stop();
   await b?.bridge.stop();
   return { seq, crashed };
@@ -159,7 +159,7 @@ test("a question redelivered under the same reference (crash before the relay ac
   await sleep(300);
   const s = b.bridge.state();
   assert.equal(tg.cards().length, 1, "no second card");
-  assert.equal(tg.cards()[0].params.text.includes("sent again"), false);
+  assert.equal(/sent again/i.test(tg.cards()[0].params.text), false);
   assert.deepEqual(Object.keys(s.questions), [q]);
   assert.equal(s.recent.length, 1, "no second quota use");
   assert.equal(alice.got.length, 0, "no status");

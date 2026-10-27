@@ -48,7 +48,7 @@ async function harness(t, { crashAt = null } = {}) {
   h.undoActive = () => Object.values(h.bridge.state().targets).some((x) => x.kind === "undo" && !x.pending);
   return h;
 }
-const FAV = /^From the app: alice is a favourite\.$/;
+const FAV = /^From the app: alice is a favourite and is shown in your lists\.$/;
 const cliSet = (home, name, fields, op = "cli:0123456789abcdef") => updatePeople(home, { member: ME, owner: OWNER_USER }, (s, entry) => bump(Object.assign(entry(name), fields), op));
 
 test("settings: a crash before the commit write: nothing happens; the same op later takes effect once", async (t) => {
@@ -123,7 +123,7 @@ for (const action of ["off", "rotate"]) {
     const b = bridgeOn(t, { home: h.home, telegram: h.tg.client("again"), url: h.r.url, token: h.r.tokens.me, key: h.key });
     h.bridge = b.bridge;
     await until(() => h.undoActive(), 4000, "finalised");
-    const line = h.lines(/^From the app: alice is hidden\.$/)[0];
+    const line = h.lines(/^🙈 From the app: alice is hidden from lists and favourites; new notes are skipped and won't appear later\. Questions still arrive\.$/)[0];
     assert.ok(!h.edited(line.message_id, "Not changed: the app was turned off."));
     h.tg.press(line, 0);
     await until(() => !h.alice().hidden, 4000, "undone with the app off");
@@ -137,7 +137,7 @@ for (const action of ["off", "rotate"]) {
     appSet(h.home, action);
     const b = bridgeOn(t, { home: h.home, telegram: h.tg.client("again"), url: h.r.url, token: h.r.tokens.me, key: h.key });
     h.bridge = b.bridge;
-    const line = h.lines(/^From the app: alice is hidden\.$/)[0];
+    const line = h.lines(/^🙈 From the app: alice is hidden from lists and favourites; new notes are skipped and won't appear later\. Questions still arrive\.$/)[0];
     const why = action === "off" ? "Not changed: the app was turned off." : "Not changed: the app link was changed.";
     await until(() => h.edited(line.message_id, why), 4000, "the line says why");
     assert.equal(h.alice().hidden, undefined);

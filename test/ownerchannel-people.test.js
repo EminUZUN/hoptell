@@ -232,17 +232,17 @@ test("/agents: the header counts favourites and online agents; a tap opens the d
   assert.equal(list.params.text, "Your agents: 0 favourites, 2 online.");
   tap(s.tg, list, sessionButtons(list)[0]);
   const d = await next(s.tg, /^alice\n/, 0, "details");
-  assert.match(d.params.text, /^alice\nOnline · on \S+ · last talked 2 hours ago$/);
-  assert.deepEqual(rows(d).map((r) => r.map((b) => b.text)), [["✉️ Message", "☆ Favourite"], ["✏️ Rename", "🙈 Hide"]]);
-  tap(s.tg, d, button(d, "☆ Favourite"));
-  await until(() => button(current(s.tg, d), "★ Unfavourite"), 4000, "favourite");
+  assert.match(d.params.text, /^alice\n🟢 Online · on \S+ · last message 2 hours ago$/);
+  assert.deepEqual(rows(d).map((r) => r.map((b) => b.text)), [["✉️ Message", "☆ Add favourite"], ["✏️ Rename", "🙈 Hide and skip notes"]]);
+  tap(s.tg, d, button(d, "☆ Add favourite"));
+  await until(() => button(current(s.tg, d), "★ Remove favourite"), 4000, "favourite");
   assert.equal(peopleOf(s.home)["me-alice"].fav, true);
   // Every settings change raises the entry's revision and names its writer (design 7.4, section 7).
   assert.equal(peopleOf(s.home)["me-alice"].rev, 1);
   assert.match(peopleOf(s.home)["me-alice"].last_op, /^bot:\d+$/);
   await until(() => s.tg.calls("setMyCommands").some((c) => c.params.commands.some((x) => x.command === "alice")), 4000, "menu");
-  tap(s.tg, d, button(current(s.tg, d), "🙈 Hide"));
-  await until(() => current(s.tg, d).params.text.endsWith("\nHidden from your lists."), 4000, "hidden");
+  tap(s.tg, d, button(current(s.tg, d), "🙈 Hide and skip notes"));
+  await until(() => current(s.tg, d).params.text.endsWith("\n🙈 Hidden from lists and favourites; new notes are skipped and won't appear later. Questions still arrive."), 4000, "hidden");
   assert.deepEqual(peopleOf(s.home)["me-alice"].fav, undefined, "hiding a favourite ends it");
   assert.equal(peopleOf(s.home)["me-alice"].rev, 2);
   assert.notEqual(peopleOf(s.home)["me-alice"].last_op, "bot:0");
@@ -250,14 +250,14 @@ test("/agents: the header counts favourites and online agents; a tap opens the d
   s.tg.say("/msg");
   const pick = await next(s.tg, /^Who should get your message\?$/, 0);
   assert.deepEqual(sessionButtons(pick).map((b) => b.text), ["bob"]);
-  tap(s.tg, d, button(current(s.tg, d), "👁 Unhide"));
-  await until(() => button(current(s.tg, d), "🙈 Hide"), 4000, "unhidden");
+  tap(s.tg, d, button(current(s.tg, d), "👁️ Show agent"));
+  await until(() => button(current(s.tg, d), "🙈 Hide and skip notes"), 4000, "unhidden");
   tap(s.tg, d, button(current(s.tg, d), "✉️ Message"));
   const prompt = await next(s.tg, /^✏️ Message to alice\./, 0);
   s.tg.say("hi there", { reply: s.tg.replyTo(prompt) });
   await fromOwner(alice, "hi there");
   // A foreign user's tap changes nothing.
-  s.tg.press(current(s.tg, d), 0, { from: 999, chat: 999, data: button(current(s.tg, d), "☆ Favourite").callback_data });
+  s.tg.press(current(s.tg, d), 0, { from: 999, chat: 999, data: button(current(s.tg, d), "☆ Add favourite").callback_data });
   await sleep(200);
   assert.equal(peopleOf(s.home)["me-alice"].fav, undefined);
   const audit = JSON.stringify(readAudit(s.home));
@@ -307,7 +307,7 @@ test("search: 30 hidden sessions matching one fragment are all reachable through
       const target = `me-${b.text}`;
       const db = await agent(t, s.url, s.tokens.me, `${target}-x`); // another agent: never reached
       tap(s.tg, m, b);
-      await until(() => current(s.tg, res).params.text === `Sent to ${b.text}.`, 4000, "sent");
+      await until(() => current(s.tg, res).params.text === `✅ Sent to ${b.text}.`, 4000, "sent");
       assert.equal(db.got.length, 0);
     }
   }
@@ -328,7 +328,7 @@ test('"Who is this for?": the text is held, sent once on a tap, dropped by Cance
   assert.equal(JSON.stringify(readAudit(s.home)).includes("deploy the fix"), false, "never in the audit");
   tap(s.tg, pick, sessionButtons(pick)[0]);
   await fromOwner(alice, "deploy the fix");
-  await until(() => current(s.tg, pick).params.text === "Sent to alice.", 4000, "picker edited");
+  await until(() => current(s.tg, pick).params.text === "✅ Sent to alice.", 4000, "picker edited");
   await until(() => s.tg.calls("setMessageReaction").length === 1, 4000, "👍 on the owner's message");
   assert.equal(Object.values(s.bridge.state().targets).some((x) => x.kind === "hold"), false, "deleted on use");
   tap(s.tg, pick, sessionButtons(pick)[0]); // a second tap: nothing more
@@ -436,7 +436,7 @@ test("rename: an alias changes labels, never the recipient; refused names; '-' r
   s.tg.say("/agents");
   const l2 = await next(s.tg, /^Your agents: /, lists);
   tap(s.tg, l2, sessionButtons(l2).find((b) => b.text === "Main"));
-  const d2 = await next(s.tg, /^Main \(claude-mac\)\nOnline/, 0, "details of the new session");
+  const d2 = await next(s.tg, /^Main \(claude-mac\)\n🟢 Online/, 0, "details of the new session");
   assert.ok(d2);
   // "-" removes the name.
   s.tg.say("-", { reply: s.tg.replyTo(prompt) });
@@ -475,37 +475,37 @@ test("host check: a name now held from another host asks first on every send wit
   // The name moves: a reply to the owner's own message (a route) is not sent; the bot asks.
   s.hosts.set("me-claude-mac", "sam-linux");
   s.tg.say("second", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const warn = await next(s.tg, /^Main \(claude-mac\) is now running on sam-linux, not sam-mbp\. Send anyway\?$/, 0);
-  assert.deepEqual(rows(warn).map((r) => r.map((b) => b.text)), [["Send", "Send and remember"], ["Cancel"]]);
+  const warn = await next(s.tg, /^⚠️ Main \(claude-mac\) reports running on sam-linux \(previously sam-mbp\)\.\nSend once, or remember this computer\?$/, 0);
+  assert.deepEqual(rows(warn).map((r) => r.map((b) => b.text)), [["Send once", "Remember & send"], ["Cancel"]]);
   await sleep(200);
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 1, "nothing sent");
   // The label shows the move, and so does the details screen.
   s.tg.say("/agents");
   const pick = await next(s.tg, /^Your agents: /, 0);
-  assert.ok(sessionButtons(pick).some((b) => b.text === "Main?"));
-  tap(s.tg, pick, sessionButtons(pick).find((b) => b.text === "Main?"));
-  await next(s.tg, /^Main\? \(claude-mac\)\nOnline · on sam-linux/, 0, "details");
+  assert.ok(sessionButtons(pick).some((b) => b.text === "⚠️ Main"));
+  tap(s.tg, pick, sessionButtons(pick).find((b) => b.text === "⚠️ Main"));
+  await next(s.tg, /^Main \(claude-mac\)\n🟢 Online · on sam-linux[^\n]*\n⚠️ This agent reports a different computer\.$/, 0, "details");
   // Send: once, for the host it warned about.
-  tap(s.tg, warn, button(warn, "Send"));
+  tap(s.tg, warn, button(warn, "Send once"));
   await fromOwner(mac, "second");
-  await until(() => current(s.tg, warn).params.text === "Sent to Main (claude-mac).", 4000, "warning edited");
-  tap(s.tg, warn, button(warn, "Send"));
+  await until(() => current(s.tg, warn).params.text === "✅ Sent to Main (claude-mac).", 4000, "warning edited");
+  tap(s.tg, warn, button(warn, "Send once"));
   await sleep(300);
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 2, "once");
   // The baseline did not change: the next reply asks again.
   s.tg.say("third", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const warn2 = await next(s.tg, /is now running on sam-linux, not sam-mbp/, 1);
+  const warn2 = await next(s.tg, /reports running on sam-linux \(previously sam-mbp\)/, 1);
   // Before the tap the name moves again: Send warns again instead of sending.
   s.hosts.set("me-claude-mac", "sam-third");
-  tap(s.tg, warn2, button(warn2, "Send"));
-  await next(s.tg, /is now running on sam-third, not sam-mbp/, 0, "warned again");
+  tap(s.tg, warn2, button(warn2, "Send once"));
+  await next(s.tg, /reports running on sam-third \(previously sam-mbp\)/, 0, "warned again");
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 2);
-  // Send and remember: the new host becomes the baseline; an older warning then sends without asking.
+  // Remember & send: the new host becomes the baseline; an older warning then sends without asking.
   s.tg.say("fourth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const w4 = await next(s.tg, /is now running on sam-third, not sam-mbp/, 1);
+  const w4 = await next(s.tg, /reports running on sam-third \(previously sam-mbp\)/, 1);
   s.tg.say("fifth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
-  const w5 = await next(s.tg, /is now running on sam-third, not sam-mbp/, 2);
-  tap(s.tg, w4, button(w4, "Send and remember"));
+  const w5 = await next(s.tg, /reports running on sam-third \(previously sam-mbp\)/, 2);
+  tap(s.tg, w4, button(w4, "Remember & send"));
   await fromOwner(mac, "fourth");
   assert.equal(peopleOf(s.home)["me-claude-mac"].alias_host, "sam-third");
   s.tg.say("sixth", { reply: { message_id: ownMsg.message_id, text: ownMsg.text } });
@@ -533,7 +533,7 @@ test("host check at dispatch: a send waiting on the relay is checked when it goe
   // … meanwhile the name moves; when the relay answers again, the send asks first.
   s.hosts.set("me-claude-mac", "sam-linux");
   s.shape.failList = false;
-  await next(s.tg, /is now running on sam-linux, not sam-mbp/, 0, "checked at dispatch");
+  await next(s.tg, /reports running on sam-linux \(previously sam-mbp\)/, 0, "checked at dispatch");
   await sleep(200);
   assert.equal(mac.got.filter((x) => x.from === "me-owner").length, 0);
 });
@@ -732,7 +732,7 @@ test("host check: a policy that becomes required while the host is being checked
   open();
   s.shape.gate = null;
   await until(() => readAudit(s.home).some((e) => e.event === "refused" && e.reason === "encryption_required" && e.kind === "instruction"), 4000, "refused");
-  await until(() => s.tg.texts().some((x) => /^Not sent: your settings require end-to-end encryption/.test(x)), 4000, "the owner is told");
+  await until(() => s.tg.texts().some((x) => /^⚠️ Not sent: your settings require end-to-end encryption/.test(x)), 4000, "the owner is told");
   await until(() => s.bridge.state().outbox.length === 0, 4000, "the entry ended");
   await sleep(300);
   assert.equal(mac.got.some((m) => m.from === "me-owner" && JSON.parse(m.text).text === "second"), false, "nothing sent");

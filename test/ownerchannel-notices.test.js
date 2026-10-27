@@ -167,7 +167,7 @@ test("one-way notes (a standalone hoptell send): the one-off label, no route, no
   await once.send("me-owner", "Nightly backup finished.", undefined, undefined, { toMember: ME });
   await until(() => notes(s.tg).length === 1, 4000, "note");
   const n = notes(s.tg)[0];
-  assert.equal(n.params.text, "💬 script (one-off, can't be answered here):\nNightly backup finished.");
+  assert.equal(n.params.text, "💬 script (you can't reply to this one):\nNightly backup finished.");
   assert.deepEqual(s.bridge.state().notice_routes, {}, "no route");
   s.tg.say("ok", { reply: s.tg.replyTo(n) });
   await until(() => s.tg.texts().includes(LOST), 4000, "C10");
@@ -184,7 +184,7 @@ test("limits: per agent 10 per 10 minutes and 30 per hour, 60 per hour in all; o
   const alice = await agent(t, s.url, s.tokens.me, "me-alice");
   for (let i = 1; i <= 12; i++) await inject(s.bridge, { text: `note ${i}` });
   await until(() => notes(s.tg).length === 10 && s.bridge.state().drops.notice_rate === 2, 6000, "10 shown, 2 dropped");
-  const warn = "alice is sending a lot of messages. I'll skip new messages from this agent for a while. Skipped messages won't be shown later.";
+  const warn = "⚠️ alice has reached its message limit. New notes are skipped until the limit clears and won't appear later. Questions still arrive.";
   await until(() => s.tg.texts().filter((x) => x === warn).length === 1, 4000, "one warning");
   await until(() => statusesOf(alice, s.key).length === 1, 4000, "one status");
   assert.equal(statusesOf(alice, s.key)[0].text, "not shown: your owner's Telegram is receiving too many messages from you; send fewer, or use ask_owner for a question.");
@@ -206,7 +206,9 @@ test("limits: per agent 10 per 10 minutes and 30 per hour, 60 per hour in all; o
   s.clock.skew = 4 * 600_000 + 3000;
   await inject(s.bridge, { from: "me-erin", text: "one too many" });
   await until(() => s.bridge.state().drops.notice_rate === 13, 4000, "over the total");
-  await until(() => s.tg.texts().includes("erin is sending a lot of messages. I'll skip new messages from this agent for a while. Skipped messages won't be shown later."), 4000, "the overall warning");
+  // The limit for all agents together trips on erin's first note: the warning names no agent.
+  await until(() => s.tg.texts().includes("⚠️ The hourly limit for agent notes has been reached. New notes are skipped until the limit clears and won't appear later. Questions still arrive."), 4000, "the overall warning");
+  assert.ok(!s.tg.texts().some((x) => /erin/.test(x)), "erin is not blamed for the overall limit");
 });
 
 test("a note while unpaired is dropped with its status", async (t) => {

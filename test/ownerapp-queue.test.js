@@ -72,7 +72,7 @@ test("queue: a write admitted just before its deadline completes", async (t) => 
 
 test("queue: Telegram stalled for the app's 8 unfinished entries: more writes get 503, and the bot still answers questions at once", async (t) => {
   const s = await setup(t, { appLimits: { linesWaiting: 20, openDrafts: 20, draftsPerMin: 20 } });
-  s.tg.holdWhen = (method, params) => method === "sendMessage" && /^(From the app|✏️)/.test(params.text ?? "");
+  s.tg.holdWhen = (method, params) => method === "sendMessage" && /^(From the app|🙈 From the app|✏️)/.test(params.text ?? "");
   for (let i = 0; i < 8; i++) assert.equal((await s.app.post(i % 2 ? "draft" : "prefs", i % 2 ? { h: s.h, op: newOp(), text: `d${i}` } : { h: s.h, op: newOp(), set: { fav: i % 4 === 0 } })).status, 200, `write ${i}`);
   const ninth = await s.app.post("draft", { h: s.h, op: newOp(), text: "ninth" });
   assert.equal(ninth.status, 503);

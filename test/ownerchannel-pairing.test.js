@@ -70,7 +70,7 @@ test("the same user pairs again (crash before the reconcile write): reconciled o
   await until(() => w.tg.cards().length === 4, 4000, "both cards again");
   await sleep(200);
   assert.equal(w.tg.cards().length, 4, "once");
-  assert.match(w.tg.cards()[2].params.text, /^❓ Question \d · alice asks \(sent again in this chat\):\n/);
+  assert.match(w.tg.cards()[2].params.text, /^❓ Question \d · alice\nSent again in this chat\.\n/);
   const st = c.bridge.state();
   assert.equal(st.owner.pairing, P2);
   assert.equal(st.questions[q].copies.length, 2);
@@ -107,7 +107,7 @@ test("another user pairs: open and pending questions are cancelled once, their a
   for (const x of statuses) assert.match(x.text, /^cancelled: your question [0-9a-f-]{36} was cancelled because your owner channel was paired with another Telegram account\.$/);
   // Nothing reached the new chat; the old card was edited in the old chat (best effort).
   assert.equal(w.tg.sent.some((x) => x.params.chat_id === OTHER), false);
-  assert.ok(w.tg.calls("editMessageText").some((x) => x.params.chat_id === OWNER_CHAT && /^✖ Question 1 · alice: cancelled/.test(x.params.text)));
+  assert.ok(w.tg.calls("editMessageText").some((x) => x.params.chat_id === OWNER_CHAT && /^🚫 Question 1 · alice: cancelled/.test(x.params.text)));
   assert.deepEqual([st.routes, st.targets, st.notice_routes], [{}, {}, {}]);
   // The new owner's reply to an old message id reaches nothing.
   w.tg.say("hi", { from: OTHER, chat: OTHER, reply: { message_id: w.tg.cards()[0].message_id, text: "x" } });
@@ -126,7 +126,7 @@ test("plain unpair, then a pairing by the same user and by another one: each tak
   const code = await newPairingCode(w.home, BOT_ID);
   w.tg.say(`/start ${code}`);
   await until(() => w.tg.cards().length === 2, 4000, "same user: the card again");
-  assert.match(w.tg.cards()[1].params.text, /\(sent again in this chat\)/);
+  assert.match(w.tg.cards()[1].params.text, /\nSent again in this chat\.\n/);
   assert.equal(bridge.state().owner.user_id, OWNER_USER);
   fs.rmSync(sig.channelPaths(w.home).pairing);
   const code2 = await newPairingCode(w.home, BOT_ID);
@@ -190,7 +190,7 @@ test("a note, a list and an edit queued for owner A are never sent to owner B", 
   assert.equal(w.tg.sent.some((x) => /a note for A/.test(x.params.text ?? "")), false, "the note is not shown to anyone");
   assert.deepEqual(w.tg.sent.filter((x) => /^Who should get your message\?/.test(x.params.text ?? "")).map((x) => ({ chat: x.params.chat_id, by: x.by, at: w.tg.sent.indexOf(x), mark, left: x.left })), [], "nor the list");
   // The expired card's view went to A's chat as a cleanup edit (best effort).
-  assert.ok(w.tg.calls("editMessageText").some((x) => x.params.chat_id === OWNER_CHAT && /^⌛ Question 1 · alice asked:/.test(x.params.text)));
+  assert.ok(w.tg.calls("editMessageText").some((x) => x.params.chat_id === OWNER_CHAT && /^⌛ Question 1 · alice · Closed\n/.test(x.params.text)));
   // (The bridge's clock runs ahead here, so the agent's freshness check would refuse it: read it raw.)
   await until(() => alice.got.some((m) => m.from === "me-owner" && /"kind":"status"/.test(m.text) && /expired: /.test(m.text)), 4000, "the agent's status is not bound");
   assert.ok(bridge.state().drops.old_pairing >= 3);
@@ -267,8 +267,8 @@ test("five same-user re-pairs and Show: every copy answers by reply until the qu
   await until(() => w.tg.cards().length === 1, 4000, "card");
   const show = async () => {
     w.tg.say("/pending");
-    await until(() => w.tg.last(/^Waiting for you:/) && w.tg.last(/^Waiting for you:/).message_id > (w.lastPending ?? 0), 4000, "pending");
-    const list = w.tg.last(/^Waiting for you:/);
+    await until(() => w.tg.last(/^⏳ Waiting for you:/) && w.tg.last(/^⏳ Waiting for you:/).message_id > (w.lastPending ?? 0), 4000, "pending");
+    const list = w.tg.last(/^⏳ Waiting for you:/);
     w.lastPending = list.message_id;
     return list;
   };
@@ -287,7 +287,7 @@ test("five same-user re-pairs and Show: every copy answers by reply until the qu
     await until(() => w.tg.calls("answerCallbackQuery").some((c) => c.params.text === "I've already sent this question again. Please reply to the newest copy."), 4000, "fourth tap");
   }
   assert.equal(w.tg.cards().length, 21);
-  await until(() => w.tg.calls("editMessageText").some((c) => c.params.message_id === w.tg.cards()[0].message_id && c.params.text === "(an older copy; please reply to the newest one)"), 4000, "oldest retired");
+  await until(() => w.tg.calls("editMessageText").some((c) => c.params.message_id === w.tg.cards()[0].message_id && c.params.text === "↩️ This question was sent again. Please answer the newest copy."), 4000, "oldest retired");
   const st = bridge.state();
   assert.equal(st.questions[q].copies.length, MAX_CARD_COPIES);
   assert.equal(st.questions[q].copies.some((c) => c.id === w.tg.cards()[0].message_id), false);
@@ -326,7 +326,7 @@ test("binding: after a member change old buttons, prompts, routes and confirm en
   const before = envs(alice, w.key).length;
   const b = bridgeOn(t, { home: w.home, telegram: w.tg.client("bob"), url: w.url, token: w.tokens.bob, key: w.key, name: "bob-owner", namePrefix: "bob-" });
   await until(() => b.bridge.leading(), 4000, "leader as bob");
-  const STALE = "This button is from an earlier setup. Pick the agent again with /msg.";
+  const STALE = "This message or button is from an earlier connection. Use /pending for questions or /msg to choose an agent.";
   w.tg.press(list, 0);
   w.tg.press(confirm, 0);
   await until(() => w.tg.calls("answerCallbackQuery").filter((c) => c.params.text === STALE).length === 2, 4000, "buttons refuse");
@@ -422,7 +422,7 @@ test("a 👍 still waiting for Telegram when B pairs: its refusal's fallback tex
   w.tg.say("/help", { from: OTHER, chat: OTHER });
   await until(() => bridge.state().outbox.length === 0 && w.tg.texts().some((x) => /^How this works:/.test(x)), 4000, "settled");
   await sleep(150);
-  assert.equal(w.tg.texts().some((x) => /^Sent to /.test(x)), false, "no fallback to anyone");
+  assert.equal(w.tg.texts().some((x) => /^✅ Sent to /.test(x)), false, "no fallback to anyone");
   assert.equal(Object.keys(bridge.state().routes).length, 0, "no route for B");
 });
 
@@ -437,7 +437,7 @@ test("a reply to a closed card after a same-chat re-pair: refused as an earlier 
   await until(() => envs(alice, w.key).some((e) => e.kind === "answer"), 4000, "answered");
   paired(w.home, { id: P2 }); // same user, same chat
   w.tg.say("again", { reply: w.tg.replyTo(card) });
-  await until(() => w.tg.texts().includes("This button is from an earlier setup. Pick the agent again with /msg."), 4000, "earlier setup");
+  await until(() => w.tg.texts().includes("This message or button is from an earlier connection. Use /pending for questions or /msg to choose an agent."), 4000, "earlier setup");
   await sleep(150);
   assert.equal(w.tg.texts().some((x) => /^This question is already answered/.test(x)), false, "no confirm offered");
   assert.equal(alice.got.some((m) => /again/.test(m.text)), false);
@@ -504,8 +504,8 @@ test("the 21st copy's retirement edit waits, then a re-pair: the oldest copy is 
     const before = w.tg.cards().length;
     await until(() => w.tg.cards().length === before + 1, 4000, `re-pair ${i}`);
     w.tg.say("/pending");
-    await until(() => (w.tg.last(/^Waiting for you:/)?.message_id ?? 0) > last, 4000, "pending");
-    const list = w.tg.last(/^Waiting for you:/);
+    await until(() => (w.tg.last(/^⏳ Waiting for you:/)?.message_id ?? 0) > last, 4000, "pending");
+    const list = w.tg.last(/^⏳ Waiting for you:/);
     last = list.message_id;
     for (let k = 0; k < 3; k++) {
       if (i === 5 && k === 2) w.tg.failNext.editMessageText = Array(1000).fill(502); // the retirement edit waits
@@ -519,7 +519,7 @@ test("the 21st copy's retirement edit waits, then a re-pair: the oldest copy is 
   paired(w.home, { id: `p_${"f".repeat(16)}` }); // re-pair before the edit went through
   w.tg.failNext.editMessageText = [];
   w.tg.say("/help");
-  await until(() => w.tg.calls("editMessageText").some((c) => c.params.message_id === oldest.message_id && c.params.text === "(an older copy; please reply to the newest one)"), 6000, "oldest retired");
+  await until(() => w.tg.calls("editMessageText").some((c) => c.params.message_id === oldest.message_id && c.params.text === "↩️ This question was sent again. Please answer the newest copy."), 6000, "oldest retired");
   await until(() => (bridge.state().questions[q].retiring ?? []).length === 0, 4000, "retiring cleared");
 });
 

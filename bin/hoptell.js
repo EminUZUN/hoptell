@@ -556,7 +556,7 @@ try {
           if (d.stale) fail(`request ${target} changed since it was shown (now --rev ${d.nativeToken.rev} --policy-rev ${d.nativeToken.policyRev}); show it again before deciding`);
           if (d.refused || d.busy) fail(d.reason);
           const r = d.effects;
-          console.log(`${sub === "block" ? "Blocked; its messages were deleted." : `Released ${r.steps} message(s)${sub === "allow" ? " and added a grant" : ""}.`}${r.waiting ? " Some wait for room in a full inbox and are released when there is room." : ""}`);
+          console.log(`${sub === "block" ? "Blocked; its messages were deleted." : `Released ${r.steps} message${r.steps === 1 ? "" : "s"}${sub === "allow" ? " and added a grant" : ""}.`}${r.waiting ? " Some wait for room in a full inbox and are released when there is room." : ""}`);
         } else if (sub === "grants" || sub === "blocks") {
           const { doc, problem } = c.currentPolicy();
           if (!doc) fail(problem ?? "no policy yet: run hoptell contacts init");

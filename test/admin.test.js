@@ -466,7 +466,10 @@ test("UI (3.4's shared gate): one origin, a single-use launch token, the session
   assert.equal((await get(port, stale.pathname + stale.search)).status, 403, "expired");
   const launch = new URL(ui.launchUrl());
   assert.equal(launch.origin, `http://127.0.0.1:${port}`);
-  assert.equal((await get(port, "/")).status, 403, "no session: refused");
+  const noSession = await get(port, "/");
+  assert.equal(noSession.status, 403, "no session: refused");
+  assert.ok(noSession.body.includes('<meta name="viewport" content="width=device-width, initial-scale=1">'));
+  assert.ok(noSession.body.includes("<h1>Refused</h1><p>Open the launch link that hoptell relay admin ui printed.</p>"), noSession.body);
   assert.equal((await get(port, `/launch?t=${"0".repeat(43)}`)).status, 403);
   assert.equal((await get(port, launch.pathname + launch.search, { host: `localhost:${port}` })).status, 403, "another host name for the same address");
   assert.equal((await get(port, launch.pathname + launch.search, { headers: { "sec-purpose": "prefetch" } })).status, 403, "a prefetch never burns the token");

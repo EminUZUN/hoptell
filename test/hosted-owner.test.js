@@ -38,7 +38,15 @@ test("login: state, PKCE and nonce; a Lax login cookie, then a Strict session co
   assert.match(s.done.cookies, /__Host-hoptell-owner=[A-Za-z0-9_-]{43}; Secure; HttpOnly; SameSite=Strict; Path=\//);
   assert.match(s.done.cookies, /__Host-hoptell-login=; .*Max-Age=0/, "the login cookie is cleared");
   for (const p of ["/owner", "/owner/pending", "/owner/contacts"]) assert.equal((await w.page("GET", p, { cookie: s.cookie })).status, 200, p);
-  assert.match((await w.page("GET", "/owner", { cookie: s.cookie })).text, new RegExp(HANNA.id));
+  const overview = (await w.page("GET", "/owner", { cookie: s.cookie })).text;
+  assert.match(overview, new RegExp(HANNA.id));
+  // The hosted warning on every page, readable without CSS, once.
+  for (const p of ["/owner", "/owner/pending", "/owner/contacts"]) {
+    const text = (await w.page("GET", p, { cookie: s.cookie })).text;
+    assert.equal(text.split("the host can read your messages").length - 1, 1, p);
+    assert.ok(text.includes("<p><strong>⚠️ Hosted mode: the host can read your messages.</strong></p>"), p);
+  }
+  assert.match(overview, /0 items wait for your decision/);
 });
 
 test("icons: /owner/favicon.png and /owner/apple-touch-icon.png before sign-in; the pages allow img-src 'self' only", async (t) => {
@@ -138,6 +146,10 @@ test("requests: POST needs the public Origin (and same-origin fetch metadata); a
   const decision = await w.page("GET", `/owner/decision?id=${id}`, { cookie: s.cookie });
   const form = formOf(decision.text, "/owner/decide");
   assert.ok(form);
+  assert.ok(decision.text.includes("<h1>Review contact request</h1>"));
+  assert.ok(decision.text.includes("Allowing future messages also releases the messages shown here. Blocking deletes them."));
+  assert.match(decision.text, /<button type="submit">Allow future messages<\/button>.*<button type="submit">Allow these messages<\/button>.*<button type="submit">Block sender<\/button>/s);
+  assert.match((await w.page("GET", "/owner/pending", { cookie: s.cookie })).text, />Review contact request<\/a>/);
   // A crawler over every page changes nothing.
   const before = fs.readFileSync(contactsFile(w.homeOf(HANNA)), "utf8");
   for (const p of ["/owner", "/owner/pending", `/owner/decision?id=${id}`, `/owner/text?id=${id}`, "/owner/contacts", "/owner/grants", "/owner/decide", "/owner/logout"]) await w.page("GET", p, { cookie: s.cookie });
@@ -154,6 +166,7 @@ test("requests: POST needs the public Origin (and same-origin fetch metadata); a
   // The form as rendered: done.
   const done = await w.page("POST", "/owner/decide", { cookie: s.cookie, body: form });
   assert.equal(done.status, 200, done.text);
+  assert.match(done.text, /<p>Released 1 message( and added a grant)?\.<\/p>/);
   assert.notEqual(fs.readFileSync(contactsFile(w.homeOf(HANNA)), "utf8"), before);
 });
 
