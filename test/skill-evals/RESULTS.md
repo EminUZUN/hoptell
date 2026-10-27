@@ -143,6 +143,48 @@ loading a skill. It was left alone so the description is not fitted to one sente
 
 The raw results are in `results/triggers/{before,after}/`.
 
+### Rerun after the text review (2026-10-27)
+
+All three descriptions were shortened in the text review. The same 60 queries were run the same
+way (`run-triggers.sh`, 3 runs per query, one worker at a time) on Claude Code 2.1.311.
+
+| Skill | After (2026-10-26) | After the text review |
+| --- | --- | --- |
+| hoptell-reviewers | 20/20 | 20/20 |
+| hoptell-owner-channel | 19/20 | 18/20 |
+| hoptell-safe-ops | 20/20 | 19/20 |
+
+| After restoring trigger contexts | Score |
+| --- | --- |
+| hoptell-reviewers | 19/20 |
+| hoptell-owner-channel | 20/20 |
+| hoptell-safe-ops | 20/20 |
+
+**Hit before, missed now** (0 of 3 runs each, and again 0 of 3 when run alone):
+- "ping me when the benchmark finishes, I'm stepping away from the laptop" (owner-channel). The
+  old description quoted "ping me when it's done" and named a user who will be away.
+- "clean up the leftover hoptell-* tmux sessions from yesterday's review run" (safe-ops).
+
+**Still missed:** the meeting query described above (owner-channel).
+
+The descriptions were not changed for this rerun. The raw results are in
+`results/triggers/after-text-review/`.
+
+**After restoring trigger contexts.** The owner-channel description again names "ask me on
+Telegram", "ping me when it's done" and a user who is stepping away. The safe-ops description again
+names stopping, restarting and leftover hoptell-* tmux sessions, and it states the boundary with
+hoptell-reviewers: reviewers in the current review belong to hoptell-reviewers, cleanup of
+leftover sessions and troubleshooting to safe-ops. All three skills were rerun the same way (the
+reviewers description is unchanged, but its competitors changed). The two queries above and the
+meeting query now pass.
+
+The reviewers miss is a false trigger, in 2 of 3 runs, on "what does the reviewer role in
+hoptell's list_peers output mean? just curious, don't start anything". It is borderline with
+either wording. Run alone 6 times, it falsely triggered 2 times with these descriptions and 5
+times with an earlier draft of the same changes. That draft scored 20/20 for both owner-channel
+and safe-ops, but it did not state the boundary with hoptell-reviewers. The raw results are in
+`results/triggers/after-restoring-contexts/`.
+
 ## Fixes and why
 
 **From the review of the skills:**

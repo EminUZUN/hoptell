@@ -1,6 +1,6 @@
 ---
 name: hoptell-safe-ops
-description: This skill should be used when handling hoptell session, relay or tmux cleanup; refused names or close code 4002; name leases; repeated inbox messages; or switching to member tokens. Covers target identity, safe shutdown and receipts. Use hoptell-reviewers for reviewer lifecycle tasks. Excludes unrelated processes.
+description: This skill should be used when stopping, restarting or cleaning up hoptell sessions or relays, including leftover hoptell-* tmux sessions from earlier runs; when resolving refused names, close code 4002 or name leases; when handling repeated inbox messages; or when switching to member tokens. Covers target identity, safe shutdown and receipts. Use hoptell-reviewers to stop, restart or resume reviewers within the current review workflow; use this skill for cleanup of leftover sessions and operational troubleshooting. Excludes unrelated processes.
 user-invocable: false
 ---
 

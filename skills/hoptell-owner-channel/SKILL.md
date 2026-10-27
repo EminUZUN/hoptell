@@ -1,6 +1,6 @@
 ---
 name: hoptell-owner-channel
-description: This skill should be used when the user wants questions or updates through the hoptell Telegram owner channel, when owner answers arrive, or when choosing ask_owner versus a note to the bridge. Covers limits, secrets and the authority of replies. Excludes peer messages, bridge setup and Telegram bot development.
+description: This skill should be used when the user wants questions or updates through the hoptell Telegram owner channel (for example, "ask me on Telegram" or "ping me when it's done"), when the user is stepping away and wants to be reached, when owner answers arrive, or when choosing between ask_owner and a note to the bridge. Covers limits, secrets and the authority of replies. Excludes peer messages, bridge setup and Telegram bot development.
 user-invocable: false
 ---
 

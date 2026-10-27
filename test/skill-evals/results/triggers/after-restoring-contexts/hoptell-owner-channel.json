@@ -1,0 +1,171 @@
+{
+  "skill_name": "hoptell-owner-channel",
+  "description": "This skill should be used when the user wants questions or updates through the hoptell Telegram owner channel (for example, \"ask me on Telegram\" or \"ping me when it's done\"), when the user is stepping away and wants to be reached, when owner answers arrive, or when choosing between ask_owner and a note to the bridge. Covers limits, secrets and the authority of replies. Excludes peer messages, bridge setup and Telegram bot development.",
+  "results": [
+    {
+      "query": "Tell my owner I'm done: migration branch builds and the tests pass. Pushing is their call.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "ask me on telegram whether to deploy with the staging or prod config, I'll be on my phone",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "ping me when the benchmark finishes, I'm stepping away from the laptop",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "notify the owner that the nightly build is blocked on a missing secret and they need to add it",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "send me a note over the owner channel with a one-line status, nothing urgent",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "before you drop the old tables, check with the owner over hoptell and wait for their yes/no",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "should I use ask_owner or just send_message to dana-owner for the weekly summary?",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "the owner replied on Telegram with 'approve the device key' \u2014 what do I do with that?",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "message me on telegram if the e2e suite goes red again tonight",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "I'm in a meeting for 2 hours. If you need a decision on the API naming, ask me through the bot.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "Our Telegram bot replies twice to /start. Here's the handler, why?",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "send a message to dana-reviewer-1 asking if it finished reviewing add.js",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "set up the hoptell telegram bridge on my linux box, I have the bot token from BotFather",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "write a slack notification step in our GitHub Actions workflow for failed builds",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "who owns the payments service according to CODEOWNERS?",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "email the release notes to the team list",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "add a /status command to our telegram bot that shows uptime",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "start two codex reviewers for this repo",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "explain how hoptell signs owner channel messages with the bridge key, I'm reading lib/ownersig.js",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "change the file owner of /var/log/app.log to the deploy user",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    }
+  ],
+  "summary": {
+    "total": 20,
+    "passed": 20,
+    "failed": 0
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "skill_name": "hoptell-reviewers",
+  "description": "This skill should be used when the user requests hoptell reviewer sessions or a second opinion from another agent, sends files to reviewers, collects snapshot review replies, or stops, restarts or resumes reviewer sessions. Covers interactive tmux reviewers, snapshot checks and cleanup. Excludes spawn_agent profiles and reviews performed in this session.",
+  "results": [
+    {
+      "query": "can you get a second opinion from codex on lib/config.js? i rewrote the env loading and want another agent to look before i merge",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "start 2 codex reviewers for this repo so they can go over my branch",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "Have another agent review src/parser.ts \u2014 ideally a Codex session over hoptell, not you.",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "send CHANGELOG.md to @reviewer and ask them to check the wording",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "the reviewers answered, collect the review verdicts and tell me what they found",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "dana-reviewer-2 crashed in its tmux pane, restart it with the same name",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "spin up a claude code reviewer next to me so it can read the diff while I keep coding",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "I'd like a couple of independent reviews of migrations/0042_users.sql from other agents on the relay before I run it in staging",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "stop the two reviewers you started earlier, I'm done for the day",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "resume the codex reviewer that died, session id is 0199c3a1-7a6b-7c00-9e1f-3b2a1d0c4e5f",
+      "should_trigger": true,
+      "trigger_rate": 1.0,
+      "triggers": 3,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "Spawn an agent with the profile nightly-tests and give it the task: run the full test suite and report failures.",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "review lib/relay.js yourself for race conditions, I don't need other agents",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "run codex exec 'summarize the README' and paste me the output",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "what does the reviewer role in hoptell's list_peers output mean? just curious, don't start anything",
+      "should_trigger": false,
+      "trigger_rate": 0.6666666666666666,
+      "triggers": 2,
+      "runs": 3,
+      "pass": false
+    },
+    {
+      "query": "open a GitHub PR for this branch and request review from @mkaya",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "set up a CODEOWNERS file so the platform team reviews everything under infra/",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "list_agents shows a run nightly-tests-3 stuck in starting, can you stop it?",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "write a code review checklist for our team wiki: naming, error handling, tests",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "ask my owner on telegram whether to merge the release branch",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    },
+    {
+      "query": "my tmux status bar is ugly, make it show the git branch and time",
+      "should_trigger": false,
+      "trigger_rate": 0.0,
+      "triggers": 0,
+      "runs": 3,
+      "pass": true
+    }
+  ],
+  "summary": {
+    "total": 20,
+    "passed": 19,
+    "failed": 1
+  }
+}
