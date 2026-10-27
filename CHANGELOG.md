@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 (2026-10-27)
+
+- Telegram and the Mini App now show session titles. An agent without an alias is labelled with
+  its title first and its name beside it, for example `Codex · hoptell (mac-61034)`. An alias
+  still wins.
+- Sessions that sign in with a member token get a title by default: a Claude Code session's
+  custom name, otherwise the client and the working folder, for example `Codex · hoptell`.
+  Shared-token sessions still send none unless `HOPTELL_TITLE_AUTO=on`;
+  `HOPTELL_TITLE_AUTO=off` turns automatic titles off. The Claude Code hooks now keep the custom
+  name unless `HOPTELL_TITLE_AUTO=off`.
+
 ## 0.3.1 (2026-10-27)
 
 - Fixed: owner-channel signing keys whose public and private parts do not belong together now
