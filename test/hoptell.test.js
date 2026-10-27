@@ -794,7 +794,32 @@ test("hoptell tmux starting the tmux server leaves no hoptell settings in its gl
   assert.ok(!doc.stdout.includes(secret) && !doc.stderr.includes(secret), "doctor printed the token");
 });
 
-test("injector stops when the agent pane is respawned with another process", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+test("hoptell tmux --detach starts the session without attaching", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  const w = await world();
+  const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-tmux-detach-"));
+  const tenv = { ...process.env, TMUX_TMPDIR: tmuxDir };
+  delete tenv.TMUX;
+  const name = `td${process.pid}`;
+  t.after(async () => {
+    spawnSync("tmux", ["kill-server"], { env: tenv });
+    fs.rmSync(tmuxDir, { recursive: true, force: true });
+    await w.close();
+  });
+  const r = await w.cli(["tmux", "--detach", name, "--roles", "backend", "--", "sh", "-c", "sleep 30"], { TMUX_TMPDIR: tmuxDir, TMUX: "", HOPTELL_PUSH: "" });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout, `hoptell: started ${name} in tmux session hoptell-${name}; attach with: tmux attach -t '=hoptell-${name}'\n`);
+  assert.equal(r.stderr, "", "no attach was tried");
+  const env = execFileSync("tmux", ["show-environment", "-t", `=hoptell-${name}`], { encoding: "utf8", env: tenv });
+  assert.match(env, /^HOPTELL_ROLES=backend$/m);
+  // The option is given once, before the "--".
+  for (const args of [["tmux", name, "--detach", "--detach", "--", "true"], ["tmux", "--detach", "--", "true"]]) {
+    const bad = await w.cli(args, { TMUX_TMPDIR: tmuxDir, TMUX: "", HOPTELL_PUSH: "" });
+    assert.equal(bad.code, 2, args.join(" "));
+    assert.match(bad.stderr, /usage: hoptell tmux <peer-name> \[--roles a,b\] \[--detach\] --/);
+  }
+});
+
+test("injector stops when the agent pane is respawned with another process",{ skip: !hasTmux && "tmux not installed" }, async (t) => {
   const w = await world();
   const name = `tr${process.pid}`;
   const session = `hoptell-${name}`;

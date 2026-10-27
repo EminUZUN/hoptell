@@ -1102,14 +1102,18 @@ try {
     case "tmux": {
       const sep = args.indexOf("--");
       const head = sep < 0 ? args : args.slice(0, sep);
-      if (sep < 0 || !(head.length === 1 || (head.length === 3 && head[1] === "--roles"))) {
-        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
+      // The name, then --roles <list> and --detach, each at most once, in either order.
+      const detach = head.includes("--detach");
+      const rest = head.filter((a) => a !== "--detach");
+      const usable = head.length - rest.length <= 1 && (rest.length === 1 || (rest.length === 3 && rest[1] === "--roles")) && !rest[0]?.startsWith("--");
+      if (sep < 0 || !usable) {
+        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] [--detach] -- <agent command...>", 2);
       }
       const { launch } = await import("../lib/tmux.js");
       // Once the checks pass, the home is classified first (a new install becomes managed): the
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
-      await launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf() });
+      await launch(rest[0], args.slice(sep + 1), rest[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), detach });
       break;
     }
     case "inject": {

@@ -605,11 +605,14 @@ For separate teams, run separate relays. A relay is a single small process.
 **Example swarm on one machine:**
 
 ```sh
+hoptell tmux alice-codex-1  --roles backend  --detach -- codex
+hoptell tmux alice-codex-2  --roles backend  --detach -- codex
+hoptell tmux alice-reviewer --roles reviewer --detach -- claude
 hoptell tmux alice-planner  --roles planner  -- claude
-hoptell tmux alice-codex-1  --roles backend  -- codex
-hoptell tmux alice-codex-2  --roles backend  -- codex
-hoptell tmux alice-reviewer --roles reviewer -- claude
 ```
+
+`--detach` starts an agent in the background without attaching your terminal; attach later with
+`tmux attach -t '=hoptell-<name>'`.
 
 Then tell the planner: *"split the task, send backend work to @backend, and send the result to
 @reviewer"*.
@@ -1551,7 +1554,7 @@ hoptell logout                        # removes the stored sign-in and revokes i
 hoptell mcp
 hoptell mcp-http [--port 7790]        # the same over HTTP on 127.0.0.1 (see "MCP over HTTP on this machine")
 hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>
-hoptell tmux <name> [--roles a,b] -- <agent command...>
+hoptell tmux <name> [--roles a,b] [--detach] -- <agent command...>
 hoptell list [--relay <alias>]
 hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>
                                       # to: name, @role or @all; sends as $HOPTELL_NAME without going online

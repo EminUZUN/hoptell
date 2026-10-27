@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `hoptell tmux --detach` starts an agent's tmux session without attaching to it, so a script
+  or one terminal can start several agents (see the swarm example in the README).
 - `hoptell doctor` no longer reports `HOPTELL_RELAY` and `HOPTELL_TOKEN` as failures when a
   relays file is in use, for example after `hoptell local-relay install`: sessions take the
   relays and tokens from that file, so doctor now says so as information.
