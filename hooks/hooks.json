@@ -1,5 +1,5 @@
 {
-  "description": "hoptell hook delivery: wake an idle session with a fixed notice when peer messages are waiting, and when messages are held for the user's decision; with HOPTELL_TITLE_AUTO=on, keep the session's custom title for list_peers",
+  "description": "hoptell hook delivery: wake an idle session with a fixed notice when peer messages are waiting, and when messages are held for the user's decision; unless HOPTELL_TITLE_AUTO=off, keep the session's custom title for list_peers",
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hoptell.js", "hook-session-start"], "timeout": 10 }] }

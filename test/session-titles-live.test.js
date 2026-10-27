@@ -15,7 +15,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startRelay } from "../lib/relay.js";
 import { RelayClient } from "../lib/client.js";
 import { ClaimTable } from "../lib/claims.js";
-import { BIN } from "../lib/config.js";
+import { BIN, autoClientTitle, envTitleAuto } from "../lib/config.js";
 import { readSettings, settingsProblem } from "../lib/settings.js";
 import { currentBoot, hostKey, processInfo } from "../lib/host.js";
 import { ensureWakeDir, filesFor, hookTitleWanted, hostOfRegistration, readSessionTitle, writeRecord } from "../lib/wake.js";
@@ -361,12 +361,12 @@ test("Claude hooks: SessionStart for every source and UserPromptSubmit keep sess
   assert.equal(titleFiles(w)[0].title, "renamed later");
   const mine = await host.call("list_peers"); // reads the title file and updates the relay
   assert.match(await shown(), /title: "renamed later" online$/);
-  // Without session_title (no custom title): none.
+  // Without session_title (no custom title): the client and folder instead.
   const none = await host.prompt({ session_id: "conv-fork", prompt: CANARY });
   assert.equal(none.stdout, "");
   assert.equal(titleFiles(w)[0].title, null);
   await host.call("list_peers");
-  assert.match(await shown(), /^- cc \(reported host: [^)]+\) online$/);
+  assert.match(await shown(), /^- cc \(reported host: [^)]+\) title: "[^"]+ · [^"]+" online$/);
   // Through a shell: Claude Code is an ancestor, not the parent.
   const viaShell = await host.prompt({ session_id: "conv-fork", prompt: CANARY, session_title: "via shell" }, { viaShell: true });
   assert.equal(viaShell.code, 0);
@@ -378,23 +378,25 @@ test("Claude hooks: SessionStart for every source and UserPromptSubmit keep sess
   const tf = path.join(w.home, "wake", f);
   writeRecord(tf, { session_id: "conv-other", title: "stale", at: Date.now() });
   await host.call("list_peers");
-  assert.match(await shown(), /^- cc \(reported host: [^)]+\) online$/);
+  assert.match(await shown(), /^- cc \(reported host: [^)]+\) title: "[^"]+ · [^"]+" online$/);
+  assert.doesNotMatch(await shown(), /stale/);
   // The canary is nowhere: not in any file under the home, nor in any output.
   assert.ok(!allText(w.home).includes(CANARY), "no file holds the prompt");
   assert.ok(!JSON.stringify(host.events).includes(CANARY), "no hook or MCP output shows it");
   assert.ok(!mine.includes(CANARY) && !(await viewer.call("list_peers")).includes(CANARY));
 });
 
-test("Claude hooks privacy defaults: without HOPTELL_TITLE_AUTO no copy is kept and nothing is sent; off sends nothing; an explicit title wins", { skip: !supported }, async (t) => {
+test("Claude hooks privacy defaults: unset HOPTELL_TITLE_AUTO keeps a local copy but a shared-token session sends nothing; off keeps and sends nothing; an explicit title wins", { skip: !supported }, async (t) => {
   const w = await world();
   t.after(() => w.close());
-  assert.equal(hookTitleWanted({}), false);
+  assert.equal(hookTitleWanted({}), true, "unset: kept, because a member session may send it");
+  assert.equal(hookTitleWanted({ HOPTELL_TITLE_AUTO: "off" }), false);
   assert.equal(hookTitleWanted({ HOPTELL_TITLE_AUTO: "on" }), true);
   assert.equal(hookTitleWanted({ HOPTELL_TITLE_AUTO: "on", HOPTELL_TITLE: "mine" }), false);
   assert.equal(hookTitleWanted({ HOPTELL_TITLE_AUTO: "on", HOPTELL_TITLE: "off" }), false);
   assert.equal(hookTitleWanted({ HOPTELL_TITLE_AUTO: "maybe" }), false);
   const bad = readSettings({ env: { HOPTELL_TITLE_AUTO: "maybe" }, homedir: "/h", pid: 1 });
-  assert.equal(bad.titleAuto, false);
+  assert.equal(bad.titleAuto, "off");
   assert.match(bad.errors.titleAuto, /HOPTELL_TITLE_AUTO must be on or off/);
   assert.match(settingsProblem(bad), /HOPTELL_TITLE_AUTO/, "refused at start, like the other on/off switches");
   const viewer = await w.mcp("viewer");
@@ -405,19 +407,19 @@ test("Claude hooks privacy defaults: without HOPTELL_TITLE_AUTO no copy is kept 
       await sleep(100);
     }
   };
-  // Default: no title file, and no title even when one exists for the session.
+  // Default with the shared token: the local copy exists, but no title is sent (the relay names
+  // no member, so other holders of the token never see it).
   const host = await fakeClaude(w, t);
   await host.sessionStart({ session_id: "c1", input: { session_title: "secret plan" } });
-  assert.deepEqual(titleFiles(w), [], "no copy without HOPTELL_TITLE_AUTO");
+  assert.equal(titleFiles(w).length, 1, "kept locally when unset");
   await host.prompt({ session_id: "c1", prompt: "p", session_title: "secret plan" });
-  assert.deepEqual(titleFiles(w), []);
   await host.startMcp("d1");
   await host.call("list_peers");
   assert.match(await row("d1"), /^- d1 \(reported host: [^)]+\) online$/);
   // The hooks wrote a title (HOPTELL_TITLE_AUTO in their environment), the session has it off.
   const host2 = await fakeClaude(w, t, { HOPTELL_TITLE_AUTO: "on" });
   await host2.sessionStart({ session_id: "c2", input: { session_title: "secret plan" } });
-  assert.equal(titleFiles(w).length, 1);
+  assert.equal(titleFiles(w).length, 2, "one copy per Claude Code process");
   await host2.startMcp("d2", { HOPTELL_TITLE_AUTO: "off" });
   await host2.call("list_peers");
   assert.match(await row("d2"), /^- d2 \(reported host: [^)]+\) online$/);
@@ -435,7 +437,7 @@ test("Claude hooks privacy defaults: without HOPTELL_TITLE_AUTO no copy is kept 
   assert.match(await row("d4"), /title: "explicit" online$/);
   // A SessionStart whose hooks no longer keep titles removes the old copy.
   await host2.sessionStart({ session_id: "c3", env: { HOPTELL_TITLE_AUTO: "off" }, input: { session_title: "x" } });
-  assert.deepEqual(titleFiles(w), []);
+  assert.deepEqual(titleFiles(w).map((f) => f.session_id), ["c1"], "only the other process's copy is left");
 });
 
 test("title record bound to its registration: a replacement between the two reads (same session id, new epoch) lends no title", { skip: !supported }, (t) => {
@@ -522,4 +524,121 @@ test("HTTP: a title follows only the exact registration its session was bound to
   reg("e2", crypto.randomBytes(16).toString("hex"));
   await first.call("list_peers");
   assert.deepEqual(await titles(), { "h-first": null, "h-second": null, "h-none": null });
+});
+
+// ---- automatic titles (0.3.2) ---------------------------------------------------------------
+
+test("automatic title: the client word and the folder's last part; the home folder is \"~\"; either part alone", () => {
+  assert.equal(autoClientTitle("claude-code", "/work/hoptell", "/home/u"), "Claude · hoptell");
+  assert.equal(autoClientTitle("codex-mcp-client", "/work/hoptell/", "/home/u"), "Codex · hoptell");
+  assert.equal(autoClientTitle("antigravity-cli", "/work/x", "/home/u"), "agy · x");
+  assert.equal(autoClientTitle("agy", "/work/x", "/home/u"), "agy · x");
+  assert.equal(autoClientTitle("Gemini CLI", "/work/x", "/home/u"), "Gemini · x");
+  assert.equal(autoClientTitle("claude-code", "/home/u", "/home/u"), "Claude · ~", "the account name is not shown");
+  assert.equal(autoClientTitle("some-editor‮", "/w/p", "/home/u"), "some-editor · p", "an unknown client is cleaned and kept short");
+  assert.equal(autoClientTitle(null, "/w/p", "/home/u"), "p");
+  assert.equal(autoClientTitle("claude-code", null, "/home/u"), "Claude");
+  assert.equal(autoClientTitle(null, null), null);
+  assert.equal(envTitleAuto({}), "member");
+  assert.equal(envTitleAuto({ HOPTELL_TITLE_AUTO: " " }), "member");
+  assert.equal(envTitleAuto({ HOPTELL_TITLE_AUTO: "yes" }), "on");
+  assert.equal(envTitleAuto({ HOPTELL_TITLE_AUTO: "0" }), "off");
+  assert.throws(() => envTitleAuto({ HOPTELL_TITLE_AUTO: "maybe" }), /HOPTELL_TITLE_AUTO must be on or off/);
+});
+
+test("automatic title by default for a member-token session (client and folder), none with HOPTELL_TITLE_AUTO=off; a shared-token session sends none", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const alice = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, members: [{ name: "alice", id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", token: alice }], log: () => {} });
+  t.after(() => relay.close());
+  const url = `ws://127.0.0.1:${relay.port}`;
+  const viewer = await w.mcp("alice-viewer", { HOPTELL_RELAY: url, HOPTELL_TOKEN: alice });
+  const row = async (n, want) => {
+    let r;
+    for (let i = 0; i < 50; i++) {
+      r = (await viewer.call("list_peers")).split("\n").find((l) => l.startsWith(`- ${n} `));
+      if (r && want(r)) return r;
+      await sleep(100);
+    }
+    return r;
+  };
+  const folder = path.basename(process.cwd());
+  await w.mcp("alice-a", { HOPTELL_RELAY: url, HOPTELL_TOKEN: alice });
+  assert.match(await row("alice-a", (r) => r.includes("title:")), new RegExp(`^- alice-a \\(reported host: [^)]+\\) title: "test · ${folder}" online$`));
+  await w.mcp("alice-b", { HOPTELL_RELAY: url, HOPTELL_TOKEN: alice, HOPTELL_TITLE_AUTO: "off" });
+  assert.doesNotMatch(await row("alice-b", () => true), /title:/);
+  await w.mcp("alice-c", { HOPTELL_RELAY: url, HOPTELL_TOKEN: alice, HOPTELL_TITLE: "explicit" });
+  assert.match(await row("alice-c", (r) => r.includes("title:")), /title: "explicit" online$/);
+  // The shared token: no member, so no automatic title.
+  await w.mcp("shared-d", { HOPTELL_RELAY: url, HOPTELL_TOKEN: TOKEN });
+  const shared = await w.mcp("shared-viewer", { HOPTELL_RELAY: url, HOPTELL_TOKEN: TOKEN });
+  let r;
+  for (let i = 0; i < 20 && !r; i++) {
+    r = (await shared.call("list_peers")).split("\n").find((l) => l.startsWith("- shared-d "));
+    if (!r) await sleep(100);
+  }
+  assert.doesNotMatch(r, /title:/);
+});
+
+test("member-mode titles never ride in a hello: not on the first connection, not on a reconnect; they follow the welcome", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const alice = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, token: TOKEN, members: [{ name: "alice", id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", token: alice }], log: () => {} });
+  t.after(() => relay.close());
+  // A proxy that records each hello the client sends and can drop every connection.
+  const hellos = [];
+  const pairs = new Set();
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((r) => wss.once("listening", r));
+  wss.on("connection", (down) => {
+    const up = new WebSocket(`ws://127.0.0.1:${relay.port}`);
+    const pair = { up, down };
+    pairs.add(pair);
+    const early = [];
+    up.on("open", () => early.splice(0).forEach((d) => up.send(d)));
+    down.on("message", (raw) => {
+      const d = raw.toString();
+      try {
+        const f = JSON.parse(d);
+        if (f.type === "hello") hellos.push({ title: f.title ?? null, claim: f.claim ?? null });
+      } catch {}
+      up.readyState === WebSocket.OPEN ? up.send(d) : early.push(d);
+    });
+    up.on("message", (d) => down.readyState === WebSocket.OPEN && down.send(d.toString()));
+    up.on("close", () => (pairs.delete(pair), down.terminate()));
+    down.on("close", () => (pairs.delete(pair), up.terminate()));
+    up.on("error", () => {});
+    down.on("error", () => {});
+  });
+  t.after(() => {
+    for (const c of wss.clients) c.terminate();
+    wss.close();
+  });
+  const viewer = new RelayClient({ url: `ws://127.0.0.1:${relay.port}`, token: alice, name: "alice-viewer", mode: "send", reconnect: false });
+  await viewer.start().ready(5000);
+  t.after(() => viewer.close());
+  const titleOf = async (want) => {
+    let p;
+    for (let i = 0; i < 80; i++) {
+      p = (await viewer.list()).find((x) => x.name === "alice-r");
+      if (p && want(p)) return p.title ?? null;
+      await sleep(100);
+    }
+    return p?.title ?? null;
+  };
+  const m = await w.mcp("alice-r", { HOPTELL_RELAY: `ws://127.0.0.1:${wss.address().port}`, HOPTELL_TOKEN: alice });
+  await m.call("list_peers");
+  const folder = path.basename(process.cwd());
+  assert.equal(await titleOf((p) => p.title), `test · ${folder}`, "published after the welcome");
+  assert.ok(hellos.length >= 1 && hellos.every((h) => h.title === null), `first hello: ${JSON.stringify(hellos)}`);
+  // Drop the connection: the reconnect's hello carries no title either.
+  const before = hellos.length;
+  for (const p of [...pairs]) p.down.terminate();
+  for (let i = 0; i < 80 && hellos.length === before; i++) await sleep(100);
+  assert.ok(hellos.length > before, "the session reconnected");
+  assert.ok(hellos.slice(before).every((h) => h.title === null), `reconnect hello: ${JSON.stringify(hellos.slice(before))}`);
+  await m.call("list_peers");
+  assert.equal(await titleOf((p) => p.online && p.title), `test · ${folder}`, "and it is back after the new welcome");
 });

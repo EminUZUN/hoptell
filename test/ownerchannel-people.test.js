@@ -39,6 +39,7 @@ async function setup(t, opts = {}) {
   const tg = opts.tg ?? fakeTelegram();
   const key = opts.key ?? newKey();
   const hosts = new Map(); // name -> host the relay reports (tests: a handoff)
+  const titles = new Map(); // name -> title the relay reports (tests: session titles)
   const shape = { failList: false, gate: null, listCalls: 0 }; // gate: a promise every list call waits for
   const clientFactory = (o) => {
     const c = new RelayClient(o);
@@ -47,14 +48,14 @@ async function setup(t, opts = {}) {
       shape.listCalls++;
       if (shape.gate) await shape.gate;
       if (shape.failList) throw new Error("relay busy");
-      return (await list()).map((p) => (hosts.has(p.name) ? { ...p, host: hosts.get(p.name) } : p));
+      return (await list()).map((p) => (hosts.has(p.name) ? { ...p, host: hosts.get(p.name) } : p)).map((p) => (titles.has(p.name) ? { ...p, title: titles.get(p.name) } : p));
     };
     return c;
   };
   const clock = { skew: 0 };
   const { bridge, run } = bridgeOn(t, { home, telegram: tg.client(), url: r.url, token: r.tokens.me, key, clientFactory, now: () => Date.now() + clock.skew, ...opts.bridge });
   await until(() => bridge.leading(), 4000, "leadership");
-  return { ...r, home, tg, key, bridge, run, clock, hosts, shape };
+  return { ...r, home, tg, key, bridge, run, clock, hosts, titles, shape };
 }
 
 // ---- people.json --------------------------------------------------------------------------------
@@ -459,6 +460,43 @@ test("labels: an alias colliding with an agent's name shows the full form; wire 
   s.tg.say("hello");
   const hold = await next(s.tg, /^Who is this for\?$/, 0);
   assert.ok(sessionButtons(hold).some((b) => b.text === "Main (claude-mac)"), "the hold picker shows full names");
+});
+
+test("labels: a session's title goes first with its name beside it; an alias wins; long titles are shortened; equal titles stay apart", async (t) => {
+  const s = await setup(t);
+  for (const n of ["me-a", "me-b", "me-c", "me-d", "me-e"]) await agent(t, s.url, s.tokens.me, n);
+  s.titles.set("me-a", "Codex · hoptell");
+  s.titles.set("me-b", "Claude · hoptell");
+  s.titles.set("me-c", "Claude · hoptell");
+  s.titles.set("me-d", `Claude · ${"x".repeat(60)}`);
+  s.titles.set("me-e", "\u202eignored alias wins");
+  await setPeople(s.home, ["me-e"], { alias: "Main" });
+  await agent(t, s.url, s.tokens.me, "me-f1");
+  await agent(t, s.url, s.tokens.me, "me-f2");
+  await agent(t, s.url, s.tokens.me, `me-${"n".repeat(55)}1`);
+  await agent(t, s.url, s.tokens.me, `me-${"n".repeat(55)}2`);
+  s.titles.set("me-f1", "😀".repeat(32)); // 64 UTF-16 units: Telegram's whole button budget
+  s.titles.set("me-f2", "😀".repeat(32));
+  s.titles.set(`me-${"n".repeat(55)}1`, "Codex · hoptell");
+  s.titles.set(`me-${"n".repeat(55)}2`, "Codex · hoptell");
+  s.tg.say("/msg");
+  const pick = await next(s.tg, /^Who should get your message\?$/, 0);
+  const texts = sessionButtons(pick).map((b) => b.text);
+  assert.equal(new Set(texts).size, texts.length, "every rendered button differs");
+  for (const n of ["f1", "f2", `${"n".repeat(55)}1`, `${"n".repeat(55)}2`]) {
+    assert.ok(texts.some((x) => x.endsWith(`(${n})`) || x === n), `the button for ${n} keeps its name: ${texts}`);
+  }
+  assert.ok(texts.every((x) => x.length <= 64));
+  assert.ok(texts.includes(`${"😀".repeat(29)}… (f1)`), "astral titles are cut on whole characters before the name");
+  assert.ok(texts.includes(`${"n".repeat(55)}1`), "too little room for the title: the name alone");
+  const named = texts.filter((x) => !/^(f1|f2|n+[12])$/.test(x) && !/\((f1|f2)\)$/.test(x));
+  assert.deepEqual(named.sort(), [
+    "Claude · hoptell (b)",
+    "Claude · hoptell (c)",
+    `Claude · ${"x".repeat(22)}… (d)`,
+    "Codex · hoptell (a)",
+    "Main",
+  ]);
 });
 
 // ---- the host check -----------------------------------------------------------------------------

@@ -57,9 +57,10 @@ process. None of this is sent to the relay.
   relay's configuration and is sent to clients. Apart from the broker and access files, the
   relay's database (its audit log and the experimental encrypted-message data) and the restore
   files described below, it holds no messages, names or tokens.
-- Session titles: a title can contain any text you typed into it, or a Claude Code custom name
-  that another hook derived from prompt text, and every peer that may see the session's name
-  sees its title. The relay keeps it in memory, with the session's hold on its name, and drops
+- Session titles: a title can contain any text you typed into it, a Claude Code custom name
+  that another hook derived from prompt text, or (for member-token sessions by default) the
+  agent client's name and the last part of its working folder, and every peer that may see the
+  session's name sees its title. Your Telegram bridge shows your own sessions' titles to you. The relay keeps it in memory, with the session's hold on its name, and drops
   it when that hold ends; it is not written to the relay's database or logs. It also appears in
   other sessions' `list_peers` output, which their agent clients keep in their transcripts.
   `HOPTELL_TITLE=off` sends none.
@@ -329,7 +330,7 @@ process. None of this is sent to the relay.
   prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and
   notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of
   ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed.
-- Session titles from Claude Code (only with `HOPTELL_TITLE_AUTO=on`): the `SessionStart` and
+- Session titles from Claude Code (unless `HOPTELL_TITLE_AUTO=off`): the `SessionStart` and
   `UserPromptSubmit` hooks copy the session's custom name and its session id into
   `<key>.title.json` in `~/.hoptell/wake/` (0600, at most 1 KiB). They never copy the prompt
   field. The hook input doesn't say who set the custom name, so if another hook sets it from
