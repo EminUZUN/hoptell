@@ -135,6 +135,34 @@ test("question envelopes: schema and canonical form", () => {
   assert.ok(sig.parseQuestion(sig.questionEnvelope({ question: "x", askedAt: now, expiresAt: now + 1 })));
 });
 
+test("question envelopes: choices that would show as the same button are refused (owner review #11)", () => {
+  const ask = (choices) => () => sig.questionEnvelope({ question: "x", choices, askedAt: now, expiresAt: now + 1 });
+  for (const choices of [
+    ["Yes", "Yes\n"],
+    ["Yes", " Yes "],
+    ["Go on", "Go\ton"],
+    ["Go on", "Go  on"],
+    ["ok", "ok\u200b"],
+    ["a\u2028b", "a b"],
+    ["A", "\u200bA"],
+  ]) {
+    assert.throws(ask(choices), (e) => e.message === sig.SAME_BUTTONS, JSON.stringify(choices));
+  }
+  assert.equal(sig.SAME_BUTTONS, "Answer choices must look different on the buttons. Please reword them.");
+  // Different labels still pass, letter case included.
+  assert.ok(sig.parseQuestion(ask(["Yes", "yes", "No"])()));
+  // A received question is not refused for this (an older sender's question still shows).
+  const old = sig.questionEnvelope({ question: "x", choices: ["Yes", "No"], askedAt: now, expiresAt: now + 1 }).replace('"No"', '"Yes\\n"');
+  assert.deepEqual(sig.parseQuestion(old)?.choices, ["Yes", "Yes\n"]);
+});
+
+test("question envelopes: the button label check matches the bridge's cleanLabel", async () => {
+  const { cleanLabel } = await import("../lib/ownerchannel.js");
+  for (const s of ["Yes", "Yes\n", " a\u0000b ", "x\u200dy", "a\u2028\u2029b", "\u00e9".repeat(50), "\u{1F600}".repeat(30), "", "\r\n", "two  spaces"]) {
+    assert.equal(sig.buttonLabel(s), cleanLabel(s, 40), JSON.stringify(s));
+  }
+});
+
 test("trusted pins: replace, staged add, remove a key, revoke", () => {
   const home = tmpHome();
   const k2 = sig.newKey();

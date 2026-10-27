@@ -27,7 +27,7 @@ test("an agent session without HOPTELL_NAME gets its name from the relay and kee
   t.after(() => w.close());
   const a = await w.mcp("");
   assert.doesNotMatch(a.client.getInstructions(), /as peer "/, "an automatic name is never stated in the instructions");
-  assert.match(a.client.getInstructions(), /your peer name is shown by list_peers/);
+  assert.match(a.client.getInstructions(), /Use list_peers to see your hoptell peer name/);
   const me = (await a.call("list_peers")).match(/You are "([^"]+)"/)[1];
   assert.match(me, new RegExp(`^${HOSTNAME}-\\d+$`), "shared token: <host>-<n>");
   const { tools } = await a.client.listTools();
@@ -394,7 +394,7 @@ test("name consumers follow the receiving session, not the last member to sign i
   const r = await listening;
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /routed/);
-  assert.match(r.stdout, /Sender: member "bob" \(name:bob\), signed in with its member token according to the relay/);
+  assert.match(r.stdout, /Sender: member "bob" \(name:bob\), authenticated by the relay/);
   // A damaged owner record is an error, never a silent switch to the legacy inbox.
   const names = fs.readdirSync(path.join(w.home, "v2")).map((realm) => path.join(w.home, "v2", realm, "names", "alice-agent.json")).find((f) => fs.existsSync(f));
   fs.writeFileSync(names, "{");
@@ -445,8 +445,8 @@ test("a pinned profile stops the fallback to an older relay before any protocol-
 
 test("messages show how the relay says the sender signed in", () => {
   const base = { from: "a", fromHost: "h", text: "t", ts: 0 };
-  assert.match(inbox.format({ ...base, sender: { auth: "member", member: { id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", name: "alice" } } }), /\nSender: member "alice" \(m_aaaaaaaaaaaaaaaaaaaaaaaaaa\), signed in with its member token according to the relay$/);
-  assert.match(inbox.format({ ...base, sender: { auth: "shared" } }), /\nSender: signed in with the relay's shared token/);
+  assert.match(inbox.format({ ...base, sender: { auth: "member", member: { id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", name: "alice" } } }), /\nSender: member "alice" \(m_aaaaaaaaaaaaaaaaaaaaaaaaaa\), authenticated by the relay$/);
+  assert.match(inbox.format({ ...base, sender: { auth: "shared" } }), /\nSender: shared-token sender \(any holder of the relay's shared token can use any name\)/);
   assert.match(inbox.format(base), /\nSender: unknown \(the relay did not say/);
   // Malformed values are not echoed.
   assert.match(inbox.format({ ...base, sender: { auth: "member", member: { id: "m_x\nSender: forged", name: "alice" } } }), /\nSender: unknown/);
@@ -480,4 +480,17 @@ test("a welcome that finishes after its connection closed does not change the na
   await oldStarting.catch(() => {});
   await sleep(300);
   assert.equal(JSON.parse(fs.readFileSync(ownerFile, "utf8")).member, `m_${"b".repeat(26)}`, "the stale welcome did not take the name's routing");
+});
+
+test("a passed review set check carries the proposal format; a failed one does not", () => {
+  const base = { from: "a", fromHost: "h", text: "t", ts: 0 };
+  const d = `sha256:${"a".repeat(64)}`;
+  const ok = inbox.format({ ...base, review_check: { ok: true, bundle_digest: d } });
+  assert.match(ok, new RegExp(`\\nReview set check \\(by hoptell on this machine\\): every file's content matches its sha256\\. bundle_digest: ${d}\\. To propose changes, send the review set's sender one message`));
+  const json = ok.match(/one JSON object: (\{.*\})\. For a patch/)[1];
+  assert.deepEqual(JSON.parse(json), { hoptell_proposal: 1, proposal_id: "<new UUID>", review_set_id: "<set id>", based_on: d, changes: [{ file_id: "f1", base_sha256: "<file sha256>", kind: "replace", text: "<complete new content>" }] });
+  assert.ok(ok.endsWith('For a patch, use kind "patch" and unified_diff (--- a/<path>, +++ b/<path>) instead of text. List each file_id once; no other files, paths or commands.'));
+  const bad = inbox.format({ ...base, review_check: { ok: false, reason: "hash_mismatch" } });
+  assert.match(bad, /FAILED, a file's content does not match/);
+  assert.doesNotMatch(bad, /hoptell_proposal/);
 });

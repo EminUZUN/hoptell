@@ -34,8 +34,11 @@ function drawCodex(cols, top) {
   if (dialog) return `${out}Do you want to proceed?\r\n› 1. Yes\r\n  2. No\r\n`;
   const capped = mode.includes("-capped");
   const width = cols - 3; // the right column stays free (Codex draws its "↑" there when capped)
+  // Codex wraps at words, so a capped row keeps a space before its "↑"; wrapping by characters,
+  // a capped composer leaves one more column free so that the space is always there.
+  const step = capped ? width - 1 : width;
   const all = [];
-  for (let i = 0; i < text.length; i += width) all.push(text.slice(i, i + width));
+  for (let i = 0; i < text.length; i += step) all.push(text.slice(i, i + step));
   const rows = capped ? all.slice(-4) : all;
   const hidden = all.length > rows.length;
   if (!text) out += "\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m";

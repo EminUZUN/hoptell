@@ -15,7 +15,7 @@ const until = async (fn, ms = 3000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(25)) if (await fn()) return true;
   return Boolean(await fn());
 };
-const receiptOf = (t) => /Receipt: ([^ .]+)\./.exec(t)?.[1];
+const receiptOf = (t) => /Receipt: (\S+)/.exec(t)?.[1];
 
 test("tools: exactly the five hosted tools; nothing a tenant sees names a host path or the relay's address", async (t) => {
   const w = await hostedWorld(t);
@@ -46,7 +46,7 @@ test("inbound custody: the tenant's engine keeps receiving with no session open;
   if (/hello/.test(text)) {
     const r2 = receiptOf(text);
     const waited = await call(client, "wait_for_message", { ack: r2, timeout_seconds: 1 });
-    assert.match(waited, /No messages within 1s|hello/);
+    assert.match(waited, /Wait ended without returning messages \(limit: 1s\)|hello/);
   }
   // Acknowledged messages are not shown again.
   assert.doesNotMatch(await call(client, "read_inbox"), /hello 1/);
@@ -58,8 +58,8 @@ test("gate 3 at the host: an unknown sender is held for the tenant's owner (defa
   const bob = await w.bob();
   await bob.send("hanna", "who am I");
   let text = "";
-  await until(async () => /waiting for your user's decision/.test((text = await call(client, "read_inbox"))));
-  assert.match(text, /waiting for your user's decision/);
+  await until(async () => /Your user's contacts held these messages/.test((text = await call(client, "read_inbox"))));
+  assert.match(text, /Your user's contacts held these messages/);
   assert.doesNotMatch(text, /who am I/);
 });
 

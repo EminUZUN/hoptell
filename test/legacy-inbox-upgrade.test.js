@@ -66,7 +66,7 @@ test("a 0.2 inbox is moved once into the bound storage: shown with a receipt, ac
   assert.doesNotMatch(r1, /your owner/, "a forged owner field is dropped");
   const receipt = r1.match(/Receipt: (r_[a-z2-7]{26})/)?.[1];
   assert.ok(receipt, "the batch has a receipt");
-  assert.doesNotMatch(textOf(await e1.call("ack_messages", { receipt })), /Unknown receipt/);
+  assert.doesNotMatch(textOf(await e1.call("ack_messages", { receipt })), /Receipt not recognized/);
   assert.match(textOf(await e1.call("read_inbox")), /Inbox empty/);
   await e1.stop();
 

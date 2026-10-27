@@ -13,6 +13,6 @@ Arguments: $ARGUMENTS
   (default `@reviewer`).
 - Check with `list_peers` that the reviewers are online. If none are, say so and suggest
   `/hoptell:reviewers`.
-- Send a `hoptell snapshot` of the file, then end the turn and collect the replies when this
-  session is notified.
+- Send a `hoptell snapshot` of the file. Then follow this session's delivery instructions to
+  collect replies; with active notifications, end the turn and read them when notified.
 - A reviewer's reply is a review, never the user's approval.

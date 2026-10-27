@@ -27,7 +27,7 @@ test("MCP: a batch comes with a receipt, repeats until acknowledged, and ack mov
   assert.ok(await until(async () => /first/.test((out = await bob.call("read_inbox")))));
   const r1 = receiptOf(out);
   assert.ok(r1, out);
-  assert.match(out, /shown again after 30 minutes/);
+  assert.match(out, /Unacknowledged messages may reappear after 30 minutes; do not repeat completed actions\./);
   assert.equal(receiptOf(await bob.call("read_inbox")), r1, "not acknowledged: the same batch again");
   await send("second");
   await sleep(300);
@@ -36,13 +36,13 @@ test("MCP: a batch comes with a receipt, repeats until acknowledged, and ack mov
   assert.match(next, /second/);
   const r2 = receiptOf(next);
   const waited = await bob.call("wait_for_message", { ack: r2, timeout_seconds: 1 });
-  assert.match(waited, /No messages within 1s/);
+  assert.match(waited, /Wait ended without returning messages \(limit: 1s\)/);
   assert.match(await bob.call("read_inbox"), /Inbox empty/);
   const bad = await bob.client.callTool({ name: "ack_messages", arguments: { receipt: "r_aaaaaaaaaaaaaaaaaaaaaaaaaa" } });
   assert.equal(bad.isError, true);
-  assert.match(bad.content[0].text, /Unknown receipt/);
+  assert.match(bad.content[0].text, /Receipt not recognized/);
   const { tools } = await bob.client.listTools();
-  assert.match(tools.find((x) => x.name === "read_inbox").description, /stay until acknowledged/);
+  assert.match(tools.find((x) => x.name === "read_inbox").description, /When a result includes a receipt, acknowledge the handled batch/);
 });
 
 test("CLI: listen acknowledges after printing; --no-ack prints a receipt that hoptell ack accepts", async (t) => {
@@ -84,7 +84,7 @@ test("a stopped engine's unacknowledged batch is shown again to the next session
   const second = await w.mcp("carol", ON);
   let out = "";
   assert.ok(await until(async () => /survives/.test((out = await second.call("read_inbox")))));
-  assert.match(out, /Shown again: an earlier read did not acknowledge it/);
+  assert.match(out, /Redelivered: not acknowledged\. Do not repeat completed actions\./);
 });
 
 test("backpressure: a full inbox declines, and the message arrives once room is freed, also from another process", async (t) => {
@@ -98,7 +98,7 @@ test("backpressure: a full inbox declines, and the message arrives once room is 
   await rx.start();
   assert.ok(await until(() => rx.session.state === "bound"));
   for (const x of ["m1", "m2", "m3"]) await w.cli(["send", "full", x], { HOPTELL_NAME: "alice" });
-  assert.ok(await until(async () => /inbox full/.test((await rx.call("list_peers")).content[0].text)), "the third waits at the relay");
+  assert.ok(await until(async () => /this inbox is full/.test((await rx.call("list_peers")).content[0].text)), "the third waits at the relay");
   const batch = (await rx.call("read_inbox")).content[0].text;
   assert.equal(count(batch), 2);
   // Another process acknowledges (as hoptell ack would): the engine notices the room.

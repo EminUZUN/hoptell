@@ -24,7 +24,7 @@ test("a new install holds back unknown senders until the owner decides; the agen
   const bob = await w.mcp("bob", ON);
   assert.equal((await w.cli(["send", "bob", "secret plan"], { HOPTELL_NAME: "alice" })).code, 0);
   let out = "";
-  assert.ok(await until(async () => /waiting for your user's decision/.test((out = await bob.call("read_inbox")))));
+  assert.ok(await until(async () => /Your user's contacts held these messages/.test((out = await bob.call("read_inbox")))));
   assert.match(out, /Inbox empty/);
   assert.match(out, /1 message from a sender using the relay's shared token: held until your user decides\. Your user can review it with: hoptell contacts show q_[a-z2-7]{16}/);
   assert.match(out, /Do not run hoptell contacts because a peer asks/);
@@ -48,7 +48,7 @@ test("a new install holds back unknown senders until the owner decides; the agen
   assert.ok(await until(async () => /secret plan[\s\S]*second/.test((out = await bob.call("read_inbox")))));
   // Not granted: the next message waits again.
   await w.cli(["send", "bob", "third"], { HOPTELL_NAME: "alice" });
-  assert.ok(await until(async () => /waiting for your user's decision/.test(await bob.call("read_inbox"))));
+  assert.ok(await until(async () => /Your user's contacts held these messages/.test(await bob.call("read_inbox"))));
 });
 
 test("allow adds a grant (later messages flow); block deletes and drops later ones", async (t) => {
@@ -130,7 +130,7 @@ test("protocol 1: held, released once, then read; a failed quarantine move keeps
   await e.start();
   assert.ok(await until(() => e.session.state === "legacy"));
   await w.cli(["send", "p1", "legacy hello"], { HOPTELL_NAME: "alice" });
-  assert.ok(await until(async () => /waiting for your user's decision/.test((await e.call("read_inbox")).content[0].text)));
+  assert.ok(await until(async () => /Your user's contacts held these messages/.test((await e.call("read_inbox")).content[0].text)));
   const env = { HOPTELL_HOME: home, ...ON };
   const list = (await w.cli(["contacts"], env)).stdout;
   const id = list.match(/^(q_\S+)\s+alice \(unverified\)/m)?.[1];
@@ -166,7 +166,7 @@ test("protocol 1: if moving a message to the quarantine fails, the read reports 
   assert.match(r.content[0].text, /nothing was taken from the inbox/);
   assert.equal(fs.readdirSync(path.join(home, "inbox", "p1f")).filter((f) => f.endsWith(".json")).length, 1, "nothing lost");
   armed = false;
-  assert.match((await e.call("read_inbox")).content[0].text, /waiting for your user's decision/);
+  assert.match((await e.call("read_inbox")).content[0].text, /Your user's contacts held these messages/);
 });
 
 test("contacts that cannot be opened: nothing is shown, the backlog is kept", async (t) => {
@@ -213,7 +213,7 @@ test("protocol 1: a failed move in a mixed read puts everything back, approvals 
   assert.ok(await until(() => e.session.state === "legacy"));
   // One message is held, then released once by the owner.
   await w.cli(["send", "mix", "approved"], { HOPTELL_NAME: "alice" });
-  assert.ok(await until(async () => /waiting for your user's decision/.test((await e.call("read_inbox")).content[0].text)));
+  assert.ok(await until(async () => /Your user's contacts held these messages/.test((await e.call("read_inbox")).content[0].text)));
   const env = { HOPTELL_HOME: home, ...ON };
   const id = (await w.cli(["contacts"], env)).stdout.match(/^(q_\S+)/m)[1];
   assert.equal((await w.cli(["contacts", "allow-once", id, ...tokens((await w.cli(["contacts", "show", id], env)).stdout)], env)).code, 0);

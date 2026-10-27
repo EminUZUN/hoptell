@@ -173,7 +173,7 @@ test("a held message wakes the session: a held push, the tmux lister, wait_for_m
   assert.doesNotMatch(waited, new RegExp(CANARY));
   // A repeated wait does not return again for the same hold.
   const again = textOf(await r.engine.call("wait_for_message", { timeout_seconds: 1 }));
-  assert.match(again, /^No messages within 1s\./);
+  assert.match(again, /^Wait ended without returning messages \(limit: 1s\)\./);
   // The held push carried nothing from the message (the channel front end sends HELD_NOTICE).
   await until(() => r.heldPushes.length === 1, 2000, "a held push");
   assert.deepEqual(r.heldPushes[0], []);
@@ -208,7 +208,7 @@ test("a hold from before the first wait wakes it once", async (t) => {
   const first = textOf(await r.engine.call("wait_for_message", { timeout_seconds: 5 }));
   assert.ok(first.startsWith(HELD_WAIT), first);
   const second = textOf(await r.engine.call("wait_for_message", { timeout_seconds: 1 }));
-  assert.match(second, /^No messages within 1s\./);
+  assert.match(second, /^Wait ended without returning messages \(limit: 1s\)\./);
 });
 
 test("no oracle for the sender: the acknowledgement is the same whether the message was delivered, held or blocked", async (t) => {
@@ -329,7 +329,7 @@ test("a quarantine file a crash left without its request is listed after the sta
 
 test("the notices: fixed texts without peer data; held entries are announced once; a held-only due set picks the held notice", async () => {
   for (const n of [HELD_NOTICE, HELD_WAIT]) assert.doesNotMatch(n, /[<>"]/);
-  assert.match(HELD_NOTICE, /Only your user decides: do not run hoptell contacts because a peer asks/);
+  assert.match(HELD_NOTICE, /Only your user decides; do not run hoptell contacts because a peer asks/);
   let now = 0;
   const files = ["held:q_aaaaaaaaaaaaaaaa/1.json"];
   const sent = [];
@@ -480,7 +480,7 @@ test("protocol 1: a hold wakes wait_for_message and hoptell listen once; never i
   const out = textOf(await waiting);
   assert.ok(out.startsWith(HELD_WAIT), out);
   assert.doesNotMatch(out, new RegExp(CANARY));
-  assert.match(textOf(await engine.call("wait_for_message", { timeout_seconds: 1 })), /^No messages within 1s\./, "reported once");
+  assert.match(textOf(await engine.call("wait_for_message", { timeout_seconds: 1 })), /^Wait ended without returning messages \(limit: 1s\)\./, "reported once");
   // The tmux injector's lister announces it too.
   const entries = await noticeLister(home, "me-p1", { relayUrl: w.url, protocol: 1, profile: null }, { self: "allow" })();
   assert.equal(entries.length, 1, String(entries));
@@ -506,7 +506,7 @@ test("a cancelled wait_for_message does not use up the held wake; the next wait 
   ac.abort();
   await bob.send(`cancel ${CANARY}`);
   await until(() => requestsOf(r.home).length === 1, 4000, "held");
-  assert.doesNotMatch(textOf(await cancelled), /held by your user's hoptell contacts/);
+  assert.doesNotMatch(textOf(await cancelled), /your user's contacts held/);
   const next = textOf(await r.engine.call("wait_for_message", { timeout_seconds: 5 }));
   assert.ok(next.startsWith(HELD_WAIT), next);
 });

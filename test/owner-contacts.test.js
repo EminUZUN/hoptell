@@ -70,7 +70,7 @@ test("a new install: the verified owner answer reaches the agent without a grant
   await sleep(500);
   const held = await readAll(s.engine);
   assert.equal(/plain own-member text|forged answer/.test(held), false, held);
-  assert.match(held, /waiting for your user's decision/);
+  assert.match(held, /Your user's contacts held these messages/);
 });
 
 test("a block of the own member still drops the owner's answer; required encryption still holds it", async (t) => {

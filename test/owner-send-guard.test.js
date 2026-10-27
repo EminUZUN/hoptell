@@ -21,7 +21,7 @@ import { BIN } from "../lib/config.js";
 import { existingInstall, sleep } from "./helpers.js";
 
 const textOf = (r) => r.content[0].text;
-const NOTE = "Messages sent here may appear as notes in your owner's Telegram chat. They won't appear if your owner has hidden this session or you exceed the message limits. For a question that needs an answer, use ask_owner.";
+const NOTE = "Sent to your owner channel as a note; it may be hidden or dropped by message limits. Use ask_owner for a question or important update.";
 const TEXT_ONLY = /your owner channel takes text only, sent to it by name; nothing was sent/;
 
 function writePolicy(home, encryption) {
@@ -115,7 +115,7 @@ test("refused: without the relay's to_member check, and under a required own-mem
   relay.caps = relay.caps.filter((c) => c !== "to_member");
   const old = await e.call("send_message", { to: "me-owner", message: "old relay" });
   assert.equal(old.isError, true);
-  assert.match(textOf(old), /this relay cannot guarantee the recipient; upgrade it\. Nothing was sent\./);
+  assert.match(textOf(old), /Nothing was sent: this relay cannot restrict delivery to the intended member\. Your user must upgrade the relay to use this feature\./);
   // Another name on the same relay still goes.
   await agent(t, w.url, w.tokens.me, "me-other");
   assert.equal((await e.call("send_message", { to: "me-other", message: "fine" })).isError, false);

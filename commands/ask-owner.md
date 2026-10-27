@@ -10,5 +10,5 @@ Use the hoptell-owner-channel skill to ask the owner this question with `ask_own
 $ARGUMENTS
 
 - Never include secrets. Telegram is not end-to-end encrypted.
-- Keep it under 3,000 characters. Add `choices` when the answer is a pick.
+- Use at most 3,000 characters. Add `choices` for a question with 2 to 6 short answers.
 - Do not wait in a loop for the answer. It arrives later as a hoptell message.
