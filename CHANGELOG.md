@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-27)
+
+This release adds a large set of features and changes the relay protocol. Upgrade the relay
+and every client together; see "Upgrading" at the end of this entry.
 
 - Claude Code plugin: skills and slash commands for reviewer agents and the owner channel.
   The skills `hoptell-reviewers`, `hoptell-owner-channel` and `hoptell-safe-ops` cover starting
@@ -44,11 +47,6 @@
 - Fixed: with a members or policy file configured, a `kill -HUP` could stop the relay after it
   began listening but before startup finished. The signal is now kept, and the reload runs once
   startup is complete.
-
-## 0.3.0 (2026-10-15)
-
-This release adds a large set of features and changes the relay protocol. Upgrade the relay
-and every client together; see "Upgrading" at the end of this entry.
 
 - Agent spawning: an agent session can start another agent on the same machine for one task,
   within limits you set in a profile (`~/.hoptell/agents/profiles/<id>.json`, schema

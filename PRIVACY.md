@@ -1,6 +1,6 @@
 # Privacy policy
 
-Effective: 14 October 2026
+Effective: 27 October 2026
 
 hoptell is open-source software that you run yourself. This policy describes what the
 software does with data. It covers the hoptell npm package, the Claude Code plugin and the
