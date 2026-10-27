@@ -468,7 +468,7 @@ test("identity: shows the bot's profile texts and what would change; --apply ask
   assert.equal(await s.cli(["identity", "--apply"], { stdin: Readable.from(["no\n"]) }), 1);
   assert.equal(await s.cli(["identity", "--apply"], { stdin: "" }), 1);
   assert.equal(sets().length, 0);
-  assert.match(s.printed(), /^OUT Apply these changes to @owner_test_bot\? Type yes to continue:$/m);
+  assert.match(s.printed(), /^ERR Apply these changes to @owner_test_bot\? Type yes to apply them, anything else cancels:$/m);
   assert.match(s.printed(), /^OUT Nothing was changed\.$/m);
   // yes: the two that differ are set; the third is not touched.
   assert.equal(await s.cli(["identity", "--apply"], { stdin: Readable.from(["yes\n"]) }), 0, s.printed());
@@ -552,12 +552,12 @@ test("fav, unfav, alias and sessions: people.json from the bridge machine's CLI;
   await s.cli(["setup"], { stdin: TOKEN });
   const said = () => s.lines.slice(-1)[0];
   assert.equal(await s.cli(["fav", "alice"]), 1);
-  assert.equal(said(), "ERR hoptell telegram: The owner channel is not paired yet: run hoptell telegram pair first.");
+  assert.equal(said(), "ERR hoptell telegram: the owner channel is not paired yet: run hoptell telegram pair");
   paired(s.home);
   await agent(t, s.url, s.tokens.me, "me-alice");
   await agent(t, s.url, s.tokens.me, "me-bob");
   assert.equal(await s.cli(["fav", "alice"]), 0, s.printed());
-  assert.equal(said(), "OUT ★ alice is a favourite.");
+  assert.equal(said(), "OUT alice is now a favourite.");
   assert.equal(await s.cli(["alias", "alice", "Main"]), 0, s.printed());
   assert.equal(said(), 'OUT me-alice is now shown as "Main".');
   const people = (await import("../lib/ownerpeople.js")).readPeople(s.home, { member: ME, owner: 5550001 }).sessions;
@@ -584,7 +584,7 @@ test("fav, unfav, alias and sessions: people.json from the bridge machine's CLI;
   assert.equal(said(), "OUT The custom name for me-alice has been removed.");
   assert.equal(await s.cli(["fav", "bob"]), 0);
   assert.equal(await s.cli(["sessions"]), 0);
-  assert.equal(said(), "OUT me-bob  ★");
+  assert.equal(said(), "OUT me-bob  favourite");
   assert.equal(s.printed().includes(String(OWNER_CHAT)), false, "never a chat id");
   assert.equal(s.printed().includes(SECRET), false);
   // Plain unpair keeps it (the same user pairing again keeps their favourites); --all deletes it.
@@ -626,7 +626,7 @@ test("CLI: two names given at once: exactly one wins; a change waiting for the l
   assert.equal(await s.cli(["unpair"]), 0);
   release();
   assert.equal(await waiting, 1);
-  assert.equal(s.lines.at(-1).startsWith("ERR hoptell telegram: The owner channel's pairing changed while this command was running, so nothing was saved."), true, s.printed());
+  assert.equal(s.lines.at(-1).startsWith("ERR hoptell telegram: the owner channel's pairing changed while this ran; nothing was saved: run the command again"), true, s.printed());
   paired(s.home);
   assert.equal(readPeople(s.home, { member: ME, owner: 5550001 }).sessions["me-bob"]?.fav, undefined);
 });
@@ -635,7 +635,7 @@ test("app: --on needs a relay that serves it; --status, --off and --rotate; the 
   const old = await setup(t);
   await old.cli(["setup"], { stdin: TOKEN });
   assert.equal(await old.cli(["app", "--on"]), 1);
-  assert.match(old.printed(), /The hoptell server can't serve the app yet\. Its operator needs to update it and turn on HOPTELL_OWNER_APP\./);
+  assert.match(old.printed(), /the hoptell relay cannot serve the app yet: its operator must update it and set HOPTELL_OWNER_APP=on/);
   assert.equal(await old.cli(["app", "--on", "--off"]), 2);
 
   const s = await setup(t, { ownerApp: true });
@@ -648,7 +648,7 @@ test("app: --on needs a relay that serves it; --status, --off and --rotate; the 
   assert.equal(await s.cli(["app", "--on"], { now: () => Date.now() - 120_000 }), 0);
   assert.match(s.printed(), /The app is on\. Start the bridge, then send \/app in the chat\./);
   // The test relay is ws://127.0.0.1: no public origin can be derived from it.
-  assert.match(s.printed(), /Warning: Telegram can't open the app at the relay's address: the relay URL is ws:\/\/, not wss:\/\/\. With this command's environment, the bot cannot show an app button\. Set HOPTELL_APP_URL in the bridge's environment/);
+  assert.match(s.printed(), /warning:\sTelegram\scan't\sopen\sthe\sapp\sat\sthe\srelay's\saddress:\sthe\srelay\sURL\sis\sws:\/\/,\snot\swss:\/\/\.\sWith\sthis\scommand's\senvironment,\sthe\sbot\scannot\sshow\san\sapp\sbutton\.\sSet\sHOPTELL_APP_URL\sin\sthe\sbridge's\senvironment/);
   s.env.HOPTELL_APP_URL = "https://Hoptell.Example.com:443/";
   const id = JSON.parse(fs.readFileSync(sig.channelPaths(s.home).state, "utf8")).app.id;
   assert.match(id, /^[a-z2-7]{26}$/);
@@ -677,3 +677,28 @@ test("app: --on needs a relay that serves it; --status, --off and --rotate; the 
   assert.ok(readAudit(s.home).some((e) => e.event === "app" && e.action === "rotate"));
   assert.ok(!s.printed().includes(SECRET), "never the token");
 });
+
+/* eslint-disable no-control-regex -- the marks are ANSI colour sequences */
+test("terminal texts: an unknown command is one line, --name states the name rule, status marks only with marks on", async (t) => {
+  const s = await setup(t);
+  s.lines.length = 0;
+  assert.equal(await s.cli(["bogus"]), 2);
+  assert.deepEqual(s.lines, ['ERR hoptell: unknown telegram command "bogus" (see hoptell telegram --help)']);
+  s.lines.length = 0;
+  assert.equal(await s.cli([]), 2);
+  assert.match(s.printed(), /^ERR [\s\S]*hoptell telegram setup/, "no command: the usage, on stderr");
+  s.lines.length = 0;
+  assert.equal(await s.cli(["setup", "--name", "-bad"], { stdin: TOKEN }), 2);
+  assert.equal(s.lines.at(-1), 'ERR hoptell telegram: --name: a name is 1 to 64 letters, digits, "_" or "-", starting with a letter or digit');
+  await s.cli(["setup"], { stdin: TOKEN });
+  s.lines.length = 0;
+  await s.cli(["status"]);
+  const plain = s.lines.filter((l) => /^OUT (ok|info|warn|FAIL) /.test(l));
+  assert.ok(plain.length > 0, s.printed());
+  assert.doesNotMatch(s.printed(), /\x1b|✓|✗|⚠/);
+  s.lines.length = 0;
+  await s.cli(["status"], { marks: true });
+  const marked = s.lines.filter((l) => /^OUT \x1b\[\d+m(✓|·|⚠|✗)\x1b\[0m (ok|info|warn|FAIL) /.test(l));
+  assert.deepEqual(marked.map((l) => l.replace(/\x1b\[\d+m(✓|·|⚠|✗)\x1b\[0m /, "")), plain);
+});
+/* eslint-enable no-control-regex */

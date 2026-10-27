@@ -407,8 +407,8 @@ test("doctor shows the setting and refuses an invalid value", async (t) => {
   const w = await world({ fresh: true });
   t.after(() => w.close());
   await w.mcp("bob"); // sets the contacts up
-  assert.match((await w.cli(["doctor"])).stdout, /contacts self: allow: messages the relay attributes to your own member .* can bypass the default hold/);
-  assert.match((await w.cli(["doctor"], { HOPTELL_CONTACTS_SELF: "hold" })).stdout, /contacts self: hold: messages from your own member follow the usual contacts policy/);
+  assert.match((await w.cli(["doctor"])).stdout, /contacts self: allow: messages the relay attributes to your own member\n {6}in the same realm, .* can bypass the default\n {6}hold; /);
+  assert.match((await w.cli(["doctor"], { HOPTELL_CONTACTS_SELF: "hold" })).stdout, /contacts self: hold: messages from your own member follow the\n {6}usual contacts policy \(HOPTELL_CONTACTS_SELF=hold\)/);
   const bad = await w.cli(["doctor"], { HOPTELL_CONTACTS_SELF: "maybe" });
   assert.match(bad.stdout, /FAIL.*HOPTELL_CONTACTS_SELF must be allow or hold, not "maybe"/);
 });

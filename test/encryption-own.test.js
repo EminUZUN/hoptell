@@ -110,7 +110,7 @@ test("receive side (unchanged): own-member plaintext under required is held as a
   const id = /^(q_[a-z2-7]{16})\s/m.exec(cli("list"))?.[1];
   assert.ok(id);
   const shown = cli("show", id);
-  assert.match(shown, /unencrypted, and this contact's encryption is required: they can only be blocked, or released after hoptell contacts encryption m_\S+ preferred\|off/);
+  assert.match(shown, /unencrypted, and this contact's encryption is required: they can only be blocked, or released after you set this contact's encryption to preferred or off \(hoptell contacts encryption m_\S+ preferred\)/);
   assert.match(shown, /hoptell contacts block /);
   assert.doesNotMatch(shown, /hoptell contacts allow/);
   writePolicy(s.home, OVERRIDE);

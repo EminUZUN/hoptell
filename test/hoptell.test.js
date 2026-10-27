@@ -90,8 +90,22 @@ test("behind a trusted proxy the relay logs the forwarded client address; otherw
   };
   await hello(relay.port, "behindproxy");
   await hello(plain.port, "direct");
-  assert.ok(lines.some((l) => /^\+ behindproxy .*203\.0\.113\.9 via 127\.0\.0\.1/.test(l)), lines.join("\n"));
-  assert.ok(lines.some((l) => /^plain \+ direct .*127\.0\.0\.1/.test(l) && !l.includes("203.0.113.9")), lines.join("\n"));
+  assert.ok(lines.some((l) => /^connected behindproxy .*203\.0\.113\.9 via 127\.0\.0\.1/.test(l)), lines.join("\n"));
+  assert.ok(lines.some((l) => /^plain connected direct .*127\.0\.0\.1/.test(l) && !l.includes("203.0.113.9")), lines.join("\n"));
+});
+
+test("relay startup line: an IPv6 address in brackets, and members counted (hosted or linked ones have no token)", async (t) => {
+  const lines = [];
+  let relay;
+  try {
+    relay = await startRelay({ host: "::1", port: 0, members: [{ name: "alice", id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", token: fakeToken() }], log: (...a) => lines.push(a.join(" ")) });
+  } catch (e) {
+    if (e.code === "EADDRNOTAVAIL" || e.code === "EAFNOSUPPORT") return t.skip("no IPv6 loopback");
+    throw e;
+  }
+  t.after(() => relay.close());
+  const start = lines.find((l) => l.startsWith("hoptell relay listening on "));
+  assert.match(start, new RegExp(`^hoptell relay listening on ws://\\[::1\\]:${relay.port} \\(auth: 1 member; .*health: http://\\[::1\\]:${relay.port}/healthz\\)$`));
 });
 
 test("relay logs strip control characters, metrics carry only numbers, doctor --relay-check round-trips", async (t) => {
@@ -408,7 +422,7 @@ test("CLI commands retry while the relay is unreachable, but stop at once on a r
   relay = await startRelay({ host: "127.0.0.1", port, token: TOKEN, realm, log: () => {} });
   const listed = await listing;
   assert.equal(listed.code, 0, listed.stderr);
-  assert.match(listed.stdout, /no other peers/);
+  assert.match(listed.stdout, /^No peers are visible on this relay\.$/m);
 
   // wait keeps waiting through a relay restart and still gets the message.
   const waiting = w.cli(["wait", "20"], { ...env, HOPTELL_NAME: "carol" });
@@ -427,7 +441,8 @@ test("CLI commands retry while the relay is unreachable, but stop at once on a r
   const started = Date.now();
   const refused = await w.cli(["send", "carol", "x"], { ...env, HOPTELL_TOKEN: fakeToken() });
   assert.notEqual(refused.code, 0);
-  assert.match(refused.stderr, /bad token/);
+  // The wire reason is translated: what happened, and what to check.
+  assert.equal(refused.stderr, "hoptell: the relay refused the token (4003): check HOPTELL_TOKEN, or run hoptell login if you use HOPTELL_AUTH=login\n");
   assert.ok(Date.now() - started < 5000, "a refused token must fail fast");
 });
 
@@ -715,11 +730,15 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   const config = new URL("../lib/config.js", import.meta.url).href;
   const printRoots = `import(${JSON.stringify(config)}).then((c) => { c.loadEnv(); process.stdout.write(process.env.HOPTELL_SNAPSHOT_ROOTS || "unset"); })`;
   const agent = `'${process.execPath}' -e '${printRoots}' > '${rootsOut}'; '${process.execPath}' '${BIN}' list > '${out}' 2>&1; sleep 30`;
-  const r = await w.cli(["tmux", name, "--roles", "backend", "--", "sh", "-c", agent], { HOPTELL_SNAPSHOT_ROOTS: roots, HOPTELL_PUSH: "", HOPTELL_PROFILE: "chosen-profile", HOPTELL_RECEIPTS: "on", HOPTELL_NOTIFY: "off" });
-  assert.match(r.stderr, /attach with: tmux attach/); // no terminal in tests; the session still runs
+  const r = await w.cli(["tmux", name, "--roles", "backend", "--", "sh", "-c", agent], { HOPTELL_SNAPSHOT_ROOTS: roots, HOPTELL_PUSH: "", HOPTELL_PROFILE: "chosen-profile", HOPTELL_RECEIPTS: "on", HOPTELL_NOTIFY: "off", HOPTELL_TITLE: "Release review", HOPTELL_TITLE_AUTO: "on" });
+  // No terminal in tests; the session still runs. The hint names the session exactly ("=": no prefix match).
+  assert.match(r.stderr, new RegExp(`attach with: tmux attach -t '=${session}'`));
+  // A second launch with that name: both suggested commands target exactly that session.
+  const again = await w.cli(["tmux", name, "--", "true"], { HOPTELL_PUSH: "" });
+  assert.match(again.stderr, new RegExp(`already exists: attach with \`tmux attach -t '=${session}'\`, or end it with \`tmux kill-session -t '=${session}'\``));
   let text = "";
   for (let i = 0; i < 50 && !text; i++, await sleep(100)) text = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
-  assert.match(text, /no other peers|online/, `agent used stale settings: ${text}`);
+  assert.match(text, /No peers are visible on this relay\.|online/, `agent used stale settings: ${text}`);
 
   const env = execFileSync("tmux", ["show-environment", "-t", `=${session}`], { encoding: "utf8" });
   assert.match(env, /^HOPTELL_ROLES=backend$/m);
@@ -731,6 +750,11 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   assert.ok(fs.readFileSync(file, "utf8").includes(`HOPTELL_SNAPSHOT_ROOTS=${JSON.stringify(roots)}`), "the caller's folders win");
   assert.match(fs.readFileSync(file, "utf8"), /^HOPTELL_RECEIPTS="on"$/m, "receipt and notification settings reach the session");
   assert.match(fs.readFileSync(file, "utf8"), /^HOPTELL_NOTIFY="off"$/m);
+  // The session title settings reach the agent too, and stale server values are blanked.
+  assert.match(fs.readFileSync(file, "utf8"), /^HOPTELL_TITLE="Release review"$/m);
+  assert.match(fs.readFileSync(file, "utf8"), /^HOPTELL_TITLE_AUTO="on"$/m);
+  assert.match(env, /^HOPTELL_TITLE=$/m);
+  assert.match(env, /^HOPTELL_TITLE_AUTO=$/m);
   // Sign-in with the encrypted file: the passphrase would have to be written next to the file it protects.
   const refused = await w.cli(["tmux", `${name}x`, "--", "true"], { HOPTELL_AUTH: "login", HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_PUSH: "" });
   assert.notEqual(refused.code, 0);
@@ -860,7 +884,7 @@ test("settings: HOPTELL_ENV file is read, real env wins, roles validated", async
   assert.equal((await run({})).code, 0);
   const wrong = await run({ HOPTELL_TOKEN: fakeToken() });
   assert.notEqual(wrong.code, 0);
-  assert.match(wrong.stderr, /bad token/);
+  assert.match(wrong.stderr, /the relay refused the token \(4003\)/);
 
   const a = await w.mcp("alice", { HOPTELL_ROLES: "ok-role,bad role" });
   assert.match(await a.call("list_peers"), /invalid role "bad role"/);
@@ -956,12 +980,12 @@ test("an unreadable or missing explicit settings file is an error, not silently 
   t.after(() => w.close());
   const missing = await w.cli(["list"], { HOPTELL_ENV: path.join(w.home, "nope.env") });
   assert.notEqual(missing.code, 0);
-  assert.match(missing.stderr, /cannot read settings file .*nope\.env: ENOENT/);
+  assert.match(missing.stderr, /cannot read settings file .*nope\.env: no such file or directory$/m);
   if (process.getuid && process.getuid() !== 0) {
     const locked = path.join(w.home, "locked.env");
     fs.writeFileSync(locked, "HOPTELL_NAME=x\n", { mode: 0o000 });
     const r = await w.cli(["list"], { HOPTELL_ENV: locked });
-    assert.match(r.stderr, /cannot read settings file .*EACCES/);
+    assert.match(r.stderr, /cannot read settings file .*: permission denied$/m);
   }
 });
 
@@ -1082,7 +1106,7 @@ test("session settings round-trip tokens with quotes, backslashes and newlines",
   await w.cli(["tmux", name, "--", "sh", "-c", agent], { HOPTELL_RELAY: `ws://127.0.0.1:${relay.port}`, HOPTELL_TOKEN: odd, HOPTELL_SNAPSHOT_ROOTS: "[]", HOPTELL_PUSH: "" });
   let text = "";
   for (let i = 0; i < 50 && !text; i++, await sleep(100)) text = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
-  assert.match(text, /no other peers/, `agent could not use the token: ${text}`);
+  assert.match(text, /No peers are visible on this relay\./, `agent could not use the token: ${text}`);
   assert.match(fs.readFileSync(path.join(w.home, "sessions", `${name}.env`), "utf8"), /^HOPTELL_SNAPSHOT_ROOTS="\[\]"$/m);
 
   // The parser itself: double quotes decode escapes, single quotes are literal.
@@ -1239,7 +1263,8 @@ test("doctor never prints a relay's close reason and checks write access to its 
   evil.on("connection", (ws) => ws.on("message", () => ws.close(4003, `${encodeURIComponent(token)} ${pass}`.slice(0, 120))));
   const relay = `ws://doctor:${pass}@127.0.0.1:${evil.address().port}/?t=${encodeURIComponent(token)}`;
   const out = await w.cli(["doctor"], { HOPTELL_RELAY: relay, HOPTELL_TOKEN: token });
-  assert.match(out.stdout, /FAIL +relay login: the relay refused the token \(4003\)/);
+  // A reason the client does not know: doctor's fixed text for the code, never the token blamed alone.
+  assert.match(out.stdout, /FAIL +relay login: the relay refused authentication or access \(4003\): check this relay's token or sign-in settings$/m);
   for (const v of [token, encodeURIComponent(token), `doctor:${pass}@`]) assert.ok(!out.stdout.includes(v), `printed ${v}`);
 
   // An unknown close code whose reason looks like an error name: nothing from it is copied.
@@ -1487,9 +1512,37 @@ test("relay reloads its members file on SIGHUP and keeps the old list when the f
   fs.writeFileSync(file, `{ "members": [ ${alice}`);
   proc.kill("SIGHUP");
   for (let i = 0; i < 50 && !/reload failed/.test(out); i++) await sleep(100);
-  assert.match(out, /members reload failed; keeping the active members list: .*invalid JSON/);
+  assert.match(out, /members reload failed; the active members list is unchanged: .*invalid JSON/);
   (await login(url, "alice", alice)).terminate();
   assert.ok(!(out + err).includes(alice), "a token from the malformed file was logged");
+});
+
+test("with --log-format json, a failed members reload is logged as JSON like every other line", { skip: process.platform === "win32" && "no SIGHUP on Windows" }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-members-json-"));
+  const file = path.join(dir, "members.json");
+  fs.writeFileSync(file, JSON.stringify({ members: [{ name: "alice", token: fakeToken() }] }), { mode: 0o600 });
+  const port = await new Promise((r) => {
+    const srv = net.createServer().listen(0, "127.0.0.1", () => {
+      const { port: free } = srv.address();
+      srv.close(() => r(free));
+    });
+  });
+  const { spawn } = await import("node:child_process");
+  const env = { ...process.env, HOPTELL_ENV: path.join(dir, "none.env"), HOPTELL_STATE_DIR: path.join(dir, "state"), HOPTELL_TOKEN: "", HOPTELL_MEMBERS: file };
+  fs.writeFileSync(env.HOPTELL_ENV, "");
+  const proc = spawn(process.execPath, [BIN, "relay", "--host", "127.0.0.1", "--port", String(port), "--log-format", "json"], { env });
+  let out = "";
+  proc.stdout.on("data", (d) => (out += d));
+  t.after(() => {
+    proc.kill();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  for (let i = 0; i < 50 && !/listening/.test(out); i++) await sleep(100);
+  fs.writeFileSync(file, "{ not json");
+  proc.kill("SIGHUP");
+  for (let i = 0; i < 50 && !/reload failed/.test(out); i++) await sleep(100);
+  const lines = out.trim().split("\n").map((l) => JSON.parse(l)); // every line is JSON
+  assert.ok(lines.some((l) => /^members reload failed; the active members list is unchanged: /.test(l.msg)), out);
 });
 
 test("members reload: revoked sockets are ignored at once; shared, hashed, send-only and in-flight cases", async (t) => {
@@ -1813,14 +1866,93 @@ test("a relay's hello timeout (4001 no hello) is retried; a refused hello (4001 
   }
 });
 
+test("grants preview: the advice to publish is exact, and with --until says the duration starts when you publish", async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const { createAccess } = await import("../lib/access.js");
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-grants-"));
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
+  const token = fakeToken();
+  const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "alice", id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaa", token }], realm: { id: "e".repeat(32) }, access: createAccess({ stateDir }), log: () => {} });
+  t.after(() => relay.close());
+  const env = { HOPTELL_RELAY: `ws://127.0.0.1:${relay.port}`, HOPTELL_TOKEN: token };
+  const plain = await w.cli(["grants", "allow", "*"], env);
+  assert.equal(plain.code, 0, plain.stderr);
+  assert.match(plain.stdout, /^Nothing published yet\. Run the same command with --yes --rev 0 to publish it\.$/m);
+  const timed = await w.cli(["grants", "allow", "*", "--until", "60"], env);
+  assert.equal(timed.code, 0, timed.stderr);
+  assert.match(timed.stdout, /^Nothing published yet\. Run the same command with --yes --rev 0 to publish it\. A --until duration starts when you publish\.$/m);
+});
+
+test("hoptell apply: a malformed id is refused before anything is created; a home that cannot be created is named in words", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-apply-home-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "empty.env"), "");
+  fs.writeFileSync(path.join(dir, "a-file"), "");
+  const home = path.join(dir, "a-file", "home"); // a path under a file: it cannot be created
+  const run = (args) => spawnSync(process.execPath, [BIN, ...args], { env: { PATH: process.env.PATH, HOME: dir, HOPTELL_ENV: path.join(dir, "empty.env"), HOPTELL_HOME: home }, encoding: "utf8" });
+  const bogus = run(["apply", "bogus"]);
+  assert.deepEqual([bogus.status, bogus.stderr], [2, 'hoptell: "bogus" is not a proposal id: use an id that hoptell apply lists\n']);
+  const id = run(["apply", "00000000-0000-4000-8000-000000000000"]);
+  assert.equal(id.status, 1);
+  assert.equal(id.stderr, `hoptell: cannot create the state directory ${home} (a part of the path is not a directory): check HOPTELL_HOME and its parent directories\n`);
+});
+
+/* eslint-disable no-control-regex -- the marks are ANSI colour sequences */
+test("doctor marks: a coloured symbol before the unchanged word on a terminal; plain lines otherwise", async (t) => {
+  const { terminalMarks } = await import("../lib/doctor.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-marks-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  // A fresh process, so no settings file loaded by another test leaks in.
+  const doctorUrl = new URL("../lib/doctor.js", import.meta.url).href;
+  const script = `const { doctor } = await import(${JSON.stringify(doctorUrl)});
+    const env = { HOPTELL_HOME: ${JSON.stringify(home)} };
+    const plain = [], marked = [];
+    await doctor(env, (l) => plain.push(l), { homedir: ${JSON.stringify(home)} });
+    await doctor(env, (l) => marked.push(l), { homedir: ${JSON.stringify(home)}, marks: true });
+    process.stdout.write(JSON.stringify({ plain, marked }));`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], { cwd: home, encoding: "utf8", env: { PATH: process.env.PATH, HOME: home } });
+  assert.equal(run.status, 0, run.stderr);
+  const { plain, marked } = JSON.parse(run.stdout);
+  // Without marks every line starts with the word, as scripts and tests read it.
+  assert.ok(plain.filter((l) => l && !l.startsWith("\n")).every((l) => /^(ok {4}|info {2}|warn {2}|FAIL {2})/.test(l)), plain.join("\n"));
+  assert.doesNotMatch(plain.join("\n"), /\x1b|✓|✗|⚠/);
+  // With marks: the same lines, each with its symbol before the same word.
+  const strip = (l) => l.replace(/\x1b\[\d+m(✓|·|⚠|✗)\x1b\[0m /, "");
+  assert.deepEqual(marked.map(strip), plain);
+  assert.ok(marked.some((l) => l.startsWith("\x1b[31m✗\x1b[0m FAIL  relay URL: ")), marked.join("\n"));
+  assert.match(marked.at(-1), /^\n\x1b\[31m✗\x1b\[0m \d+ checks? failed\.$/);
+  // Only a terminal that takes colour gets them.
+  assert.equal(terminalMarks({ isTTY: true }, {}), true);
+  assert.equal(terminalMarks({ isTTY: false }, {}), false);
+  assert.equal(terminalMarks({ isTTY: true }, { NO_COLOR: "1" }), false);
+  assert.equal(terminalMarks({ isTTY: true }, { TERM: "dumb" }), false);
+  assert.equal(terminalMarks({ isTTY: true }, { NO_COLOR: "" }), true, "an empty NO_COLOR does not count");
+});
+/* eslint-enable no-control-regex */
+
+test("a relay that refuses connections: the error says it could not connect within the budget, the last error in words, and what to check", async (t) => {
+  // A port with nothing listening: every attempt is refused at once, and the client keeps trying.
+  const port = await new Promise((resolve) => {
+    const s = net.createServer().listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => resolve(p));
+    });
+  });
+  const c = new RelayClient({ url: `ws://127.0.0.1:${port}`, token: fakeToken(), name: "alice" });
+  t.after(() => c.close());
+  c.start();
+  await assert.rejects(c.ready(1000), { message: `could not connect to ws://127.0.0.1:${port} within 1 s; last error: connection refused. Check that the relay is running and HOPTELL_RELAY is correct` });
+});
+
 test("doctor tells the relay's hello timeout (4001 no hello) from a refused hello", async (t) => {
   const w = await world();
   t.after(() => w.close());
   const token = fakeToken();
   for (const [reason, expect] of [
-    ["no hello", /FAIL +relay login: the relay timed out waiting for the login message \(no hello\): a slow or unstable network, try again \(4001\)/],
-    ["bad hello", /FAIL +relay login: the relay rejected the login message \(bad hello\) \(4001\)/],
-    ["xno hello", /FAIL +relay login: the relay rejected the login message \(bad hello\) \(4001\)/],
+    ["no hello", /FAIL +relay login: the relay timed out waiting for this client's greeting \(4001\): check the network and try again$/m],
+    ["bad hello", /FAIL +relay login: the relay did not accept this client's greeting \(4001\): the relay and this hoptell may be different versions; update both$/m],
+    ["xno hello", /FAIL +relay login: the relay did not accept this client's greeting \(4001\): the relay and this hoptell may be different versions; update both$/m],
   ]) {
     const srv = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise((r) => srv.once("listening", r));

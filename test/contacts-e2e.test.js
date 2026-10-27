@@ -102,7 +102,7 @@ test("an existing install keeps today's behavior until init; then backlog is hel
   await w.cli(["send", "bob", "backlog"], { HOPTELL_NAME: "alice" });
   await sleep(800);
   const init = await w.cli(["contacts", "init"], ON);
-  assert.match(init.stdout, /now managed[\s\S]*Nobody was granted/);
+  assert.match(init.stdout, /now\smanaged:[\s\S]*Nobody was granted/);
   assert.ok(fs.existsSync(path.join(w.home, "contacts.json")));
   out = await bob.call("read_inbox");
   assert.doesNotMatch(out, /backlog/, "held back on its next read");

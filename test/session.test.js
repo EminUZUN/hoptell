@@ -162,7 +162,7 @@ test("hoptell wait: a name in use stops it, --replace takes it over once, --wait
   const dave = await w.mcp("dave");
   const busy = await w.cli(["wait", "3"], { HOPTELL_NAME: "dave" });
   assert.notEqual(busy.code, 0);
-  assert.match(busy.stderr, /in use by another session/);
+  assert.equal(busy.stderr, "hoptell: the name is in use by another session: wait for that session to end, or choose another HOPTELL_NAME (or use --wait-for-name)\n");
 
   const waiting = w.cli(["wait", "--wait-for-name", "20"], { HOPTELL_NAME: "dave" });
   await sleep(1000);
@@ -213,8 +213,9 @@ test("a name a member token may not use: the refusal says which names it may use
     // Protocol 2: the relay says whose token it is, so the names are spelled out; protocol 1 cannot.
     const message =
       protocol === 2
-        ? `relay refused the connection: name not allowed: this is member alice's token, which may use only "alice" or names that start with "alice-", e.g. HOPTELL_NAME=alice-<name> (4002)`
-        : `relay refused the connection: name not allowed: a member token may use only "<member>" or names that start with "<member>-", e.g. HOPTELL_NAME=<member>-<name>; a shared token may not use a hosted member's names (4002)`;
+        ? `relay refused the connection: name not allowed: this is member alice's token. Set HOPTELL_NAME to "alice" or a unique name that starts with "alice-" (64 characters at most) (4002)`
+        : `relay refused the connection: name not allowed: a member token may use only its member's name, or a unique name that starts with that name and "-"; a shared token may not use a hosted member's names (4002)`;
+    assert.doesNotMatch(message, /[<>]/, "nothing a pasted line would read as a shell redirection");
     await assert.rejects(c.start().ready(), { message });
   }
   const { doctor } = await import("../lib/doctor.js");
@@ -222,7 +223,7 @@ test("a name a member token may not use: the refusal says which names it may use
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const out = [];
   await doctor({ HOPTELL_RELAY: url, HOPTELL_TOKEN: aliceToken, HOPTELL_NAME: "bob", HOPTELL_HOME: home }, (l) => out.push(l), { homedir: home });
-  assert.match(out.join("\n"), /FAIL +relay login: the relay refused this name: this is member alice's token, which may use only "alice" or names that start with "alice-", e\.g\. HOPTELL_NAME=alice-<name> \(4002\)/);
+  assert.match(out.join("\n"), /FAIL +relay login: the relay refused this name: this is member alice's token\. Set HOPTELL_NAME to "alice" or a unique name that starts with "alice-" \(64 characters at most\) \(4002\)/);
 });
 
 test("an agent session that exits cleanly frees its name at once (no reservation)", async (t) => {

@@ -373,7 +373,7 @@ test("a reinstall replaces the running instance, and fails when the old one keep
   }
   // Nothing running after the start: an error, not success.
   const run = (cmd, args) => (args.includes("show") ? { status: 0, stdout: "0\n", stderr: "" } : { status: 0, stdout: "", stderr: "" });
-  await assert.rejects(installLocalRelay({ home: tmp(t, "hoptell-lr-"), homedir: tmp(t, "hoptell-lrh-"), platform: "linux", run, port: 7787, ...offline }), /not running after its start/);
+  await assert.rejects(installLocalRelay({ home: tmp(t, "hoptell-lr-"), homedir: tmp(t, "hoptell-lrh-"), platform: "linux", run, port: 7787, ...offline }), /not running after its start; check its log with journalctl --user -u hoptell-local-relay\.service$/);
 });
 
 test("uninstall keeps everything when the service cannot be stopped, and can be run again", async (t) => {

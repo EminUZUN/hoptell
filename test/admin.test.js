@@ -412,7 +412,7 @@ test("offline: the CLI opens the store under the lock; status works through a re
   const audit = await run(["relay", "admin", "audit"]);
   assert.match(audit.stdout, /offline-cli\tmembers\.add\tgina\tintent/);
   assert.match(audit.stdout, /offline-cli\tmembers\.add\tgina\tresult\tok/);
-  assert.match(audit.stdout, /hash chain verified: 2 row\(s\)/);
+  assert.match(audit.stdout, /hash chain verified: 2 rows from the start/);
   fs.mkdirSync(path.join(state, "restore"), { mode: 0o700 });
   fs.writeFileSync(path.join(state, "restore", "intent.json"), JSON.stringify({ v: 1, id: "0123456789abcdef", phase: "evidence" }));
   assert.match((await run(["relay", "admin", "status"])).stdout, /unfinished 0123456789abcdef at evidence/);

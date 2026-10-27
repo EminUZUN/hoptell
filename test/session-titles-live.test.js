@@ -353,7 +353,7 @@ test("Claude hooks: SessionStart for every source and UserPromptSubmit keep sess
   const f = wakeFiles(w).find((n) => n.endsWith(".title.json"));
   assert.equal(fs.statSync(path.join(w.home, "wake", f)).mode & 0o777, 0o600);
   await host.startMcp("cc", { HOPTELL_TITLE_AUTO: "on" });
-  assert.match(await shown(), /^- cc \(host: [^)]+\) title: "named fork" online$/);
+  assert.match(await shown(), /^- cc \(reported host: [^)]+\) title: "named fork" online$/);
   // A later /rename arrives with the next prompt; the canary prompt is never kept or shown.
   const CANARY = `canary-${crypto.randomBytes(6).toString("hex")}`;
   const up = await host.prompt({ session_id: "conv-fork", prompt: CANARY, session_title: "renamed‮ later" });
@@ -366,7 +366,7 @@ test("Claude hooks: SessionStart for every source and UserPromptSubmit keep sess
   assert.equal(none.stdout, "");
   assert.equal(titleFiles(w)[0].title, null);
   await host.call("list_peers");
-  assert.match(await shown(), /^- cc \(host: [^)]+\) online$/);
+  assert.match(await shown(), /^- cc \(reported host: [^)]+\) online$/);
   // Through a shell: Claude Code is an ancestor, not the parent.
   const viaShell = await host.prompt({ session_id: "conv-fork", prompt: CANARY, session_title: "via shell" }, { viaShell: true });
   assert.equal(viaShell.code, 0);
@@ -378,7 +378,7 @@ test("Claude hooks: SessionStart for every source and UserPromptSubmit keep sess
   const tf = path.join(w.home, "wake", f);
   writeRecord(tf, { session_id: "conv-other", title: "stale", at: Date.now() });
   await host.call("list_peers");
-  assert.match(await shown(), /^- cc \(host: [^)]+\) online$/);
+  assert.match(await shown(), /^- cc \(reported host: [^)]+\) online$/);
   // The canary is nowhere: not in any file under the home, nor in any output.
   assert.ok(!allText(w.home).includes(CANARY), "no file holds the prompt");
   assert.ok(!JSON.stringify(host.events).includes(CANARY), "no hook or MCP output shows it");
@@ -413,20 +413,20 @@ test("Claude hooks privacy defaults: without HOPTELL_TITLE_AUTO no copy is kept 
   assert.deepEqual(titleFiles(w), []);
   await host.startMcp("d1");
   await host.call("list_peers");
-  assert.match(await row("d1"), /^- d1 \(host: [^)]+\) online$/);
+  assert.match(await row("d1"), /^- d1 \(reported host: [^)]+\) online$/);
   // The hooks wrote a title (HOPTELL_TITLE_AUTO in their environment), the session has it off.
   const host2 = await fakeClaude(w, t, { HOPTELL_TITLE_AUTO: "on" });
   await host2.sessionStart({ session_id: "c2", input: { session_title: "secret plan" } });
   assert.equal(titleFiles(w).length, 1);
   await host2.startMcp("d2", { HOPTELL_TITLE_AUTO: "off" });
   await host2.call("list_peers");
-  assert.match(await row("d2"), /^- d2 \(host: [^)]+\) online$/);
+  assert.match(await row("d2"), /^- d2 \(reported host: [^)]+\) online$/);
   host2.send({ op: "mcp-stop" });
   await host2.next((e) => e.ev === "mcp-closed");
   // HOPTELL_TITLE=off: nothing at all.
   await host2.startMcp("d3", { HOPTELL_TITLE_AUTO: "on", HOPTELL_TITLE: "off" });
   await host2.call("list_peers");
-  assert.match(await row("d3"), /^- d3 \(host: [^)]+\) online$/);
+  assert.match(await row("d3"), /^- d3 \(reported host: [^)]+\) online$/);
   host2.send({ op: "mcp-stop" });
   await host2.next((e) => e.ev === "mcp-closed" && host2.events.filter((x) => x.ev === "mcp-closed").length === 2);
   // An explicit HOPTELL_TITLE wins over the hook's title.

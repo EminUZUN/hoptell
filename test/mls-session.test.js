@@ -350,5 +350,5 @@ test("hoptell contacts verify --conversation: both owners see the same checkpoin
   assert.equal(cp(a), cp(b), "one history, one number");
   assert.match((await shown(alice, w.members.carol.id))[0], /no encrypted conversation/);
   const lines = await e2eeDoctor({ home: alice.dir, profile, env: alice.env });
-  assert.match(lines[0][1], /1 encrypted conversation\(s\)/);
+  assert.match(lines[0][1], /1 encrypted conversation, /);
 });

@@ -36,9 +36,10 @@ test("members add shows a token once and stores its hash; list, revoke and migra
 
   // Refused changes leave the file as it was.
   const before = fs.readFileSync(file, "utf8");
-  assert.match((await w.cli(["members", "add", "alice"], env)).stderr, /already exists/);
+  // The advice is true: revoking and adding again makes a new member id, it does not rotate the token.
+  assert.match((await w.cli(["members", "add", "alice"], env)).stderr, /member "alice" already exists: choose another name\. Revoking and adding it again creates a new member id \(its sessions and grants do not carry over\)/);
   assert.match((await w.cli(["members", "add", "alice-2"], env)).stderr, /overlaps "alice"/);
-  assert.match((await w.cli(["members", "add", "bad name"], env)).stderr, /invalid member name/);
+  assert.match((await w.cli(["members", "add", "bad name"], env)).stderr, /invalid member name "bad name": a name is 1 to 64 letters, digits, "_" or "-", starting with a letter or digit/);
   assert.equal(fs.readFileSync(file, "utf8"), before);
 
   // A legacy record without an id: migrate reports first, then assigns one with --yes.

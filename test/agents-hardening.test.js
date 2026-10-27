@@ -382,12 +382,12 @@ test("approval: the view names the mode and lists only gated modes; hardening sh
   const cli = (args, deps = { gates: s.gates }) => agentsCommand({ args, home: s.w.home, env: s.ctx.env, homedir: s.w.homedir, out: (l) => out.push(l), fail: (m, code) => {
     throw Object.assign(new Error(m), { exitCode: code });
   }, sources: { deps } });
-  await assert.rejects(cli(["profile", "approve", "hard"]), /Not approved: read the warning above/);
+  await assert.rejects(cli(["profile", "approve", "hard"]), /not approved: read the warning above/);
   const text = out.join("\n");
   assert.match(text, /Headless mode: hardening: path-deny hardening/);
   assert.match(text, /Headless modes available on this hoptell: plain, hardening/);
   const h4 = out.indexOf(HARDENING_APPROVAL_TEXT);
-  const r7 = out.indexOf(`WARNING: ${CODEX_APPROVAL_WARNING}`);
+  const r7 = out.indexOf(`warning: ${CODEX_APPROVAL_WARNING}`);
   assert.ok(h4 >= 0 && r7 > h4, "the H4 text, then R7, verbatim");
   assert.doesNotMatch(text, /containment/i);
   out.length = 0;
@@ -410,10 +410,10 @@ test("approval: the view names the mode and lists only gated modes; hardening sh
   // A plain profile: its label, and R7 alone.
   writeProfile(s.w.home, profileDoc(s.w.work, { id: "plainp", name: { prefix: "plainp" }, command: s.codex, folders: { roots: [s.w.work], default: s.w.work } }));
   out.length = 0;
-  await assert.rejects(cli(["profile", "approve", "plainp"]), /Not approved/);
+  await assert.rejects(cli(["profile", "approve", "plainp"]), /not approved: /);
   assert.match(out.join("\n"), /Headless mode: plain: read-only \(direct shell writes and network access denied; reads not contained\)/);
   assert.ok(!out.includes(HARDENING_APPROVAL_TEXT));
-  assert.ok(out.includes(`WARNING: ${CODEX_APPROVAL_WARNING}`));
+  assert.ok(out.includes(`warning: ${CODEX_APPROVAL_WARNING}`));
 });
 
 // ---- spawn, start, tick ------------------------------------------------------------------------------

@@ -252,7 +252,10 @@ for (const step of STEPS) {
       assert.match((await cli(m.env, ["doctor"])).stdout, /interrupted apply.*hoptell apply --recover/);
       const status = await cli(m.env, ["apply", "--recover"]);
       assert.equal(status.code, 1);
-      assert.match(status.stdout, /--recover --finish/);
+      assert.match(status.stdout, /^To finish writing the proposed contents: hoptell apply --recover --finish$/m);
+      if (!COMMITTED.includes(step)) assert.match(status.stdout, /^To restore the original contents: hoptell apply --recover --roll-back$/m);
+      assert.match(status.stdout, /^A committed apply can only be finished\.$/m);
+      assert.doesNotMatch(status.stdout, /preimage|postimage|holds its/);
       const r = await cli(m.env, ["apply", "--recover", choice]);
       // At "complete" the apply is committed: it is finished, and a roll-back is refused.
       const committed = COMMITTED.includes(step);
@@ -296,7 +299,8 @@ test("a crash followed by an owner's edit halts recovery for that file; a retry 
   fs.writeFileSync(path.join(m.dir.app, "dir/b.sh"), "B owner\n");
   const halted = await cli(m.env, ["apply", "--recover", "--finish"]);
   assert.equal(halted.code, 1);
-  assert.match(halted.stdout, /dir\/b.sh: holds its neither preimage nor postimage; it holds neither its preimage nor its postimage: halted/);
+  assert.match(halted.stdout, /dir\/b.sh: matches neither the original nor the proposed contents; it matches neither the original nor the proposed contents: halted/);
+  assert.doesNotMatch(halted.stdout, /preimage|postimage|holds its/, "plain words, no jargon");
   assert.equal(read(m, "dir/b.sh"), "B owner\n", "never overwritten");
   assert.equal(read(m, "a.txt"), "A2\n");
   const kept = journalDirs(m);

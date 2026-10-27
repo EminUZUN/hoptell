@@ -94,9 +94,9 @@ test("host credential: opens only members whose custody names that host", async 
   // Host h1 for h2's member, for a local member, with a bad token: refused.
   assert.match(await refusal(s.host("h1", ID.hugo, "hugo")), /member not held by this host/);
   assert.match(await refusal(s.host("h1", ID.alice, "alice")), /member not held by this host/);
-  assert.match(await refusal(s.open({ token: tok("nope"), hostMember: ID.hanna, name: "hanna" })), /bad token/);
+  assert.match(await refusal(s.open({ token: tok("nope"), hostMember: ID.hanna, name: "hanna" })), /the relay refused the token \(4003\)/);
   // The host token is not a member token, and the hosted member's names stay with its host.
-  assert.match(await refusal(s.open({ token: tok("host-h1"), name: "hanna" })), /bad token/);
+  assert.match(await refusal(s.open({ token: tok("host-h1"), name: "hanna" })), /the relay refused the token \(4003\)/);
   // Name rules still apply to a host connection.
   assert.match(await refusal(s.host("h1", ID.hanna, "alice")), /name not allowed/);
 });
@@ -318,6 +318,8 @@ test("hoptell members: hosts are stored hashed; a hosted member is a new member,
   await addMember(file, "alice");
   await assert.rejects(addHostedMember(file, "hanna", "h1"), /no host "h1"/);
   const h = await addHost(file, "h1");
+  // A second host with that id: removing the first one needs its hosted members revoked first.
+  await assert.rejects(addHost(file, "h1"), /host "h1" already exists: choose another id\. Removing this host first requires revoking its hosted members/);
   assert.match(h.token, /^[0-9a-f]{64}$/);
   assert.ok(!fs.readFileSync(file, "utf8").includes(h.token), "only the hash is stored");
   assert.deepEqual(listHosts(file), [{ id: "h1", token: "hashed" }]);

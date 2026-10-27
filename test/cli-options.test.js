@@ -316,6 +316,8 @@ test("mcp-http client: an invalid --name is refused; removing from a home withou
   assert.deepEqual(tree(s.root), before);
   const ok = s.run(["mcp-http", "client", "add", "c1", "--name", "alice-x"]);
   assert.equal(ok.status, 0, ok.stderr);
+  // The token on a line of its own, as members add shows one.
+  assert.match(ok.stdout, /^Client "c1" added\.\nToken, shown only now:\n\n {2}[A-Za-z0-9_-]{43}\n\n/);
   assert.match(s.run(["mcp-http", "client", "list"]).stdout, /c1 {2}name alice-x/);
 });
 
@@ -372,8 +374,8 @@ test("refused before anything is opened: peer settings, grants usage, member nam
     [["members", "add", "bad name", "--members", path.join(s.root, "m.json")], {}, 1, /invalid member name "bad name"/],
     [["mcp", "--home", "relative"], {}, 2, /usage: hoptell mcp/],
     [["list"], { ...relay, HOPTELL_RELAY: "invalid URL" }, 1, /HOPTELL_RELAY is not a URL/],
-    [["list"], { ...relay, HOPTELL_PROFILE: "bad profile" }, 1, /HOPTELL_PROFILE: letters, digits/],
-    [["login"], { ...relay, HOPTELL_PROFILE: "bad profile" }, 1, /HOPTELL_PROFILE: letters, digits/],
+    [["list"], { ...relay, HOPTELL_PROFILE: "bad profile" }, 1, /HOPTELL_PROFILE must be 1 to 64 letters, digits, "\.", "_" or "-", starting with a letter or digit/],
+    [["login"], { ...relay, HOPTELL_PROFILE: "bad profile" }, 1, /HOPTELL_PROFILE must be 1 to 64 letters, digits, "\.", "_" or "-", starting with a letter or digit/],
     [["login"], { ...relay, HOPTELL_RELAY: "invalid URL" }, 1, /HOPTELL_RELAY is not a URL/],
     // A URL the client cannot connect to, or sign in through (no TLS, not loopback).
     [["list"], { ...relay, HOPTELL_RELAY: s.relayUrl.replace("ws:", "ftp:") }, 1, /must start with ws:\/\/, wss:\/\/, http:\/\/ or https:\/\//],
