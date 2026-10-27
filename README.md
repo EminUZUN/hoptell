@@ -2,15 +2,17 @@
 
 **Let AI coding agents talk to each other: across sessions, machines, accounts and tools.**
 
-hoptell connects Claude Code, Codex, Antigravity (`agy`) and other MCP-capable agents through one small
-relay that you run yourself on your LAN or VPN. Agents get tools to list peers and
-send messages, and incoming messages **wake idle agents up**, so a Claude session on
-your laptop can hand a review to a Codex session on a colleague's workstation and
-get the answer back without anyone typing.
+hoptell connects Claude Code, Codex, Antigravity (`agy`) and other MCP-capable agents through one
+small relay that you run yourself on your LAN or VPN. Agents get tools to list peers and send
+messages, and incoming messages **wake idle agents up**, so a Claude session on your laptop can hand
+a review to a Codex session on a colleague's workstation and get the answer back without anyone
+typing.
 
 ![Sam's Claude Code sends the contents of greet.js to Alex's Codex, which wakes up and suggests a corrected line](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-review.gif)
 
-*Sam's Claude Code on a MacBook sends the contents of `greet.js` to Alex's Codex in a Linux container. Codex wakes up and returns a one-line suggested fix. Real session, played at 2.5× speed with idle pauses shortened.*
+*Sam's Claude Code on a MacBook sends the contents of `greet.js` to Alex's Codex in a Linux
+container. Codex wakes up and returns a one-line suggested fix. Real session, played at 2.5× speed
+with idle pauses shortened.*
 
 ```
  laptop:   Claude Code ──┐                        ┌── Codex        :workstation
@@ -21,21 +23,37 @@ get the answer back without anyone typing.
 - **Self-hosted, no accounts.** One Node process. Agents can use different Claude or
   OpenAI accounts. Messages between agents travel only through your relay; each agent
   still talks to its own AI provider as usual.
-- **Wakes supported idle sessions.** Claude Code can use channel or verified hook notices. In tmux,
-  supported terminal prompt layouts can receive a fixed inbox notice; other sessions can poll.
+- **Wakes supported idle sessions.** Claude Code can wake through hook or channel notices;
+  supported terminal agents in tmux get a fixed notice typed into their prompt; other clients poll.
 - **Teams and swarms.** Agents announce roles (`reviewer`, `backend`, ...). Send to one
   agent by name, to every agent with a role (`@reviewer`), or to everyone (`@all`).
 - **Small and auditable.** JavaScript, with four direct runtime dependencies: `ws`, the MCP SDK,
-  and `jose` and `openid-client`, which only sign-in with an identity provider loads.
+  `jose` and `openid-client`. The last two load only for sign-in with an identity provider.
+- **Reviewers and your phone.** The Claude Code plugin starts reviewer agents and collects their
+  verdicts, and your agents can ask you questions through an optional
+  [owner channel over Telegram](#the-owner-channel-over-telegram).
 
 Agents can also answer questions about plans, not only code:
 
 ![Sam's Claude Code asks @pm about the demo app's 2.4 release; Dana's agent answers from planning/roadmap.md](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-ask-pm.gif)
 
-*Sam's Claude Code asks `@pm` about the demo app's 2.4 release, and Dana's agent answers from `planning/roadmap.md` in its Linux container. Real session, played at 2.5× speed with idle pauses shortened.*
+*Sam's Claude Code asks `@pm` about the demo app's 2.4 release, and Dana's agent answers from
+`planning/roadmap.md` in its Linux container. Real session, played at 2.5× speed with idle pauses
+shortened.*
 
 > hoptell moves plain text between agents that may act on it. Read [Security](#security)
 > before connecting agents that run with relaxed permissions.
+
+Start here:
+
+1. [Install and send your first message](#quick-start)
+2. [Work with reviewer agents](#working-with-reviewer-agents)
+3. [Reach your agents from Telegram](#the-owner-channel-over-telegram)
+4. [Understand the security boundaries](#security)
+
+For configuration details, see [Several relays](#several-relays),
+[Teams and swarms](#teams-and-swarms), [Contacts](#contacts-who-may-reach-your-sessions)
+and the [CLI reference](#cli).
 
 ## How it works
 
@@ -57,30 +75,9 @@ How an incoming message reaches the agent:
 | Supported terminal agents in tmux | `hoptell tmux <name> -- codex` | a fixed notice is typed into the agent's prompt; the agent calls `read_inbox` |
 | Anything else | — | `wait_for_message` / `read_inbox` tools, or `hoptell wait` |
 
-Each MCP server chooses one delivery mode. Avoid registering hoptell twice in the same Claude Code session. Unless `HOPTELL_PUSH` chooses one (`channel`, `hook`,
-`tmux` or `listener`), hoptell picks it when the session starts: channel when Claude Code was
-started with the hoptell channel; otherwise hook when the hoptell hooks answer a silent check
-for that Claude Code process; otherwise listener. `hoptell tmux` always uses tmux. Notices
-never contain message text: the message stays in the local inbox until the agent reads it.
-A notice does not prove that the agent read or acted on a message.
-
-Channels are Claude Code's [channels](https://code.claude.com/docs/en/channels) (research
-preview). Custom channels need the `--dangerously-load-development-channels` flag, and
-Claude Code asks you to confirm a "development channels" warning each time it starts with
-it. In listener mode, the MCP instructions ask the agent to start a background listener after your first prompt.
-
-Hook delivery uses Claude Code [hooks](https://code.claude.com/docs/en/hooks) and needs no
-flag. The plugin's `SessionStart` hook asks Claude Code to watch a private file, and when a
-message arrives, the MCP server changes that file. Claude Code then runs the plugin's
-`FileChanged` hook, which wakes the session with a fixed notice to call `read_inbox`. Settings
-such as `disableAllHooks` can prevent hooks from running. In automatic mode, a failed startup check
-selects listener delivery; disabling hooks later does not change the selected mode. An explicit
-`HOPTELL_PUSH=hook` does not fall back to the listener. For hooks in settings files, interactive
-sessions require workspace trust; `-p` and SDK sessions treat the folder as trusted. Tested with the Claude Code terminal app on macOS. Without the
-plugin, `hoptell hooks` prints the hook settings to add to your Claude Code settings; it does
-not change any file.
-
-If the MCP entry sets `HOPTELL_HOME`, run `HOPTELL_HOME=<same value> hoptell hooks` so the printed hook commands use the same state directory.
+hoptell picks the delivery mode when a session starts (`HOPTELL_PUSH` sets it). Notices never
+contain message text, and a notice does not prove that the agent read the message. See
+[Delivery modes in detail](#delivery-modes-in-detail).
 
 ## Quick start
 
@@ -94,14 +91,16 @@ polling tools work.
 npm install -g hoptell    # puts `hoptell` on your PATH
 ```
 
-From source instead: `git clone https://github.com/EminUZUN/hoptell && cd hoptell && npm install && npm link`.
+From source instead: `git clone https://github.com/EminUZUN/hoptell && cd hoptell && npm install &&
+npm link`.
 
-Claude Code clients can use the plugin instead of the manual MCP registration in step 4.
-It asks for the relay URL and token (stored in Claude Code's secure storage). The relay
-machine still needs the npm installation above or the Docker image. Anyone using the
-`hoptell` CLI or `hoptell tmux` needs the npm installation above.
+**Claude Code:** install the plugin (below) and skip the manual registration in step 4. The
+plugin asks for the relay URL and token, and stores the token in Claude Code's secure storage.
+The `hoptell` CLI and `hoptell tmux` need the npm package; the relay needs the npm package or
+the Docker image.
 
-Install the plugin. With automatic delivery, plain `claude` uses hooks when the startup check succeeds; add the channel flag to use channels:
+Install the plugin. With automatic delivery, plain `claude` uses hooks when the startup check
+succeeds; add the channel flag to use channels:
 
 ```
 /plugin marketplace add EminUZUN/hoptell
@@ -125,15 +124,16 @@ chmod 600 ~/.config/hoptell/.env
 hoptell relay
 ```
 
-Replace `192.0.2.10` with this machine's LAN or VPN address in the relay settings above.
-For Docker, use the same address and replace `...` with your generated token:
-`docker run -d -p 192.0.2.10:7777:7777 -v hoptell-state:/data -e HOPTELL_TOKEN=... ghcr.io/eminuzun/hoptell`.
-Publish the port on that address only. Without a host address, `-p 7777:7777` publishes
-on all host addresses by default. See [examples/](examples/). Health check: `GET /healthz`.
+Replace `192.0.2.10` with this machine's LAN or VPN address in the relay settings above. For Docker,
+use the same address and replace `...` with your generated token: `docker run -d -p
+192.0.2.10:7777:7777 -v hoptell-state:/data -e HOPTELL_TOKEN=... ghcr.io/eminuzun/hoptell`. Publish
+the port on that address only. Without a host address, `-p 7777:7777` publishes on all host
+addresses by default. See [examples/](examples/). Health check: `GET /healthz`.
 
 The relay keeps a small state directory (`~/.local/state/hoptell-relay` by default; set it
-with `--state-dir` or `HOPTELL_STATE_DIR`). It holds the relay's realm id, a random id that
-clients use to recognize this relay's name space, and no messages. Keep this directory when you
+with `--state-dir` or `HOPTELL_STATE_DIR`). It holds the relay's realm id (a random id that
+clients use to recognize this relay's name space) and its database with the audit log, but no
+plaintext messages. Keep this directory when you
 upgrade or move the relay: with a new realm id, clients that connected before refuse it until
 their profile is reset. The Docker image keeps it in `/data`; use a named volume, as above, so
 a replacement container keeps the same realm id.
@@ -152,23 +152,24 @@ Check: `hoptell list` should connect and print the peers (none yet).
 
 ### 4. Connect your agents
 
-**Claude Code**: register the MCP server once (user scope, all projects):
+**Claude Code with the plugin** (from step 1): start `claude`. Hook notices wake it when the
+plugin's startup check succeeds; otherwise hoptell falls back to a background listener
+(`hoptell doctor` shows which). For channel notices, start
+`claude --dangerously-load-development-channels plugin:hoptell@hoptell` instead.
+
+**Claude Code without the plugin:** register the MCP server once (user scope, all projects),
+then add the hook settings that `hoptell hooks` prints to `~/.claude/settings.json`:
 
 ```sh
 claude mcp add --scope user hoptell -- hoptell mcp
+hoptell hooks
+HOPTELL_NAME=laptop-claude claude
 ```
+
+Don't use both the plugin and `claude mcp add` in the same session.
 
 If an agent cannot find `hoptell` (for example with nvm), use the full path that
 `command -v hoptell` prints, here and in the configs below.
-
-Then start Claude with push enabled:
-
-```sh
-HOPTELL_NAME=laptop-claude claude --dangerously-load-development-channels server:hoptell
-```
-
-Or start plain `claude` with hook notices instead of channels: add the hook settings that
-`hoptell hooks` prints to `~/.claude/settings.json` (the plugin includes them).
 
 Inside a clone of this repo, `.mcp.json` registers the server for you.
 
@@ -190,7 +191,7 @@ hoptell tmux laptop-codex -- codex
 
 The launcher passes the peer name to Codex as a `-c` override, because interactive
 Codex starts MCP servers from a shared daemon that does not inherit your shell's
-environment. Detach with `Ctrl-b d`, reattach with `tmux attach -t hoptell-laptop-codex`.
+environment. Detach with `Ctrl-b d`, reattach with `tmux attach -t '=hoptell-laptop-codex'`.
 
 **Antigravity (`agy`)**: register the MCP server once:
 
@@ -203,6 +204,11 @@ hoptell tmux laptop-agy --roles gemini -- agy    # or: woken through tmux
 ### 5. Try it
 
 Ask either agent: *"list hoptell peers and say hi to laptop-codex"*.
+
+On a new install, the shared-token setup above holds the greeting until you allow its sender.
+On the receiving machine, run `hoptell contacts`, then `hoptell contacts show <id>` for the
+waiting sender. Review the sender, then run the printed `allow-once` command to release the
+greeting, or `allow` to let future messages from that sender through.
 
 If a Claude Code session does not wake up after another agent's `send_message` reports the
 message as delivered, ask the agent to call `read_inbox`: messages are stored in the local inbox
@@ -252,8 +258,8 @@ mode 0600):
   `"auth": "login"` uses `hoptell login` for that relay. `"join": false` makes a relay send-only:
   this session does not go online there, it only sends when you address it.
 - `name` in an entry sets the peer name on that relay; `namePrefix` (for example `"me-"`) puts a
-  prefix before this session's name there, for relays whose member names must start with it. Changes to the file take effect when the
-  session starts again. `hoptell doctor` checks the file.
+  prefix before this session's name there, for relays whose member names must start with it. Changes
+  to the file take effect when the session starts again. `hoptell doctor` checks the file.
 - On the command line: `hoptell send bob@lab hi`, or `hoptell send --relay lab bob hi`;
   `hoptell list --relay lab`; `hoptell wait --relay lab`.
 
@@ -271,15 +277,17 @@ hoptell local-relay stop | start | uninstall [--purge]
 
 It listens on 127.0.0.1 only and accepts one member token, kept in `~/.hoptell/local-relay/token`
 and readable only by your account (other accounts on the machine can reach the port, not sign in).
+
 Install adds it to your relays file (see [Several relays](#several-relays)) as relay `local`
 (creating the file if needed, with your current relay kept as the default), so sessions reach your
-own agents as `name@local`; uninstall removes that entry again unless you changed it (and removes
-a relays file that install created once it would be empty). The service reads only its own
-settings file, not your shared hoptell settings. After moving Node.js or hoptell (an upgrade to
-another path), run `install` again; `status` warns about it. A rerun keeps the token and the port
-(`--port` moves it, and the relays entry with it). If the token or the members file next to it is
-lost, install stops instead of issuing a new token: restore the file, or start over with
-`uninstall --purge`.
+own agents as `name@local`; uninstall removes that entry again unless you changed it (and removes a
+relays file that install created once it would be empty).
+
+The service reads only its own settings file, not your shared hoptell settings. After moving Node.js
+or hoptell (an upgrade to another path), run `install` again; `status` warns about it. A rerun keeps
+the token and the port (`--port` moves it, and the relays entry with it). If the token or the
+members file next to it is lost, install stops instead of issuing a new token: restore the file, or
+start over with `uninstall --purge`.
 
 ## MCP over HTTP on this machine
 
@@ -302,9 +310,9 @@ sessions. Limits: 4 sessions per client and 32 in all; per session 4 tool calls 
 of them `wait_for_message`) and 2 standalone event streams.
 
 Wake-ups: a client that negotiates the channel extension at initialize gets channel notices;
-otherwise the agent reads with `read_inbox` or `wait_for_message`. For Claude Code hook notices, the client also sends
-the header printed by `hoptell hook-header` (run it from the client's command for dynamic
-headers); without it, an HTTP session has no hook notices.
+otherwise the agent reads with `read_inbox` or `wait_for_message`. For Claude Code hook notices, the
+client also sends the header printed by `hoptell hook-header` (run it from the client's command for
+dynamic headers); without it, an HTTP session has no hook notices.
 
 ## For organizations
 
@@ -317,9 +325,9 @@ from their users' machines.
    so people cannot use each other's agent names.
 3. **Roll out the client**: the Claude Code plugin, or `npm install -g hoptell` plus
    the MCP config for Codex and Antigravity.
-4. **Allowlist the channel** (Claude Code): with [managed settings](https://code.claude.com/docs/en/channels#enterprise-controls)
-   your users can start `claude --channels plugin:hoptell@hoptell`, without the development flag
-   and its prompt:
+4. **Allowlist the channel** (Claude Code): with [managed
+   settings](https://code.claude.com/docs/en/channels#enterprise-controls) your users can start
+   `claude --channels plugin:hoptell@hoptell`, without the development flag and its prompt:
 
    ```json
    {
@@ -407,7 +415,7 @@ sign-in only; devices and service accounts use member tokens or resource mode.
    `id` (it names the relay's endpoints `/oidc/<id>/...`), `publicBaseUrl` (the relay's public
    https origin, as the operator configures it; never taken from request headers), `client`
    (`clientId` and `clientSecretFile` or `privateKeyFile`), and optionally `scopes`,
-   `reverifyAfterSeconds` (a fresh browser sign-in is due after this, default one day),
+   `reverifyAfterSeconds` (a fresh browser sign-in is due after this, default 1 day),
    `familyIdleSeconds` (30 days), `familyMaxSeconds` (90 days), `accessTokenSeconds` (900) and
    `requireReauthentication`. See [examples/oidc.example.json](examples/oidc.example.json).
    The relay keeps its sign-ins in `<state dir>/broker/` (one relay process per state directory).
@@ -454,10 +462,11 @@ experimental: `hoptell mcp-hosted --experimental`.
   `wait_for_message`, `ack_messages` and `list_peers`. Owners decide held contacts at
   `https://<host>/owner`; grants and contact requests are shown only there. Owner sign-ins are
   kept in memory: restarting the endpoint signs owners out.
-- **Limits** (sessions, rates, stored messages and bytes, the disk floors, live engines) and
-  retention (messages are deleted 7 days after arrival, read or not; the data of a member that
-  is unlinked, or that the relay confirms it no longer holds, is deleted within 24 hours) use placeholder values; they are configurable and still open for
-  the owner to decide.
+- **Limits and retention** (sessions, rates, stored messages and bytes, disk floors, live
+  engines) are configurable. By default, messages are deleted 7 days after arrival, read or not,
+  and the data of a member that is unlinked, or that the relay confirms it no longer holds, is
+  deleted within 24 hours while the endpoint runs. The defaults may change while hosted mode is
+  experimental.
 
 ## Teams and swarms
 
@@ -471,11 +480,13 @@ the name: a second agent session with the same name waits until the name is free
 name over once, for the same member). While it waits, the second session can still send
 messages and list peers through a separate connection if the name is held by the same member
 (or by another session using the shared token). The relay checks who holds the name before each
-message is sent, and replies go to the session holding the name. This requires a relay updated
-for this feature. Other tools are unavailable until the second session holds the name. When a session's connection drops, the name is reserved
-for 30 seconds so the session can come back. During that time other members cannot take it,
-but the same member can, for example a restarted session. All shared-token sessions count as
-one member here. A session that exits cleanly frees the name immediately.
+message is sent, and replies go to the session holding the name. This needs a 0.3.0 relay or
+later. Other tools are unavailable until the second session holds the name.
+
+When a session's connection drops, the name is reserved for 30 seconds so the session can come
+back. During that time other members cannot take it, but the same member can, for example a
+restarted session. All shared-token sessions count as one member here. A session that exits
+cleanly frees the name immediately.
 
 **Session titles.** An automatic name such as `emin-mac-61034` is hard to tell apart from the
 next one. A session can show a short title next to its name. Set it with `HOPTELL_TITLE`:
@@ -485,7 +496,7 @@ export HOPTELL_TITLE="review docs"
 ```
 
 Other sessions then see it in `list_peers`, after the name:
-`emin-mac-61034 (host: mac) title: "review docs" online`.
+`emin-mac-61034 (reported host: mac) title: "review docs" online`.
 
 - The title is a label only. Messages still go to the name (`to:` never takes a title), and no
   access decision reads a title. Use the name for routing, not as proof of identity. In a
@@ -498,20 +509,24 @@ Other sessions then see it in `list_peers`, after the name:
   the session logs why.
 - `HOPTELL_TITLE=off` never sends a title. An HTTP session (`hoptell mcp-http`) does not use the
   server's `HOPTELL_TITLE`.
-- **Claude Code names.** With `HOPTELL_TITLE_AUTO=on`, a Claude Code session with the hoptell
-  plugin uses its custom name (`claude --name`, `/rename`) as its title. The plugin's
-  `SessionStart` and `UserPromptSubmit` hooks copy only that name and the session id into a
-  private file. Claude Code does not say whether the user, a hook or a tool set the custom name.
-  Another hook may derive it from prompt text. With `HOPTELL_TITLE_AUTO=on`, hoptell stores and
-  shares that title. The hooks never copy the prompt field. A later `/rename` is picked up after
-  the next prompt, and other sessions see it the next time this session lists peers or
-  reconnects. This is off by default. Set `HOPTELL_TITLE_AUTO` in the settings file
-  (`~/.config/hoptell/.env`), because the hooks read it too. An explicit `HOPTELL_TITLE` always wins, and Codex sessions get no automatic title.
 - The title stays with a resumed claim during its 30-second reservation. A new claim uses its own
   hello title or no title; it never inherits the previous claim's title.
-- Titles need a relay updated for this feature. Earlier relays ignore them. A session changes its
-  title at most 10 times a minute, and a member at most 60 times a minute; title changes never
-  delay messages.
+- Titles need a relay from this release or later. Earlier relays ignore them. A session changes
+  its title at most 10 times a minute, and a member at most 60 times a minute; title changes
+  never delay messages.
+
+**Claude Code names as titles.** With `HOPTELL_TITLE_AUTO=on`, a Claude Code session with the
+hoptell plugin uses its custom name (`claude --name`, `/rename`) as its title. It is off by
+default.
+
+- Set it in `~/.config/hoptell/.env`, not only in the shell: the plugin's hooks read it too.
+- The `SessionStart` and `UserPromptSubmit` hooks copy only the custom name and the session id
+  into a private file, never the prompt.
+- The hook input doesn't say who set the custom name. If another hook sets it from prompt text,
+  that text becomes your title and other sessions see it.
+- A later `/rename` shows after your next prompt. Others see it the next time this session
+  lists peers or reconnects.
+- An explicit `HOPTELL_TITLE` wins. Codex sessions get no automatic title.
 
 Relays from earlier versions do not lease names: a new connection using a name replaces the
 old one. For names up to 58 characters, the replaced MCP session waits until the name is free,
@@ -567,14 +582,13 @@ The relay refuses member names that overlap, such as `alice` and `alice-bob`.
 You can combine a members file with a shared `HOPTELL_TOKEN`; token holders can use any name.
 `--require-members` (or `HOPTELL_REQUIRE_MEMBERS=1`) makes the relay refuse a shared token.
 
-If you edit the file by hand, run `hoptell relay admin reload` or `kill -HUP <relay pid>`. The
-relay re-reads it, records it as an unannounced change in the audit log, and closes connections
-whose token was removed or changed. If the new file is invalid, it keeps the active
-members list and logs a sanitized error. An empty list (`{"members": []}`) removes every member. The shared token is not
+If you edit the file by hand, run `hoptell relay admin reload` or `kill -HUP <relay pid>`. The relay
+re-reads it, records it as an unannounced change in the audit log, and closes connections whose
+token was removed or changed. If the new file is invalid, it keeps the active members list and logs
+a sanitized error. An empty list (`{"members": []}`) removes every member. The shared token is not
 reloaded. With systemd `LoadCredential`, restart the service to refresh the credential copy. A
-Docker bind mount of a single file can keep the old file when an editor replaces it
-atomically; restart the container after such edits, or bind-mount the containing directory to
-support reloads.
+Docker bind mount of a single file can keep the old file when an editor replaces it atomically;
+restart the container after such edits, or bind-mount the containing directory to support reloads.
 For separate teams, run separate relays. A relay is a single small process.
 
 **Example swarm on one machine:**
@@ -586,25 +600,29 @@ hoptell tmux alice-codex-2  --roles backend  -- codex
 hoptell tmux alice-reviewer --roles reviewer -- claude
 ```
 
-Then tell the planner: *"split the task, send backend work to @backend, and send the result to @reviewer"*.
+Then tell the planner: *"split the task, send backend work to @backend, and send the result to
+@reviewer"*.
 
 **Guard rails.** Each connection may send at most 30 messages per 10 seconds, so two agents
 that keep replying to each other hit the limit instead of flooding everyone. Messages are
 plain text up to 100,000 characters.
 
-## Who may reach your sessions (contacts)
+## Contacts: who may reach your sessions
 
-You decide who may reach the agent sessions of your machine. In a new install, messages from
-senders you have not allowed are held back (except eligible messages from your own member, see
-"Your own member" below), and the agent never sees what they say. The receiving session is
-still woken, the same way as for a delivered message (hook notice, tmux notice, channel notice,
-or the end of a `wait_for_message` call or of `hoptell listen`), with a fixed notice that a
-message was held. `read_inbox` lists up to five waiting senders with their held-message counts
-and `hoptell contacts show <id>` commands for your review. It summarizes any remaining senders
-as a count and reminds the agent that the decision is yours. The sender is named there only
-when the relay authenticated it as a member (`member bob`); a shared-token or unverified sender
-chose its own name, so the agent sees only what kind of sender it is. A desktop notification
-also points you to the command:
+You decide who may reach the agent sessions of your machine. In a new install, messages from senders
+you have not allowed are held back (except eligible messages from your own member, see "Your own
+member" below), and the agent never sees what they say.
+
+The receiving session is still woken, the same way as for a delivered message (hook notice, tmux
+notice, channel notice, or the end of a `wait_for_message` call or of `hoptell listen`), with a
+fixed notice that a message was held. `read_inbox` lists up to five waiting senders with their
+held-message counts and `hoptell contacts show <id>` commands for your review. It summarizes any
+remaining senders as a count and reminds the agent that the decision is yours.
+
+The sender is named there only when the relay authenticated it as a member (`member bob`); a
+shared-token or unverified sender chose its own name, so the agent sees only what kind of sender it
+is. A desktop notification ("hoptell · Message held") also points you to `hoptell contacts` and
+`hoptell ui`:
 
 ```
 hoptell contacts                          # what is waiting, and your policy
@@ -626,18 +644,20 @@ an agent running as your OS user could still run these commands itself, so keep 
 when you let agents use a shell.
 
 The policy is `~/.hoptell/contacts.json` (per hoptell home; JSON Schema in
-[schema/contacts.schema.json](schema/contacts.schema.json)). Held messages are kept for seven days,
-at most 50 messages or 1 MB per sender and 500 messages or 10 MB in all; beyond that, new messages
-from unknown senders are dropped (their delivery is still confirmed to the relay). In a managed
-home, if this file is missing, unreadable or invalid, every sender waits and your sessions send
-nothing until you fix it, since its encryption policy cannot be checked. While the file is valid,
-verified owner-channel messages are exempt from the default `ask` policy; blocks and `required`
-encryption still apply (see "The owner channel over Telegram"). **Existing
-installs** keep today's behavior (every sender reaches your sessions) until you run
-`hoptell contacts init`; `hoptell doctor` reminds you. After `init`, nobody is granted, and
-messages already waiting in your sessions are held back on their next read. Every process that
-receives messages for this home must run this version or later. `HOPTELL_NOTIFY=off` turns the
-desktop notifications off.
+[schema/contacts.schema.json](schema/contacts.schema.json)). Held messages are kept for 7 days, at
+most 50 messages or 1 MB per sender and 500 messages or 10 MB in all; beyond that, new messages from
+unknown senders are dropped (their delivery is still confirmed to the relay).
+
+In a managed home, if this file is missing, unreadable or invalid, every sender waits and your
+sessions send nothing until you fix it, since its encryption policy cannot be checked. While the
+file is valid, verified owner-channel messages are exempt from the default `ask` policy; blocks and
+`required` encryption still apply (see "The owner channel over Telegram").
+
+**Existing installs** keep today's behavior (every sender reaches your sessions) until you run
+`hoptell contacts init`; `hoptell doctor` reminds you. After `init`, nobody is granted, and messages
+already waiting in your sessions are held back on their next read. Every process that receives
+messages for this home must run this version or later. `HOPTELL_NOTIFY=off` turns the desktop
+notifications off.
 
 **Your own member.** By default, messages from your other sessions can reach the agent without
 a grant when the relay states that both sessions signed in as the same member (same member id
@@ -654,26 +674,28 @@ of the session that spawned them. Messages already held stay held after you swit
 
 ### Deciding in a browser: hoptell ui
 
-`hoptell ui` serves the same decisions as pages on `127.0.0.1`: what waits for you (held
-messages, new devices and key changes, contact requests and proposals, oldest first), your
-contacts and pins, devices with fingerprints and safety numbers, settings with where each value
-comes from, and a doctor summary. It prints a single-use link valid for 60 seconds (`--open`
-opens it); the session ends after 15 minutes idle or 8 hours, and the command exits after 30
-minutes without a request. Pages have no JavaScript. The page shows held message text only on
-its own page, as untrusted peer text.
+`hoptell ui` serves the same decisions as pages on `127.0.0.1`: what waits for you (held messages,
+new devices and key changes, contact requests and proposals, oldest first), your contacts and pins,
+devices with fingerprints and safety numbers, settings with where each value comes from, and a
+doctor summary.
+
+It prints a single-use link valid for 60 seconds (`--open` opens it); the session ends after 15
+minutes idle or 8 hours, and the command exits after 30 minutes without a request. Pages have no
+JavaScript. The page shows held message text only on its own page, as untrusted peer text.
 
 Every decision goes through the same code as the CLI, with the same binding to what you saw: a
 decision on something that changed meanwhile is refused and the new state is shown. The UI only
 shows contact requests and proposals, and prints their commands (`hoptell contacts requests`,
-`hoptell apply`). Settings are written only if the file did not change since the page showed
-it; a value set in the environment is shown and must be changed there, and changes that widen
-access (a new folder, `join`, `default: allow`) are marked. With the experimental encrypted
-messages (`HOPTELL_EXPERIMENTAL_E2EE=1`), each contact's `encryption` (off, preferred, required)
-is a setting too, where lowering it is marked as widening, and so is `requireVerified` (per
-realm and per pinned contact; turning it off is marked); unencrypted messages held from a
-contact whose encryption you require are shown with a link to that setting (nothing else
-releases them), and a contact's page links to the encrypted conversation's checkpoint for
-comparing with the other owner.
+`hoptell apply`). Settings are written only if the file did not change since the page showed it; a
+value set in the environment is shown and must be changed there, and changes that widen access (a
+new folder, `join`, `default: allow`) are marked.
+
+With the experimental encrypted messages (`HOPTELL_EXPERIMENTAL_E2EE=1`), each contact's
+`encryption` (off, preferred, required) is a setting too, where lowering it is marked as widening,
+and so is `requireVerified` (per realm and per pinned contact; turning it off is marked);
+unencrypted messages held from a contact whose encryption you require are shown with a link to that
+setting (nothing else releases them), and a contact's page links to the encrypted conversation's
+checkpoint for comparing with the other owner.
 
 The views that need the relay (contact requests, device lists, the encrypted conversation's
 checkpoint) reach it only through `HOPTELL_RELAY` (and `HOPTELL_PROFILE`) for now, not through
@@ -703,7 +725,7 @@ the client, not from the agent's tool calls, but a client can answer automatical
 `Elicitation` hook can; Codex with `approval_policy = "never"` declines at once), so an answer
 does not prove that a person answered. See [Tested clients](#tested-clients).
 
-### Who may reach you through the relay (grants and the relay's policy)
+### Relay-side checks: grants and the relay's policy
 
 Your machine's contacts decide what reaches your sessions. On a relay with member credentials, two
 more checks happen before a message leaves the relay, and each can only refuse:
@@ -742,7 +764,7 @@ A sender your grants or the policy refuse gets the same answer as for a name tha
 and broadcasts report only how many sessions they reached.
 
 **Replies.** If you send a message to someone your grants refuse by default, they may reply to it
-once within seven days, but only after your message passed the relay's policy and their machine's
+once within 7 days, but only after your message passed the relay's policy and their machine's
 contacts released it to a session. The reply still needs the relay's policy. An entry in your
 grants that denies them (for the member or a group it is in) cancels it, and so does expiry.
 
@@ -808,7 +830,7 @@ Restart the MCP server after changing this setting (restart the agent session if
 - `send_file` takes `to` (one peer), `root_id`, a `path` inside that folder and a `request`.
   It captures up to 60,000 bytes of UTF-8 text through a reader that refuses symlinks, hard
   links and special files, and rejects changes it detects during the read. The encoded
-  snapshot must also fit the message limit. It requests a one-hour relay queue deadline by
+  snapshot must also fit the message limit. It requests a 1-hour relay queue deadline by
   default; older relays ignore this request. It returns a local `snapshot_id`.
 - `verify_snapshot` takes that `snapshot_id` and reports `match`, `changed`, `unknown`,
   `expired` or `unavailable`. It compares file bytes only; it does not validate a reply.
@@ -998,7 +1020,7 @@ Each hoptell home then has one MLS device per relay realm.
   and receive none of its messages. A rotation is saved before the relay hears of it and is
   retried at the next start if it was interrupted or the relay refused it.
 - **Expired KeyPackages.** With an MLS binding that can prune, the private keys of KeyPackages
-  that expired unused are deleted after a one-day grace period, within six hours while the engine
+  that expired unused are deleted after a 1-day grace period, within 6 hours while the engine
   runs (it checks at start, at attach, when publishing, and every 6 hours, also while the relay
   refuses the device). A device that is not running keeps them until its next
   start, and older backups still hold them. `hoptell doctor` says when the binding cannot prune.
@@ -1108,18 +1130,17 @@ refused with close code 4002. When an agent runs these commands from inside tmux
 `tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
 The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you.
 
-**The review.** Wait until `list_peers` shows the reviewers online: a message to `@reviewer`
-reaches only online peers. Then follow the steps in
-[Replies and file reviews](#replies-and-file-reviews): send a `hoptell snapshot`, collect the replies with `read_inbox`, match `review_request_id` and
+**The review.** Wait until `list_peers` shows the reviewers online: a message to `@reviewer` reaches
+only online peers. Then follow the steps in [Replies and file reviews](#replies-and-file-reviews):
+send a `hoptell snapshot`, collect the replies with `read_inbox`, match `review_request_id` and
 `based_on`, and run `hoptell snapshot --check` before you apply anything. A reviewer's reply is a
 review, never your approval. With managed contacts (see
-[Who may reach your sessions](#who-may-reach-your-sessions-contacts)), a request from a session
-of your own member (same realm, neither session hosted) can reach the reviewer without a grant,
-and so can the replies; each receiving session still applies its own blocks, encryption
-requirements and default policy. Messages from a shared-token sender or another member, and
-your own member's messages under `HOPTELL_CONTACTS_SELF=hold`, follow your usual contacts
-policy. A held request wakes the reviewer with a notice, without the message text, and
-`hoptell contacts` shows you the available decisions.
+[Contacts](#contacts-who-may-reach-your-sessions)), a request from a session of your own member
+(same realm, neither session hosted) can reach the reviewer without a grant, and so can the replies;
+each receiving session still applies its own blocks, encryption requirements and default policy.
+Messages from a shared-token sender or another member, and your own member's messages under
+`HOPTELL_CONTACTS_SELF=hold`, follow your usual contacts policy. A held request wakes the reviewer
+with a notice, without the message text, and `hoptell contacts` shows you the available decisions.
 
 **Stopping.** Quit a reviewer in its pane (`/quit` in Codex), or run
 `tmux kill-session -t '=hoptell-<name>'`. The `=` matches the exact name; without it tmux also
@@ -1163,17 +1184,20 @@ After reading it, approve the profile with `hoptell agents profile approve <id> 
 
 **Running.** When a profile exists as an agent session starts, its hoptell MCP server offers
 `spawn_agent`, `list_agents` and `stop_agent`. MCP over HTTP offers them only to clients added with
-`hoptell mcp-http client add <label> --agents`, and hosted endpoints never offer them. The task
-goes to the new agent on standard input, and a Codex run's working folder must be inside a Git work
-tree. When the run ends, hoptell attempts to send the result to the spawning session as a peer
-message; if delivery fails, the result stays available locally, and `hoptell agents result <run>`
-prints it. With `"confirm": "always"`, a run waits for you: `hoptell agents confirm <run> --start`
-or `--discard`, or `hoptell ui`. The default is `always` when a granted relay is not classified as
-local; hoptell classifies an install-created entry or one named `local` as local. Otherwise, for
-a read-only profile on your local relay, approving the profile is the only check: any of your
-agent sessions can start its runs with tasks you never see, and a peer's message can influence
-those tasks. Set `"confirm": "always"` on a profile when you want to confirm each run. A run
-waiting for confirmation expires after an hour and is marked discarded at the next cleanup.
+`hoptell mcp-http client add <label> --agents`, and hosted endpoints never offer them. The task goes
+to the new agent on standard input, and a Codex run's working folder must be inside a Git work tree.
+
+When the run ends, hoptell attempts to send the result to the spawning session as a peer message; if
+delivery fails, the result stays available locally, and `hoptell agents result <run>` prints it.
+
+With `"confirm": "always"`, a run waits for you: `hoptell agents confirm <run> --start` or
+`--discard`, or `hoptell ui`. The default is `always` when a granted relay is not classified as
+local; hoptell classifies an install-created entry or one named `local` as local. Otherwise, for a
+read-only profile on your local relay, approving the profile is the only check: any of your agent
+sessions can start its runs with tasks you never see, and a peer's message can influence those
+tasks. Set `"confirm": "always"` on a profile when you want to confirm each run. A run waiting for
+confirmation expires after an hour and is marked discarded at the next cleanup.
+
 `hoptell agents list` shows runs, and `hoptell agents stop <run>` stops any run; `stop_agent` stops
 only runs that the same session started (after a session restarts, stop its earlier runs with the
 CLI).
@@ -1229,12 +1253,9 @@ relay as a peer of your own member. It is off until you set it up.
 shared token) on a relay that supports the recipient check (`to_member`); the relay of this
 version does, and an older relay must be upgraded first. Buttons and agent commands also need the
 relay to confirm which agents are yours (`list_own`, the same version). Telegram is a third party,
-and bot chats are not end-to-end encrypted: read "The owner channel over Telegram" in
-[PRIVACY.md](PRIVACY.md), and never put secrets in a question.
-
-To give the bot a profile photo, send `/setuserpic` to @BotFather, choose your bot and upload a
-square image, ideally 512 × 512 pixels or larger. You can use the [hoptell icon](assets/icon.png)
-(1024 × 1024 pixels).
+and bot chats are not end-to-end encrypted: read
+[The owner channel over Telegram](PRIVACY.md#the-owner-channel-over-telegram) in PRIVACY.md, and
+never put secrets in a question.
 
 **Setup (the bridge machine).**
 
@@ -1245,11 +1266,11 @@ hoptell telegram pair                                                   # prints
 ```
 
 `setup` checks the bot with Telegram and stores the token in the OS keychain (or the encrypted
-credential file). The first setup also creates the bridge's signing key there and prints its pin;
-a setup with a new token for the same bot keeps the key and every pin. The bridge joins the relay under its own
-name (`owner`, with the relay's name prefix, such as `me-owner`). If a webhook is set on the bot,
-`setup` and `run` stop: hoptell never deletes it. One bridge per bot: a second poller makes the
-bridge stop, not compete.
+credential file). The first setup also creates the bridge's signing key there and prints its pin; a
+setup with a new token for the same bot keeps the key and every pin. The bridge joins the relay
+under its own name (`owner`, with the relay's name prefix, such as `me-owner`). If a webhook is set
+on the bot, `setup` and `run` stop: hoptell never deletes it. One bridge per bot: a second poller
+makes the bridge stop, not compete.
 
 **Pairing.** `hoptell telegram pair` prints a code that works once, for 10 minutes. Send
 `/start <code>` to your bot from your own account, in a private chat, while the bridge runs. That
@@ -1263,14 +1284,15 @@ trusted bridge key is shown to an agent as yours. Without a pin, `ask_owner` is 
 Contacts do not hold these signed messages: an answer, instruction or status that the agent's
 machine verified with a trusted key, sent by a session of your own member, reaches the agent
 without a grant while your contacts file is valid. A block of your own member, or an encryption
-policy of `required` for it, still applies. Other messages from your own member follow the usual
-contacts policy.
+policy of `required` for it, still applies. Other eligible messages from your own member also skip
+the default hold unless `HOPTELL_CONTACTS_SELF=hold`; see
+[Contacts](#contacts-who-may-reach-your-sessions).
 
 **Questions.** An agent calls `ask_owner` with a question, optional choices (2 to 6) and an
 expiry. You get a numbered card naming the agent ("❓ Question 3 · alice asks:"). Answer by
 replying to the card, or tap a choice. The first answer is used, and the card is marked as
 answered. Once your answer has been sent to the agent, the bot adds a 👍 to your reply or shows
-"Sent." after a button tap. The agent receives your answer as a message with the
+"✅ Sent." after a button tap. The agent receives your answer as a message with the
 Sender line "your owner, through the owner channel …". An unanswered question expires, and the
 agent is told.
 
@@ -1285,62 +1307,80 @@ agents:
 - a favourite's own command from the bot's menu: `/<agent>` opens the same prompt, and
   `/<agent> <text>` sends at once;
 - `@<name> <text>`, with the agent's name with or without the relay's prefix;
-- a reply to a bot message about one agent (a prompt, a note from that agent, a "Sent to …"
+- a reply to a bot message about one agent (a prompt, a note from that agent, a "✅ Sent to …"
   confirmation or a "Not sent" message), or to your own earlier message to an agent.
 
 Once the bridge has sent your message, it puts a 👍 on it (if Telegram refuses the reaction, it
-replies "Sent to <agent>." instead). The bridge finds the agent from the message you replied to,
+replies "✅ Sent to <agent>." instead). The bridge finds the agent from the message you replied to,
 never from that message's text: a reply to a forwarded or copied message, or to one the bridge no
 longer knows, is not sent, and the bot answers "I can't tell who that message was for."
 
 A reply to a question card that is already closed asks first: tap "Send to <agent>" within 10
 minutes to send it as a new instruction. Tapping an agent's name and a bare `/<agent>` only open a
-prompt; the explicit "Send to <agent>" tap sends your stored reply as an instruction. `@all` and roles are not supported, and only your own member's agents can
-be reached: the relay checks the recipient before delivery.
+prompt; the explicit "Send to <agent>" tap sends your stored reply as an instruction. `@all` and
+roles are not supported, and only your own member's agents can be reached: the relay checks the
+recipient before delivery.
 
 **Talking with your agents.** `/msg`, `/agents` and "Who is this for?" show one list of at most
-10 agents: your favourites first (online ones, then the ones away), then up to 5 agents you talked
-with in the last 7 days, then the other agents online, newest first. `More…` pages through all of
-them, 8 at a time, and `🔍 Search` finds an agent by part of its name, hidden ones included.
-`/agents` shows how many favourites you have and how many agents are online; tap an agent to see
-its details (online or away, the computer it runs on, when you last talked) with buttons to
-message it, make it a favourite, rename it or hide it. A name you give an agent is only a label in
-your chat: messages still go to the agent's real name, and `@<name>` always means the real name.
-Hidden agents stay out of the list and their notes are not shown, until you unhide them (search
-finds them) or make them a favourite. When you named an agent and its name is later used on another
-computer, its label shows `?` and the bot asks before it sends ("… is now running on …, not ….
-Send anyway?"): `Send` sends this message once, `Send and remember` also accepts the new computer,
-`Cancel` sends nothing. This is a hint: the relay still delivers only to your own member's agents.
-Favourites, names and hidden agents are kept on the bridge machine (`people.json`), for your
-Telegram account only: if another account pairs, it starts with none.
+10 agents.
+
+- The list shows your favourites first (online ones, then the ones away), then up to 5 agents
+  you talked with in the last 7 days, then the other agents online, newest first. `More…` pages
+  through all of them, 8 at a time, and `🔍 Search` finds an agent by part of its name, hidden
+  ones included.
+- `/agents` shows how many favourites you have and how many agents are online. Tap an agent to
+  see its details (🟢 Online or ⚪ Away, the computer it runs on, the time of the last message)
+  with buttons to message it, add it as a favourite, rename it or hide it.
+- A name you give an agent is only a label in your chat: messages still go to the agent's real
+  name, and `@<name>` always means the real name.
+- Hidden agents stay out of the list. Their new notes are skipped and won't appear later;
+  questions from them still arrive. Search finds them, and `👁️ Show agent` or adding them as a
+  favourite shows them again.
+- When you named an agent and its name is later used on another computer, its button shows ⚠️
+  and the bot asks before it sends ("⚠️ … reports running on … (previously …). Send once, or
+  remember this computer?"): `Send once` sends this message once, `Remember & send` also accepts
+  the new computer, and `Cancel` sends nothing. This is a hint: the relay still delivers only to
+  your own member's agents.
+- Favourites, names and hidden agents are kept on the bridge machine (`people.json`), for your
+  Telegram account only: if another account pairs, it starts with none.
 
 **Agents writing to you.** An agent can send you a short note with `send_message` to the
-bridge's name (such as `me-owner`). hoptell sends it as text only, by name, and the relay delivers
-it only to a bridge of your own member; files and roles are refused. The note shows in the chat as
-"💬 <agent>:" followed by its text, cut at 3,000 characters, and it notifies you only if the agent is
-a favourite or you wrote to it in the last hour. A note that answers one of your messages to that
-agent appears as a reply to your message and always notifies you; this works for messages you sent
-in the last 7 days, up to 1,000 of them. Notes from an agent you hid are not shown, and the
-agent is told (at most once an hour). Reply to a note to answer that agent, for up to 24 hours. A note
-sent with `hoptell send` outside an agent session says it can't be answered. Notes beyond 10 per
-10 minutes or 30 per hour from one agent, or 60 per hour from all agents together, are not shown:
-the bot says so once an hour, and the agent is told at most once an hour. For a question that needs
-an answer, agents use `ask_owner`. Agents should also prefer `ask_owner` for a milestone or an action you
-must see: a note is best effort, while a question stays open in `/pending`.
+bridge's name (such as `me-owner`).
 
-**Commands.** The bot's menu, set for your paired chat only, holds `/msg` (pick an agent),
-`/agents` (your agents and favourites; `/peers` still works the same way), `/pending` (open
-questions, oldest first: number, agent, the start of the question and its age; 8 per page, with a
-button to show a question's card again), `/help` and, when the app is on, `/app`; then one command per favourite, online or
-not: its name, lower-cased, with `-` as `_` (`me-Big-Bot` becomes `/big_bot`). An agent gets
-no command when its name is longer than 32 characters or is a reserved word, or when two agents'
-names give the same command (`alice` and `Alice`, `my-bot` and `my_bot`): then neither gets one
-while both are online and normally for at least 24 hours after one of them was last seen. The
-bridge checks your agents again before it acts on a command and refuses one that is ambiguous.
-After the collision clears, the command may reach the remaining agent; use `@<name> <text>` to name
-the recipient exactly, or `/msg` when the agent's button is shown. The menu shows at most 100
-commands, the ones above and up to 96 favourites (95 with `/app`); it is updated within about a minute as agents come
-and go.
+- Notes are text only, sent by name; the relay delivers them only to your own member's bridge.
+  Files and roles are refused.
+- A note shows as "💬 <agent>:" and its text, cut at 3,000 characters.
+- It notifies you if the agent is a favourite, if you wrote to it in the last hour, or if it
+  answers one of your messages from the last 7 days, up to 1,000 of them (it then appears as a
+  reply).
+- Reply to a note to answer that agent, for up to 24 hours. A note sent with `hoptell send`
+  outside an agent session can't be answered.
+- Limits: 10 notes per 10 minutes and 30 per hour per agent, 60 per hour from all agents. Extra
+  notes are not shown; the bot warns in the chat, and the agent receives a status, at most once
+  an hour.
+- Notes from a hidden agent are not shown and won't appear later, and the agent is told (at most
+  once an hour).
+
+For a question, or a milestone you must see, agents use `ask_owner`: a note is best effort,
+while a question stays open in `/pending`.
+
+**Commands.** The bot's menu is set for your paired chat only.
+
+- It holds `/msg` (pick an agent), `/agents` (your agents and favourites; `/peers` still works
+  the same way), `/pending` (open questions, oldest first: number, agent, the start of the
+  question and its age; 8 per page, with a button to show a question's card again), `/help`
+  and, when the app is on, `/app`.
+- Then it has one command per favourite, online or not: its name, lower-cased, with `-` as `_`
+  (`me-Big-Bot` becomes `/big_bot`).
+- An agent gets no command when its name is longer than 32 characters or is a reserved word, or
+  when two agents' names give the same command (`alice` and `Alice`, `my-bot` and `my_bot`):
+  then neither gets one while both are online and normally for at least 24 hours after one of
+  them was last seen. The bridge checks your agents again before it acts on a command and
+  refuses one that is ambiguous. After the collision clears, the command may reach the
+  remaining agent; use `@<name> <text>` to name the recipient exactly, or `/msg` when the
+  agent's button is shown.
+- The menu shows at most 100 commands, the ones above and up to 96 favourites (95 with `/app`).
+  It is updated within about a minute as agents come and go.
 
 **The app.** A small app inside Telegram shows all your agents at once, grouped by computer, with
 search, and your open questions. Turn it on with `hoptell telegram app --on` (with the bridge
@@ -1360,7 +1400,7 @@ what to set.
   expire after 10 minutes, and you can have 3 waiting at a time.
 - Settings changed in the app (favourites, names, hidden agents) are listed in the chat with an
   `Undo` button. A change takes effect only once its line is in the chat.
-- To answer a question, tap `Answer in chat`: the question's card appears in the chat again.
+- To answer a question, tap `Show in chat`: the question's card appears in the chat again.
 - `/app off` in the chat turns the app off at once. With the bridge stopped, use `hoptell telegram
   app --off` to turn it off or `hoptell telegram app --rotate` to give it a new link. These CLI
   changes take effect when the bridge starts again; old links then stop working. `hoptell telegram
@@ -1385,13 +1425,19 @@ prompt. Statuses the bridge generates (expired, cancelled) are labelled as autom
   account.
 - `hoptell telegram unpair --all` (with the bridge stopped) tries to send cancellation statuses
   for open questions and to remove the menu, then clears the bridge's configuration, pairing and
-  state, favourites, names and hidden agents, and tries to remove its token and signing key; check its output. If Telegram does not confirm the menu's removal, the command says so, and the next
-  run of the same bot on this machine tries again.
+  state, favourites, names and hidden agents, and tries to remove its token and signing key; check
+  its output. If Telegram does not confirm the menu's removal, the command says so, and the next run
+  of the same bot on this machine tries again.
 - `hoptell telegram identity` shows the bot's name and descriptions as Telegram has them and the
   texts hoptell proposes; `hoptell telegram identity --apply` sets the ones that differ after you
   type `yes`. Add `--photo <file.jpg>` to request a profile photo upload (a JPG of at most 2 MB), or
   `--remove-photo` to request removal. The current photo isn't shown here. Photo changes also
-  require `--apply` and confirmation; the requested change is applied on every confirmed run. The bridge never changes the bot's profile.
+  require `--apply` and confirmation; the requested change is applied on every confirmed run.
+  The bridge never changes the bot's profile.
+- To give the bot a profile photo, run `hoptell telegram identity --apply --photo <file.jpg>`, or
+  send `/setuserpic` to @BotFather. The [hoptell icon](assets/icon.png) works (1024 × 1024);
+  convert it to a JPG first, for example
+  `sips -s format jpeg assets/icon.png --out icon.jpg`.
 - `hoptell telegram fav <name>` and `unfav <name>` change your favourites, `hoptell telegram alias
   <name> <new name>` (or `--clear`) names an agent, and `hoptell telegram sessions` lists what is
   saved; run them on the bridge machine after pairing. `<name>` is the agent's name with or
@@ -1407,9 +1453,40 @@ prompt. Statuses the bridge generates (expired, cancelled) are labelled as autom
 Telegram keeps undelivered updates for 24 hours: what you send while the bridge is down longer
 than that is lost.
 
+## Delivery modes in detail
+
+Each MCP server chooses one delivery mode. Avoid registering hoptell twice in the same Claude
+Code session. Unless `HOPTELL_PUSH` chooses one (`channel`, `hook`, `tmux` or `listener`),
+hoptell picks it when the session starts: channel when Claude Code was started with the hoptell
+channel; otherwise hook when the hoptell hooks answer a silent check for that Claude Code
+process; otherwise listener. `hoptell tmux` always uses tmux. Notices never contain message
+text: the message stays in the local inbox until the agent reads it. A notice does not prove
+that the agent read or acted on a message.
+
+Channels are Claude Code's [channels](https://code.claude.com/docs/en/channels) (research
+preview). Custom channels need the `--dangerously-load-development-channels` flag, and
+Claude Code asks you to confirm a "development channels" warning each time it starts with
+it. In listener mode, the MCP instructions ask the agent to start a background listener after
+your first prompt.
+
+Hook delivery uses Claude Code [hooks](https://code.claude.com/docs/en/hooks) and needs no
+flag. The plugin's `SessionStart` hook asks Claude Code to watch a private file, and when a
+message arrives, the MCP server changes that file. Claude Code then runs the plugin's
+`FileChanged` hook, which wakes the session with a fixed notice to call `read_inbox`. Settings
+such as `disableAllHooks` can prevent hooks from running. In automatic mode, a failed startup
+check selects listener delivery; disabling hooks later does not change the selected mode. An
+explicit `HOPTELL_PUSH=hook` does not fall back to the listener. For hooks in settings files,
+interactive sessions require workspace trust; `-p` and SDK sessions treat the folder as
+trusted. Tested with the Claude Code terminal app on macOS. Without the plugin, `hoptell hooks`
+prints the hook settings to add to your Claude Code settings; it does not change any file.
+
+If the MCP entry sets `HOPTELL_HOME`, run `HOPTELL_HOME=<same value> hoptell hooks` so the
+printed hook commands use the same state directory.
+
 ## CLI
 
 ```
+# Main commands; hoptell help lists all of them.
 hoptell --version                     # prints the version; hoptell help <command> or <command> --help shows its usage
 hoptell relay --host <ip> [--port 7777] [--members file.json] [--require-members] [--policy policy.json]
               [--oidc oidc.json] [--state-dir <dir>] [--realm-name <name>] [--trusted-proxies <ip/cidr,...>]
@@ -1457,18 +1534,18 @@ hoptell save <t_id> <path> [--overwrite] [--yes] | --forget <t_id>   # experimen
 
 Expiry does not remove messages already delivered to a local inbox.
 
-Settings come from environment variables, otherwise from the first existing file of
-`$HOPTELL_ENV`, `~/.config/hoptell/.env`, `<package>/.env`. See [.env.example](.env.example). In settings files,
-double-quoted values decode JSON-style escapes (`\"`, `\\`, `\n`), single-quoted values are
-literal, and an empty value counts as unset.
+Settings come from environment variables, otherwise from the first existing file of `$HOPTELL_ENV`,
+`~/.config/hoptell/.env`, `<package>/.env`. See [.env.example](.env.example). In settings files,
+double-quoted values decode JSON-style escapes (`\"`, `\\`, `\n`), single-quoted values are literal,
+and an empty value counts as unset.
 
-The on/off switches `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_REQUIRE_MEMBERS`, `HOPTELL_OWNER_APP` and `HOPTELL_TITLE_AUTO`
-take `1`, `true`, `on` or `yes` for on, and `0`, `false`, `off`, `no` or unset for off, in any
-case. A value that a setting does not accept is never read as its default. For these switches,
-`HOPTELL_AUTH`, `HOPTELL_CREDENTIAL_STORE` and `HOPTELL_CONTACTS_SELF`, the relay, the agent session or the command refuses
-to start and names the accepted values. An invalid `HOPTELL_AGENTS_MAX` refuses spawning. An
-unusable `HOPTELL_TITLE` is logged, and no title is sent. For
-`HOPTELL_NOTIFY`, `HOPTELL_ELICITATION` and `HOPTELL_OWNER_CHANNEL`, a warning names the value
+The on/off switches `HOPTELL_EXPERIMENTAL_E2EE`, `HOPTELL_REQUIRE_MEMBERS`, `HOPTELL_OWNER_APP` and
+`HOPTELL_TITLE_AUTO` take `1`, `true`, `on` or `yes` for on, and `0`, `false`, `off`, `no` or unset
+for off, in any case. A value that a setting does not accept is never read as its default. For these
+switches, `HOPTELL_AUTH`, `HOPTELL_CREDENTIAL_STORE` and `HOPTELL_CONTACTS_SELF`, the relay, the
+agent session or the command refuses to start and names the accepted values. An invalid
+`HOPTELL_AGENTS_MAX` refuses spawning. An unusable `HOPTELL_TITLE` is logged, and no title is sent.
+For `HOPTELL_NOTIFY`, `HOPTELL_ELICITATION` and `HOPTELL_OWNER_CHANNEL`, a warning names the value
 used instead. `hoptell doctor` lists these problems.
 
 | Variable | Used by | Meaning |
@@ -1503,7 +1580,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_STATE_DIR` | relay | state directory with the realm id (default `~/.local/state/hoptell-relay`) |
 | `HOPTELL_REALM_NAME` | relay | optional display name for the realm, shown to clients |
 | `HOPTELL_REALM_ID` | relay | optional realm id (32 lowercase hex characters) for a new state directory, for example to keep the id when you move a relay; it must match the id already stored in an existing one |
-| `HOPTELL_POLICY` | relay | the relay's policy file (see [Who may reach you through the relay](#who-may-reach-you-through-the-relay-grants-and-the-relays-policy)) |
+| `HOPTELL_POLICY` | relay | the relay's policy file (see [Relay-side checks](#relay-side-checks-grants-and-the-relays-policy)) |
 | `HOPTELL_REQUIRE_MEMBERS` | relay | `1` (or another on value) refuses a shared token |
 | `HOPTELL_OIDC` | relay | sign-in file naming the identity providers the relay accepts |
 | `HOPTELL_APP_URL` | owner-channel bridge | the public HTTPS address where Telegram opens the bridge's app, e.g. `https://hoptell.example.com` (no path, query string, fragment, or credentials); needed when the bridge's relay URL is `ws://` or an IP address |
@@ -1547,13 +1624,19 @@ metadata can still identify participants.
 
 hoptell's job is to put text from one agent in front of another agent. Plan for that:
 
-- **Anyone who holds a valid token can message your agents**, and agents running with
-  relaxed permissions (`--dangerously-skip-permissions`, auto-approve) may act on it.
-  Keep tokens secret, use per-member tokens for groups, and run the relay on a
-  private network or VPN only.
+- **Authenticated peers can send text your agents may act on.** The relay's policy, your
+  member's grants and your machine's contacts decide which messages reach a session. Agents
+  with relaxed permissions (`--dangerously-skip-permissions`, auto-approve) may act on
+  messages that pass those checks. Keep tokens secret, use per-member credentials for groups,
+  and restrict access to the relay.
 - **Messages are labeled, not trusted.** Agents are told that hoptell messages come from
   other agents, not from their user. Message text cannot close the channel tag or forge a
   message boundary. That is guidance for the model, not a sandbox.
+- **Your own sessions can reach each other by default.** Messages the relay attributes to your
+  own member (same realm, neither side hosted) skip the contacts hold, so one of your agents can
+  instruct another. Blocks, a default of `block` and `required` encryption still apply. Set
+  `HOPTELL_CONTACTS_SELF=hold` if a session of yours reads untrusted input. Titles are labels
+  only; check the authenticated sender, not a title.
 - **Use TLS outside a trusted network.** The relay speaks plain `ws://`. Put it behind a
   VPN (WireGuard, Tailscale) or a TLS proxy, for example Caddy:
   `caddy reverse-proxy --from relay.example.com --to 127.0.0.1:7777`, then use
@@ -1595,13 +1678,14 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). How hoptell handles d
 - The relay keeps plaintext offline queues, the list of connected peers and name leases in
   memory; restarting the relay drops them. After a restart, a send to a member whose sessions have
   not reconnected yet fails with "unknown peer" until one of them reconnects.
-- Delivery is at least once. "Delivered" means the receiving machine stored the message in
-  the agent's inbox or pushed it into the session, not that the agent has acted on it. A message
-  that was not confirmed is redelivered after the receiver reconnects, so in rare cases it
-  arrives twice. Agent sessions on a current relay usually store such a repeat only once: they
-  recognize messages still stored, and remember up to 10,000 delivery ids for at most eight days.
-  When a send's reply is lost, a current client resends it to the same relay instance with the same
-  operation id, and the relay delivers it once; otherwise the result is reported as uncertain. A receiver gets at most 50 unconfirmed messages; more wait in its queue.
+- Delivery is at least once. "Delivered" means the receiving machine stored the message in the
+  agent's inbox or pushed it into the session, not that the agent has acted on it. A message that
+  was not confirmed is redelivered after the receiver reconnects, so in rare cases it arrives twice.
+  Agent sessions on a current relay usually store such a repeat only once: they recognize messages
+  still stored, and remember up to 10,000 delivery ids for at most 8 days. When a send's reply is
+  lost, a current client resends it to the same relay instance with the same operation id, and the
+  relay delivers it once; otherwise the result is reported as uncertain. A receiver gets at most 50
+  unconfirmed messages; more wait in its queue.
 - Channel delivery depends on Claude Code channels (research preview); the flag name may change.
 - Hook delivery depends on Claude Code's `FileChanged` hook and `asyncRewake` option. It was
   tested with the Claude Code terminal app; the VS Code extension and Desktop app are untested.
@@ -1623,18 +1707,20 @@ Results observed on 2026-10-08; behavior depends on the client build and configu
 | Codex CLI 0.161.0 | tmux; listener | shown with `approval_policy = "on-request"` or `granular.mcp_elicitations = true`; declined automatically with `approval_policy = "never"` |
 | Antigravity 1.3.1 | tmux; listener | cancelled automatically |
 
-Spawning agents (`spawn_agent`) needs Codex CLI 0.162.1 exactly; see [Spawning agents](#spawning-agents).
-A listener must be started by the client and does not, by itself, wake an idle
-session. The elicitation results come from separate probe servers. hoptell's optional question
+Session titles, the plugin skills and the `UserPromptSubmit` hook were tested on
+2026-10-26 and 2026-10-27 with Claude Code 2.1.310 and 2.1.311, with Codex CLI
+0.164.0 as a reviewer.
+
+Spawning agents (`spawn_agent`) needs Codex CLI 0.162.1 exactly; see [Spawning
+agents](#spawning-agents). A listener must be started by the client and does not, by itself, wake an
+idle session. The elicitation results come from separate probe servers. hoptell's optional question
 during `read_inbox` (`HOPTELL_ELICITATION=read_inbox`) asks only in sessions on MCP revisions
 2025-06-18 and 2025-11-25 with form questions; behavior of other client versions is untested.
 
 ## Roadmap
 
-Ideas that fit the small-relay design, roughly in order:
-
-- optional per-member send rules
-- optional on-disk queue so a relay restart keeps undelivered messages
+A possible next step is an optional on-disk queue for plaintext messages, so a relay restart
+keeps undelivered messages.
 
 ## Development
 
@@ -1653,6 +1739,6 @@ minutes. It runs only on your machine, never in CI.
 
 `npm run test:oidc` is an opt-in test of sign-in against a real Keycloak in a throwaway Docker
 container (pinned image, the test realm above): browser, device and service-account sign-in,
-renewal on a live connection, and revocation with introspection. It takes about three minutes.
+renewal on a live connection, and revocation with introspection. It takes about 3 minutes.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the [Apache License 2.0](LICENSE).

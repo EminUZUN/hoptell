@@ -4,8 +4,9 @@ Thanks for helping. hoptell aims to stay small, so please keep that in mind.
 
 ## Principles
 
-- **Keep it simple.** The relay should stay a single small process with no database. Prefer
-  documenting a standard tool (VPN, TLS proxy, systemd) over building it in.
+- **Keep it simple.** Keep the relay a single small process. It keeps durable state in a local
+  SQLite database. Prefer documenting standard tools (VPN, TLS proxy, systemd) over adding
+  infrastructure or external services.
 - **Security first.** Every message is text that another agent may act on. Changes that
   touch authentication, names or how messages reach an agent need a test.
 - **Agent-neutral.** Features should work for any MCP-capable agent; agent-specific code
@@ -14,18 +15,19 @@ Thanks for helping. hoptell aims to stay small, so please keep that in mind.
 ## Workflow
 
 1. Open an issue first for larger changes, to agree on the approach.
-2. `npm install && npm run lint && npm test` must pass. For changes to delivery (relay, MCP, tmux), also run
-   the real-agent suite if you can: `npm run test:e2e -- --use-local-logins`. The suite starts its own relay on a random port
-   and never touches your real settings. tmux tests run when tmux 3.2+ is installed.
-   Run the suite with the tmux variables unset, especially from inside tmux:
-   `env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR npm test`. This keeps the tests from inheriting your
-   tmux client's settings; it does not isolate a tmux server.
-   For changes to the relay protocol or MCP tools, run `npm run test:compat`. It installs
-   the newest npm release older than this checkout's version and tests all eight combinations
-   of old and current relays, senders and receivers. To choose a release, use
-   `npm run test:compat -- --version x.y.z`. It requires network access, but no model logins.
+2. `npm install && npm run lint && npm test` must pass.
+   - From inside tmux, run `env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR npm test`, so the tests
+     don't inherit your tmux client's settings. This does not isolate a tmux server.
+   - For changes to delivery (relay, MCP, tmux), also run the real-agent suite if you can:
+     `npm run test:e2e -- --use-local-logins`. The suite starts its own relay on a random port
+     and never touches your real settings. tmux tests run when tmux 3.2+ is installed.
+   - For changes to the relay protocol or MCP tools, run `npm run test:compat`. It installs
+     the newest npm release older than this checkout's version and tests all eight combinations
+     of old and current relays, senders and receivers. To choose a release, use
+     `npm run test:compat -- --version x.y.z`. It requires network access, but no model logins.
 3. Keep commits focused, and describe *why* in the message.
-4. Update README.md and CHANGELOG.md when behavior or settings change.
+4. Update README.md and CHANGELOG.md when behavior or settings change, PRIVACY.md when data
+   handling changes, and .env.example when a setting is added.
 
 ## Releasing (maintainers)
 
@@ -63,7 +65,7 @@ Every release:
 ## Layout
 
 ```
-bin/hoptell.js   CLI entry point (relay, mcp, tmux, send, list, wait, listen)
+bin/hoptell.js   CLI entry point (every hoptell command)
 lib/relay.js     WebSocket hub: auth, routing, queues, fan-out, rate limit
 lib/client.js    relay client (heartbeat, reconnect, request/ack)
 lib/mcp.js       MCP server: tools and push/inbox delivery
@@ -72,6 +74,9 @@ lib/tmux.js      tmux launcher and message injector
 lib/config.js    settings, names, state directory
 commands/        the Claude Code plugin's slash commands (/hoptell:...)
 skills/          the Claude Code plugin's skills, each with a SKILL.md
+hooks/           the Claude Code plugin's hooks (wake notices, session titles)
+lib/icons/       the icon copies that ship in the package (see "The icon")
+assets/          the source icon
 ```
 
 ## The icon
@@ -93,6 +98,6 @@ If the source image changes, make the copies again with `sips`, for example
 ## Conduct
 
 Be respectful and constructive. Harassment or personal attacks are not tolerated in
-issues, merge requests or any other project space.
+issues, pull requests or any other project space.
 
 By contributing you agree that your contributions are licensed under the Apache License 2.0.

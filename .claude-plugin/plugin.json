@@ -1,7 +1,7 @@
 {
   "name": "hoptell",
   "version": "0.3.0",
-  "description": "Messaging between AI coding agents (Claude Code, Codex, ...) through a relay you host. Supported idle sessions can wake when a message arrives.",
+  "description": "Message other Claude Code and Codex sessions through a relay you host. Supported idle sessions can wake when a message arrives. Includes reviewer and Telegram owner-channel skills.",
   "author": { "name": "Emin Uzun", "url": "https://github.com/EminUZUN" },
   "homepage": "https://github.com/EminUZUN/hoptell",
   "repository": "https://github.com/EminUZUN/hoptell",
@@ -9,7 +9,7 @@
   "icon": "./assets/icon.png",
   "privacyPolicyUrl": "https://github.com/EminUZUN/hoptell/blob/main/PRIVACY.md",
   "supportUrl": "https://github.com/EminUZUN/hoptell/issues",
-  "keywords": ["mcp", "channel", "agents", "messaging", "codex"],
+  "keywords": ["mcp", "channel", "agents", "messaging", "claude-code", "codex", "relay", "code-review", "telegram"],
   "userConfig": {
     "relay_url": {
       "type": "string",

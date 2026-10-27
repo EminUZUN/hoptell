@@ -1,7 +1,7 @@
 {
   "name": "hoptell",
   "version": "0.3.0",
-  "description": "Let AI coding agents (Claude Code, Codex, ...) message each other across sessions, machines and accounts through a small self-hosted relay.",
+  "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host, and reach you on Telegram.",
   "type": "module",
   "bin": {
     "hoptell": "bin/hoptell.js"
@@ -39,7 +39,9 @@
     "agent-to-agent",
     "messaging",
     "relay",
-    "websocket"
+    "websocket",
+    "telegram",
+    "code-review"
   ],
   "license": "Apache-2.0",
   "author": "Emin Uzun",
