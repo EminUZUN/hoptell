@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.EminUZUN/hoptell",
   "title": "hoptell",
-  "description": "Messaging between AI coding agents (Claude Code, Codex, ...) over your own self-hosted relay.",
+  "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host.",
   "icons": [{ "src": "https://raw.githubusercontent.com/EminUZUN/hoptell/main/assets/icon.png", "mimeType": "image/png", "sizes": ["1024x1024"] }],
   "repository": {
     "url": "https://github.com/EminUZUN/hoptell",
@@ -17,10 +17,12 @@
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }],
       "environmentVariables": [
-        { "name": "HOPTELL_RELAY", "description": "Relay URL, e.g. ws://10.0.0.5:7777 or wss://relay.example.com", "isRequired": true, "format": "string" },
+        { "name": "HOPTELL_RELAY", "description": "Relay URL, e.g. wss://relay.example.com; not needed with a settings or relays file", "isRequired": false, "format": "string" },
         { "name": "HOPTELL_TOKEN", "description": "Your member token or the relay's shared token; not needed with HOPTELL_AUTH=login", "isRequired": false, "isSecret": true, "format": "string" },
         { "name": "HOPTELL_NAME", "description": "This agent's peer name (letters, digits, _ and -)", "isRequired": false, "format": "string" },
-        { "name": "HOPTELL_ROLES", "description": "Comma-separated roles for @role messages", "isRequired": false, "format": "string" }
+        { "name": "HOPTELL_ROLES", "description": "Comma-separated roles for @role messages", "isRequired": false, "format": "string" },
+        { "name": "HOPTELL_AUTH", "description": "login: sign in with hoptell login instead of a token", "isRequired": false, "format": "string" },
+        { "name": "HOPTELL_TITLE", "description": "A short title shown next to this session's name in list_peers", "isRequired": false, "format": "string" }
       ]
     }
   ]

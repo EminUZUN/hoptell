@@ -67,6 +67,21 @@ test("the texts table: every bot text passes the scan, with sample values", () =
   assert.deepEqual([0, 59_000, 60_000, 12 * 60_000, 3600_000, 50 * 3600_000].map(ago), ["just now", "just now", "1 minute ago", "12 minutes ago", "1 hour ago", "2 days ago"]);
 });
 
+// Static button labels must stay short enough for a phone; the alert texts fit Telegram's 200.
+const BUTTON_MAX = 32;
+const BUTTONS = ["cancelButton", "moreButton", "searchButton", "messageButton", "favButton", "unfavButton", "renameButton", "hideButton", "unhideButton", "sendButton", "sendRememberButton", "backButton", "nextButton", "appButton", "undoButton"];
+const ALERTS = ["earlierSetup", "peopleFull", "notSaved", "listOld", "undoChanged", "tapAgain", "buttonExpired", "shownTooOften", "noLongerOpen", "statusExpired", "statusCancelled", "statusUndelivered", "alreadyAnswered", "sentAck", "encryptionRequired", "encryptionPaused", "needsUpdate", "serverRefused", "serverUnreachable", "textOnly"];
+
+test("the texts table: button labels are short, alert texts fit 200 characters, placeholders 64", () => {
+  for (const k of BUTTONS) assert.ok(TEXTS[k].length <= BUTTON_MAX, `${k}: ${TEXTS[k]}`);
+  assert.ok(TEXTS.showButton(9999).length <= BUTTON_MAX);
+  for (const k of ALERTS) assert.ok(call(k, TEXTS[k]).length <= 200, `${k}: ${call(k, TEXTS[k]).length}`);
+  for (const k of ["notYours", "noSuchAgent"]) assert.ok(TEXTS[k]("x".repeat(64)).length <= 200, k);
+  assert.ok(TEXTS.answerPlaceholder.length <= 64);
+  // A note head never stacks two icons (the moved marker is on picker buttons only).
+  assert.equal(TEXTS.notice("Main"), "💬 Main:");
+});
+
 test("the scan itself catches what it should", () => {
   assert.deepEqual(problems("Sent to me-alice."), ["a wire-name prefix"]);
   assert.deepEqual(problems("Your agents on local:"), ["the relay alias"]);
@@ -128,7 +143,7 @@ test("the sweep: every text the bridge sent in a broad scenario passes the scan"
   tg.press(details, 0, { data: details.params.reply_markup.inline_keyboard[0][1].callback_data }); // Favourite
   await until(() => tg.calls("editMessageText").some((c) => c.params.message_id === details.message_id), 4000, "details edited");
   const edited = tg.calls("editMessageText").filter((c) => c.params.message_id === details.message_id).at(-1);
-  assert.equal(edited.params.reply_markup.inline_keyboard[0][1].text, "★ Unfavourite");
+  assert.equal(edited.params.reply_markup.inline_keyboard[0][1].text, "★ Remove favourite");
   tg.press(details, 0, { data: edited.params.reply_markup.inline_keyboard[1][0].callback_data }); // Rename
   await until(() => tg.last(/^New name for alice/), 4000, "rename prompt");
   tg.say("@x", { reply: tg.replyTo(tg.last(/^New name for alice/)) });
@@ -156,4 +171,15 @@ test("the sweep: every text the bridge sent in a broad scenario passes the scan"
   ];
   assert.ok(texts.length > 25, `${texts.length} texts`);
   for (const x of texts) assert.deepEqual(problems(x), [], x.slice(0, 120));
+  // Telegram's limits and plain text: no parse_mode anywhere (so nothing needs escaping), a message
+  // up to 4096 characters, an alert up to 200, callback_data up to 64 bytes, short button labels.
+  for (const c of tg.sent.filter((x) => x.method === "sendMessage" || x.method === "editMessageText")) {
+    assert.equal(c.params.parse_mode, undefined, c.params.text.slice(0, 60));
+    assert.ok(c.params.text.length <= 4096, c.params.text.slice(0, 60));
+  }
+  for (const c of tg.calls("answerCallbackQuery")) assert.ok((c.params.text ?? "").length <= 200, c.params.text);
+  for (const b of tg.sent.flatMap((x) => (x.params.reply_markup?.inline_keyboard ?? []).flat())) {
+    if (b.callback_data !== undefined) assert.ok(Buffer.byteLength(b.callback_data, "utf8") <= 64, b.callback_data);
+    assert.ok(b.text.length <= BUTTON_MAX, b.text);
+  }
 });

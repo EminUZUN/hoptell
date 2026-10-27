@@ -1,6 +1,6 @@
 {
   "name": "hoptell",
-  "description": "hoptell: messaging between AI coding agents over your own self-hosted relay.",
+  "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host, and reach you on Telegram.",
   "owner": {
     "name": "Emin Uzun",
     "url": "https://github.com/EminUZUN"
@@ -9,7 +9,7 @@
     {
       "name": "hoptell",
       "source": "./",
-      "description": "Messaging between AI coding agents over your own self-hosted relay."
+      "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host, and reach you on Telegram."
     }
   ]
 }

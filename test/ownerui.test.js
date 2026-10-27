@@ -13,7 +13,7 @@ import { execFile } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { settingsContext } from "../lib/decisions.js";
 import { agentsWorld, profileDoc, writeProfile } from "./agents-helpers.js";
-import { LIMITS, SECURITY_HEADERS, esc, startOwnerUi } from "../lib/ownerui.js";
+import { KIND_TITLE, LIMITS, SECURITY_HEADERS, doneText, esc, relative, startOwnerUi } from "../lib/ownerui.js";
 import { openBound } from "../lib/session.js";
 import { openStore, processConsumer } from "../lib/store.js";
 import { openContacts } from "../lib/quarantine.js";
@@ -328,7 +328,7 @@ test("the CLI and the UI give identical effects for the same decision", async (t
     });
   }
   assert.deepEqual(results[1], results[0]);
-  assert.equal(results[0].out, "Released 1 message(s) and added a grant.");
+  assert.equal(results[0].out, "Released 1 message and added a grant.");
 });
 
 test("settings through the UI: an enum value in one confirmation; file roots reviewed, then confirmed with a widening mark", async (t) => {
@@ -367,7 +367,8 @@ test("a verify form names no comparison by default: submitted untouched it is re
   const page = (await get(ui, cookie, `/decision?id=${encodeURIComponent(`device-verify:${BOB}`)}`)).body;
   assert.match(page, /Safety number/);
   const [form] = formsOf(page);
-  assert.match(form.html, /<select name="how"><option value="">choose<\/option><option value="in-person">in-person<\/option><option value="out-of-band">out-of-band<\/option><\/select>/);
+  assert.match(form.html, /<label>How did you compare the safety numbers\? <select name="how"><option value="">Choose a method<\/option><option value="in-person">In person<\/option><option value="out-of-band">Through another trusted channel<\/option><\/select>/);
+  assert.match(form.html, /<button type="submit">The numbers match: mark verified<\/button>/);
   assert.doesNotMatch(form.html, /relay-tofu/);
   const untouched = await post(ui, cookie, "/decide", { ...form.fields, how: "" });
   assert.equal(untouched.status, 403);
@@ -441,7 +442,7 @@ test("Devices: this member's own devices with fingerprints from the key bytes an
   assert.equal(row(known), "accepted");
   assert.match(row(fresh), /listed by the relay, not accepted by you: check it/);
   assert.match(page, new RegExp(`device-own%3A${fresh.device}`));
-  assert.match(page, new RegExp(`<code>${gone.device}</code></td><td></td><td>revoked [^<]* by the relay admin`));
+  assert.match(page, new RegExp(`<code>${gone.device}</code></td><td></td><td>revoked [^<]* <span class="note">\\([^<]*\\)</span> by the relay admin`));
   // Without the relay's lists the section is not shown, and the page says why.
   const ui2 = await startOwnerUi({ home, sources: { contacts: c }, ctx: settingsContext({ env: {}, fromFile: [], envFile: path.join(home, "s.env"), relaysFile: path.join(home, "none.json") }) });
   t.after(() => ui2.close());
@@ -617,6 +618,12 @@ test("agent profile approval view: the generated command line for each mode is s
   assert.ok(at >= 0, "the Codex approval warning is shown");
   const form = body.indexOf('action="/decide"');
   assert.ok(form > at, "before the approval form");
+  assert.ok(body.includes("<h1>Approve an agent profile</h1>"), "the kind's title");
+  // Approve: the Done page (its effects carry no decisions; this used to fail after the approval).
+  const approve = formsOf(page.body).find((f) => f.fields.action === "approve");
+  const done = await post(ui, cookie, "/decide", approve.fields);
+  assert.equal(done.status, 200, done.body);
+  assert.ok(unesc(done.body).includes("<p>✅ Profile approved.</p>"), done.body);
 });
 
 test("spawn confirmation view: the task in full, the command line, the spawner; start and discard forms (design 7.1)", async (t) => {
@@ -642,4 +649,21 @@ test("spawn confirmation view: the task in full, the command line, the spawner; 
   const forms = formsOf(page.body).map((f) => f.fields.action);
   assert.deepEqual(forms.sort(), ["discard", "start"]);
   assert.ok((await get(ui, cookie, "/pending")).body.includes(`/decision?id=spawn%3A${run}`));
+  // Discard: the Done page (its effects carry no decisions; this used to fail after the discard).
+  const discard = formsOf(page.body).find((f) => f.fields.action === "discard");
+  const done = await post(ui, cookie, "/decide", discard.fields);
+  assert.equal(done.status, 200, done.body);
+  assert.ok(unesc(done.body).includes("<p>Agent request discarded. Nothing was started.</p>"), done.body);
+});
+
+test("Done texts: approve, start and discard have their own sentence; device decisions keep theirs", () => {
+  assert.equal(doneText("approve", { id: "codex-reviewer", digest: "a".repeat(64) }), "✅ Profile approved.");
+  assert.equal(doneText("start", { run: "r1", name: "codex-rev", mode: "headless", state: "starting", resultTo: null }), "✅ Agent request confirmed. Current state: starting.");
+  assert.equal(doneText("discard", { run: "r1", state: "discarded" }), "Agent request discarded. Nothing was started.");
+  assert.equal(doneText("verify", { decisions: [{ decision: "verified", device: "d1" }] }), "Recorded: verified d1.");
+  assert.throws(() => doneText("verify", {}), TypeError, "the device branch stays strict");
+  assert.equal(doneText("allow-once", { steps: 1 }), "Released 1 message.");
+  assert.equal(doneText("allow", { steps: 2, waiting: 0 }), "Released 2 messages and added a grant.");
+  assert.deepEqual([relative(-12 * 60_000), relative(12 * 60_000), relative(90 * 60_000), relative(30_000)], ["12 minutes ago", "in 12 minutes", "in 1 hour", "in less than a minute"]);
+  assert.equal(KIND_TITLE["device-verify"], "Verify contact devices");
 });

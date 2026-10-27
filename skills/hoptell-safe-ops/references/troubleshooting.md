@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | Close code 4002 | The relay refused the name, roles or claim | Read the refusal reason and `hoptell doctor` output. For a member-name refusal, use the reported member prefix; for invalid roles, correct `HOPTELL_ROLES`. |
 | Old sessions fail after a token change | The new member token needs prefixed names | Restart each old session with a prefixed name |
-| A new session's tools do not work yet | Another session holds the name | Quit the other session, or pick another name |
+| A session waits for its name | Another connection holds the name | Receiving waits for the name; send and list may still work through a separate connection. Use a different name, or stop the holder only within the user's request or agreed cleanup. |
 | `hoptell tmux` says the tmux session already exists | A session `hoptell-<name>` is still running | Attach with `tmux attach -t '=hoptell-<name>'`, or end it with `tmux kill-session -t '=hoptell-<name>'` |
 | A message to `@reviewer` reached nobody | No reviewer was online at that moment; role messages are not queued | Wait until `list_peers` shows them online, then send again |
 | A reviewer never answers | Its request may be held by the contacts policy in the reviewer's hoptell home (a shared-token sender, another member, or `HOPTELL_CONTACTS_SELF=hold`), or the reviewer may be offline, waiting for a name, awaiting a client prompt, or using delivery without a wake path | Ask the user to check `hoptell contacts` (the decision is theirs). Check `list_peers` and `hoptell doctor`, then inspect the reviewer terminal. Do not restart an online reviewer automatically. |

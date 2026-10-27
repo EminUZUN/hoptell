@@ -53,7 +53,7 @@ test("a card in flight when the bridge stops: the lock waits for it, its result 
   // The next run on this home re-sends the card and opens the question with its message id.
   const c = bridgeOn(t, { home, telegram: tg.client("c"), url, token: tokens.me, key });
   await until(() => tg.cards().length === 2, 4000, "re-sent");
-  assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice asks \(sent again, the first copy may not have arrived\):\n/);
+  assert.match(tg.cards()[1].params.text, /^❓ Question 1 · alice\nSent again: the first copy may not have arrived\.\n/);
   await until(() => c.bridge.state().questions[q].status === "open", 4000, "open");
   assert.deepEqual(c.bridge.state().questions[q].copies, [{ chat: OWNER_CHAT, id: tg.cards()[1].message_id }]);
 });
@@ -103,7 +103,7 @@ test("a refused send replaces the success steps: no `Sent to`, no answered card,
   // An instruction the relay refuses.
   tg.say("@me-ghost hello");
   await until(() => tg.texts().includes("Not sent: there is no agent called ghost right now."), 4000, "refusal");
-  assert.equal(tg.texts().some((x) => /^Sent to /.test(x)), false);
+  assert.equal(tg.texts().some((x) => /^✅ Sent to /.test(x)), false);
   assert.equal(tg.calls("setMessageReaction").length, 0, "no 👍");
   // A button answer whose asker the relay now refuses.
   const alice = await agent(t, url, tokens.me, "me-alice");

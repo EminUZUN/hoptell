@@ -1016,8 +1016,8 @@ test("pending recipients: held at dispatch and refused at send as an unknown nam
   assert.equal(s.access.active(), false, "no policy and no grants: the realm is inactive, and still the hold applies");
   const refused = await sendTo(bob, "alice", "new send");
   assert.equal(refused.ok, false);
-  assert.equal(refused.error, 'unknown peer "alice" (see list_peers)', "the same answer as an unknown name");
-  assert.equal((await sendTo(bob, "nosuch", "to nobody")).error, 'unknown peer "nosuch" (see list_peers)');
+  assert.equal(refused.error, 'unknown peer "alice" (no such peer, or not available to you): list visible peers with hoptell list or the list_peers tool', "the same answer as an unknown name");
+  assert.equal((await sendTo(bob, "nosuch", "to nobody")).error, 'unknown peer "nosuch" (no such peer, or not available to you): list visible peers with hoptell list or the list_peers tool');
   assert.equal((await sendTo(bob, "carol", "to a member not pending")).ok, true);
   const got = [];
   const alice = await s.connect("alice", "peer", { got });
@@ -1046,7 +1046,7 @@ test("pending recipients after a restore: a new send answers as an unknown name 
   for (const name of ["alice", "carol", "nosuch"]) {
     const r = await sendTo(bob, name, "probe");
     assert.equal(r.ok, false, name);
-    assert.equal(r.error, `unknown peer "${name}" (see list_peers)`, name);
+    assert.equal(r.error, `unknown peer "${name}" (no such peer, or not available to you): list visible peers with hoptell list or the list_peers tool`, name);
   }
   // A sign-in whose claim view went stale: one answer for every target, pending or not.
   const dave = await s.signIn("dave", { groups: [], iat: t0 }, "send");
@@ -1085,7 +1085,7 @@ test("pending recipients: a reply under an existing reply allowance is held; the
   s.access.reloadRestore();
   const held = await sendTo(bob, "alice", "answer", { reply_to: sent.message_id, op: op() });
   assert.equal(held.ok, false);
-  assert.equal(held.error, 'unknown peer "alice" (see list_peers)');
+  assert.equal(held.error, 'unknown peer "alice" (no such peer, or not available to you): list visible peers with hoptell list or the list_peers tool');
   const allowances = JSON.parse(fs.readFileSync(path.join(s.stateDir, "access", "allowances.json"), "utf8")).entries;
   assert.equal(allowances.length, 1);
   assert.equal(allowances[0].used, null, "not consumed by the held reply");

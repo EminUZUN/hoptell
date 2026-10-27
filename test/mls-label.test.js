@@ -161,13 +161,13 @@ test("the advisory glue lint flags a glue that names a file API or a module off 
 });
 
 test("encrypted send results carry the label", () => {
-  assert.match(describeE2ee("bob", { state: "accepted", message_id: "m1" }), /^Sent to bob, encrypted \(experimental, unreviewed\) \[message_id: m1\]/);
+  assert.match(describeE2ee("bob", { state: "accepted", message_id: "m1" }), /^Relay accepted the message for bob, encrypted \(experimental, unreviewed\)\. Message reference: m1\./);
   assert.match(describeE2ee("bob", { state: "held", reason: "a removal is pending", message_id: "m2" }), /encrypted \(experimental, unreviewed\)/);
   assert.match(describeE2ee("bob", { state: "sealed", message_id: "m3" }), /encrypted \(experimental, unreviewed\)/);
   assert.match(describeE2ee("bob", { state: "accepted", message_id: "m4" }, null), /end-to-end encrypted/);
   const fan = { states: { accepted: 2, pending: 0, held: 0, unavailable: 0, refused: 0, expired: 0 }, copies: 2, candidates: 2, excluded: { first_contact: 0, not_encrypted: 0, unavailable: 0 } };
-  assert.match(describeFanout("@reviewer", fan), /^Fan-out to @reviewer, encrypted \(experimental, unreviewed\): sent to 2 of 2 copies/);
-  assert.match(describeFanout("@reviewer", fan, null), /^Fan-out to @reviewer, end-to-end encrypted:/);
+  assert.match(describeFanout("@reviewer", fan), /^Broadcast to @reviewer, encrypted \(experimental, unreviewed\): relay accepted 2 of 2 copies/);
+  assert.match(describeFanout("@reviewer", fan, null), /^Broadcast to @reviewer, end-to-end encrypted:/);
 });
 
 // Not a security boundary (Node's vm is not a sandbox): the review of the glue at its pinned digest

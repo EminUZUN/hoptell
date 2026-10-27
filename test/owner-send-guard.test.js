@@ -21,7 +21,7 @@ import { BIN } from "../lib/config.js";
 import { existingInstall, sleep } from "./helpers.js";
 
 const textOf = (r) => r.content[0].text;
-const NOTE = "Messages sent here may appear as notes in your owner's Telegram chat. They won't appear if your owner has hidden this session or you exceed the message limits. For a question that needs an answer, use ask_owner.";
+const NOTE = "Sent to your owner channel as a note; it may be hidden or dropped by message limits. Use ask_owner for a question or important update.";
 const TEXT_ONLY = /your owner channel takes text only, sent to it by name; nothing was sent/;
 
 function writePolicy(home, encryption) {
@@ -115,7 +115,7 @@ test("refused: without the relay's to_member check, and under a required own-mem
   relay.caps = relay.caps.filter((c) => c !== "to_member");
   const old = await e.call("send_message", { to: "me-owner", message: "old relay" });
   assert.equal(old.isError, true);
-  assert.match(textOf(old), /this relay cannot guarantee the recipient; upgrade it\. Nothing was sent\./);
+  assert.match(textOf(old), /Nothing was sent: this relay cannot restrict delivery to the intended member\. Your user must upgrade the relay to use this feature\./);
   // Another name on the same relay still goes.
   await agent(t, w.url, w.tokens.me, "me-other");
   assert.equal((await e.call("send_message", { to: "me-other", message: "fine" })).isError, false);
@@ -206,7 +206,9 @@ test("hoptell send: guarded the same way", async (t) => {
     new Promise((resolve) => execFile(process.execPath, [BIN, ...args], { env: { PATH: process.env.PATH, HOME: w.home, HOPTELL_HOME: w.home, HOPTELL_RELAY: w.url, HOPTELL_TOKEN: w.tokens.me, HOPTELL_NAME: "me-cli", HOPTELL_NOTIFY: "off", ...extra } }, (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr })));
   const ok = await cli(["send", "me-owner", "from the shell"]);
   assert.equal(ok.code, 0, ok.stderr);
-  assert.ok(ok.stdout.trim().endsWith(NOTE), ok.stdout);
+  // The command line speaks to a person: no "your owner", no ask_owner.
+  assert.ok(ok.stdout.trim().endsWith("\nnote: the owner's Telegram chat may show this as a note; it is not shown if the session is hidden there or over the message limits."), ok.stdout);
+  assert.doesNotMatch(ok.stdout, /ask_owner|your owner/);
   assert.equal((await bridge.waitFor((x) => x.text === "from the shell")).sender.member.id, ME);
   const role = await cli(["send", "@me-owner", "role"]);
   assert.notEqual(role.code, 0);

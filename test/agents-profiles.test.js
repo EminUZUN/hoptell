@@ -235,8 +235,8 @@ test("hoptell agents profiles and profile approve", async (t) => {
   assert.equal(r.code, 1, r.stdout);
   assert.match(r.stdout, /SHA-256 [0-9a-f]{64}/);
   assert.match(r.stdout, /"cli": "codex"/);
-  assert.ok(r.stdout.includes(`WARNING: ${CODEX_APPROVAL_WARNING}`), "the Codex approval warning is shown");
-  assert.match(r.stderr, /Not approved: read the warning above, then approve with: hoptell agents profile approve codex-reviewer --accept-read-risk/);
+  assert.ok(r.stdout.includes(`warning: ${CODEX_APPROVAL_WARNING}`), "the Codex approval warning is shown");
+  assert.match(r.stderr, /not approved: read the warning above, then run hoptell agents profile approve codex-reviewer --accept-read-risk/);
   assert.doesNotMatch(r.stdout, /Approved/);
   assert.equal(readApproved(w.home).profiles?.["codex-reviewer"], undefined, "no approval recorded");
   assert.equal(approvalOf(readProfile(w.home, "codex-reviewer"), readApproved(w.home)), "unapproved");
@@ -244,7 +244,7 @@ test("hoptell agents profiles and profile approve", async (t) => {
   // The second step: with the flag, the warning again, then the approval.
   r = await run("profile", "approve", "codex-reviewer", "--accept-read-risk");
   assert.equal(r.code, 0, r.stderr);
-  const warning = r.stdout.indexOf(`WARNING: ${CODEX_APPROVAL_WARNING}`);
+  const warning = r.stdout.indexOf(`warning: ${CODEX_APPROVAL_WARNING}`);
   assert.ok(warning >= 0, "the warning is shown again");
   assert.ok(warning < r.stdout.indexOf("Approved:"), "before the profile is approved");
   assert.match(CODEX_APPROVAL_WARNING, /^Spawned Codex runs use your macOS account\. .*Access to the Keychain and the device-state sealing key has not been tested\.$/);

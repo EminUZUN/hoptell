@@ -36,7 +36,7 @@ test("a file transfer end to end: encrypted chunks at the relay, the descriptor 
   assert.deepEqual([s.e.state, s.e.bytes, s.e.name, s.e.kind, s.e.from.member], ["staged", bytes.length, "data.bin", "file", alice.id]);
   // The agent sees a fixed text: who, the size, the label; never the key or a path.
   const [m] = await until(() => (bob.s.bob.got.length ? bob.s.bob.got : null), "the message");
-  assert.match(m.text, /a file transfer from alice \(525288 bytes, label "data\.bin"\) is waiting for your user/);
+  assert.match(m.text, /a file transfer from alice; 525288 bytes; label "data\.bin"/);
   assert.equal(m.text.includes(r.transfer_id), false);
   assert.deepEqual(folders(alice.dir), [], "the outbox folder is deleted once the message is accepted");
   // The relay holds ciphertext only.

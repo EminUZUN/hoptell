@@ -300,12 +300,12 @@ test("an agent session: @role under an encryption policy is an encrypted fan-out
   assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /encrypted \(experimental, unreviewed\)/);
   const r = await alice.engine.call("send_message", { to: "@reviewer", message: "fan-out secret" });
   assert.ok(!r.isError, textOf(r));
-  assert.equal(textOf(r), "Fan-out to @reviewer, encrypted (experimental, unreviewed): sent to 1 of 1 copy. Not included: 1 session needs a first direct message (first-contact). 2 sessions matched @reviewer.");
+  assert.equal(textOf(r), "Broadcast to @reviewer, encrypted (experimental, unreviewed): relay accepted 1 of 1 copy. Not included: 1 session needs a first direct message (first-contact). 2 sessions matched @reviewer.");
   let got = "";
   let ack;
   const read = async () => {
     const text = textOf(await bob.engine.call("read_inbox", ack ? { ack } : {}));
-    ack = /Receipt: (\S+)\./.exec(text)?.[1];
+    ack = /Receipt: (\S+)/.exec(text)?.[1];
     return text;
   };
   assert.ok(await until(async () => /fan-out secret/.test((got += await read()))), got);
@@ -320,7 +320,7 @@ test("an encrypted fan-out copy meets gate 3 at the recipient: bob's contacts do
   await new Promise((r) => setTimeout(r, 300));
   assert.match(textOf(await alice.engine.call("send_message", { to: "bob", message: "first contact" })), /encrypted \(experimental, unreviewed\)/);
   const r = await alice.engine.call("send_message", { to: "@reviewer", message: "fan-out to quarantine" });
-  assert.match(textOf(r), /sent to 1 of 1 copy/);
+  assert.match(textOf(r), /relay accepted 1 of 1 copy/);
   const c = await openContacts(bob.dir, { notify: false });
   assert.ok(await until(async () => (await c.status()).messages === 2), "both of alice's messages wait for bob's owner");
   const inbox = textOf(await bob.engine.call("read_inbox"));
@@ -350,5 +350,5 @@ test("hoptell contacts verify --conversation: both owners see the same checkpoin
   assert.equal(cp(a), cp(b), "one history, one number");
   assert.match((await shown(alice, w.members.carol.id))[0], /no encrypted conversation/);
   const lines = await e2eeDoctor({ home: alice.dir, profile, env: alice.env });
-  assert.match(lines[0][1], /1 encrypted conversation\(s\)/);
+  assert.match(lines[0][1], /1 encrypted conversation, /);
 });

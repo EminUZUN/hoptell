@@ -53,8 +53,8 @@ test("/pending: 40 open questions over 5 pages, each once and oldest first; Next
   withQuestions(w.home, 40);
   const { bridge } = await w.start();
   w.tg.say("/pending");
-  await until(() => w.tg.last(/^Waiting for you:/), 4000, "the list");
-  const list = w.tg.last(/^Waiting for you:/);
+  await until(() => w.tg.last(/^⏳ Waiting for you:/), 4000, "the list");
+  const list = w.tg.last(/^⏳ Waiting for you:/);
   const pages = Math.ceil(40 / PENDING_PAGE);
   assert.equal(pages, 5);
   const seen = [];
@@ -90,7 +90,7 @@ test("/pending: 40 open questions over 5 pages, each once and oldest first; Next
   await until(() => acks(w.tg).includes("This list is old. Send /pending for a new one."), 4000, "old page");
   // A new /pending retires the older list's buttons.
   w.tg.say("/pending");
-  await until(() => w.tg.calls("sendMessage").filter((s) => /^Waiting for you:/.test(s.params.text)).length === 2, 4000, "a new list");
+  await until(() => w.tg.calls("sendMessage").filter((s) => /^⏳ Waiting for you:/.test(s.params.text)).length === 2, 4000, "a new list");
   await until(() => w.tg.calls("editMessageReplyMarkup").some((c) => c.params.message_id === list.message_id), 4000, "old buttons retired");
   assert.equal(bridge.state().outbox.length, 0);
 });
@@ -104,9 +104,9 @@ test("/pending with nothing open; Show sends the card again, a limited number of
   const q = await alice.ask("Deploy now?", { choices: ["yes", "no"] });
   await until(() => w.tg.cards().length === 1, 4000, "card");
   w.tg.say("/pending");
-  await until(() => w.tg.last(/^Waiting for you:/), 4000, "list");
-  const list = w.tg.last(/^Waiting for you:/);
-  assert.match(list.params.text, /^Waiting for you:\n• Question 1 · alice: "Deploy now\?" \(just now\)$/);
+  await until(() => w.tg.last(/^⏳ Waiting for you:/), 4000, "list");
+  const list = w.tg.last(/^⏳ Waiting for you:/);
+  assert.match(list.params.text, /^⏳ Waiting for you:\n• Question 1 · alice: "Deploy now\?" \(just now\)$/);
   const show = list.params.reply_markup.inline_keyboard[0][0];
   assert.equal(show.text, "Show question 1");
   for (let i = 1; i <= SHOW_PER_PAIRING; i++) {
@@ -123,7 +123,7 @@ test("/pending with nothing open; Show sends the card again, a limited number of
   // Any copy answers; then Show says the question is closed.
   w.tg.press(w.tg.cards()[1], 0);
   await until(() => envs(alice, w.key).some((e) => e.kind === "answer" && e.text === "yes"), 4000, "answer");
-  await until(() => acks(w.tg).includes("Sent."), 4000, "a button answer is acknowledged");
+  await until(() => acks(w.tg).includes("✅ Sent."), 4000, "a button answer is acknowledged");
   w.tg.press(list, 0);
   await until(() => acks(w.tg).includes("Already answered."), 4000, "closed");
 });
@@ -139,17 +139,17 @@ test("the owner's message gets a 👍 and becomes a reply route; a refused react
   const react = w.tg.calls("setMessageReaction")[0].params;
   assert.equal(react.message_id, u.message.message_id);
   assert.deepEqual(react.reaction, [{ type: "emoji", emoji: "👍" }]);
-  assert.equal(w.tg.texts().some((x) => /^Sent to /.test(x)), false, "no text when the 👍 worked");
+  assert.equal(w.tg.texts().some((x) => /^✅ Sent to /.test(x)), false, "no text when the 👍 worked");
   // A reply to the owner's own message goes to the same agent.
   w.tg.say("and the linter", { reply: { message_id: u.message.message_id, text: "@alice please run the tests" } });
   await alice.waitFor((m) => m.from === "me-owner" && /and the linter/.test(m.text));
   await until(() => w.tg.calls("setMessageReaction").length === 2, 4000, "the second 👍"); // before the next one is refused
-  // A refused reaction: "Sent to alice." in reply, silent, itself a route.
+  // A refused reaction: "✅ Sent to alice." in reply, silent, itself a route.
   w.tg.failNext.setMessageReaction = [400];
   const u2 = w.tg.say("@alice one more thing");
   await alice.waitFor((m) => m.from === "me-owner" && /one more thing/.test(m.text));
-  await until(() => w.tg.last(/^Sent to alice\.$/), 4000, "fallback");
-  const fb = w.tg.last(/^Sent to alice\.$/);
+  await until(() => w.tg.last(/^✅ Sent to alice\.$/), 4000, "fallback");
+  const fb = w.tg.last(/^✅ Sent to alice\.$/);
   assert.equal(fb.params.reply_parameters?.message_id ?? fb.params.reply_to_message_id, u2.message.message_id);
   assert.equal(fb.params.disable_notification, true);
   w.tg.say("via the fallback", { reply: w.tg.replyTo(fb) });
@@ -190,7 +190,7 @@ test("routing by message id only: a copy lost in a crash, a note that looks like
   const crashed = new Set();
   const fault = (p) => {
     if (p !== "card-sent") return;
-    const k = w.tg.cards().at(-1).params.text.split("\n")[1];
+    const k = w.tg.cards().at(-1).params.text.split("\n").filter((l) => !l.startsWith("Sent again"))[1]; // the question
     if (!crashed.has(k)) {
       crashed.add(k);
       throw new Crash(p);

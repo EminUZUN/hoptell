@@ -73,7 +73,7 @@ export function fakeTelegram({ webhook = "" } = {}) {
     /** The last sendMessage whose text matches `re`. */
     last: (re) => sent.filter((s) => s.method === "sendMessage" && re.test(s.params.text)).at(-1),
     calls: (method) => sent.filter((s) => s.method === method),
-    cards: () => sent.filter((s) => s.method === "sendMessage" && /^❓ Question \d+ · .* asks[^\n]*:\n/.test(s.params.text)),
+    cards: () => sent.filter((s) => s.method === "sendMessage" && /^❓ Question \d+ · ([^\n]* asks:|[^\n]*\nSent again[^\n]*)\n/.test(s.params.text)),
     texts: () => sent.filter((s) => s.method === "sendMessage").map((s) => s.params.text),
     replyTo: (card) => ({ message_id: card.message_id, text: card.params.text }),
     client(label = "bridge") {

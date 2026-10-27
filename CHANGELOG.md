@@ -2,48 +2,48 @@
 
 ## Unreleased
 
-- Contacts: eligible messages from your own member now bypass the default hold. When the relay
-  states that the sender signed in as the same member as the receiving session (same member id
-  and realm, with neither side hosted), the message can reach the agent without a grant. Other
-  senders follow the usual contacts policy. Blocks, a default of `block` and `required`
-  encryption still apply. `HOPTELL_CONTACTS_SELF=hold` disables this exception; an invalid value
-  prevents startup. Spawned agent runs take the value of the session that spawned them.
+- Claude Code plugin: skills and slash commands for reviewer agents and the owner channel.
+  The skills `hoptell-reviewers`, `hoptell-owner-channel` and `hoptell-safe-ops` cover starting
+  and stopping reviewers, asking the owner over Telegram, and stopping sessions safely. The
+  commands are `/hoptell:reviewers`, `/hoptell:review`, `/hoptell:ask-owner` and
+  `/hoptell:peers`. Reviewers start read-only: Codex with `-s read-only -a never`, Claude Code
+  in plan mode. The skills come with the plugin, not with the npm package. See "Working with
+  reviewer agents" in the README.
+- Contacts: messages from your own member now skip the default hold. When the relay states that
+  the sender signed in as the same member as the receiving session (same member id and realm,
+  neither side hosted), the message reaches the agent without a grant. Blocks, a default of
+  `block` and `required` encryption still apply. `HOPTELL_CONTACTS_SELF=hold` turns this off;
+  an invalid value stops startup. Spawned agent runs use the setting of the session that
+  spawned them.
 - Contacts: a held message now wakes the receiving session like a delivered one, with a fixed
-  notice and never its text: the hook and tmux notices, the channel notice, and the end of a
-  `wait_for_message` call or of `hoptell listen`. `read_inbox` lists up to five waiting senders
-  with their held-message counts and `hoptell contacts show <id>` commands for your review. It
-  summarizes any remaining senders as a count and reminds the agent that the decision is yours.
-  The sender is named only when the relay authenticated it as a member. The sender's
-  acknowledgement is unchanged and does not reveal whether you held, blocked or accepted the
-  message.
-- Contacts: in a new install, `hoptell tmux` as the first hoptell command could make the home look
-  like an existing one, where every sender reaches your sessions. It now sets up the contacts
-  before it creates anything, as the other commands do.
-
-- Session titles: `HOPTELL_TITLE=<text>` shows a short title next to the session's name in other
-  sessions' `list_peers`, for example `emin-mac-61034 (host: mac) title: "review docs" online`.
-  The title is a label only: messages still go to the name, and no access decision reads it.
-  hoptell removes control and invisible characters and keeps at most 80 characters.
-  `HOPTELL_TITLE=off` sends none. Titles need an updated relay; earlier relays ignore them.
-- Claude Code session names as titles: with `HOPTELL_TITLE_AUTO=on`, a session with the hoptell
-  plugin uses its custom name (`claude --name`, `/rename`). The plugin has a new
-  `UserPromptSubmit` hook that copies only the name and the session id. Claude Code does not say
-  whether the user, a hook or a tool set the custom name. Another hook may derive it from prompt
-  text. With `HOPTELL_TITLE_AUTO=on`, hoptell stores and shares that title. The hooks never copy
-  the prompt field. Off by default; an explicit `HOPTELL_TITLE` wins. A live session updates its title at the relay with
-  the new `set_title` frame (at most 10 changes a minute per session, 60 per member).
-- `list_peers` now shows the host as `(host: <host>)`.
-- The hoptell icon: MCP clients that show server icons get it in `serverInfo` (a 64 px PNG as a
-  `data:` URI), and the MCP Registry entry links to it. `hoptell ui`, `hoptell relay admin ui` and
-  the hosted owner page have a favicon and an Apple touch icon, and the Telegram Mini App has a
-  favicon. On Linux, desktop notifications show the icon. The hosted owner page's
-  Content-Security-Policy now also allows `img-src 'self'`.
-- The Claude Code plugin ships skills and slash commands. Three skills, `hoptell-reviewers`,
-  `hoptell-owner-channel` and `hoptell-safe-ops`, cover working with reviewer agents, asking
-  the owner over Telegram, and stopping and restarting sessions safely. The new commands are
-  `/hoptell:reviewers`, `/hoptell:review`, `/hoptell:ask-owner` and `/hoptell:peers`. They come
-  with the plugin, not with the npm package. See "Working with reviewer agents" in the README.
-  Reviewers start read-only: Codex with `-s read-only -a never`, Claude Code in plan mode.
+  notice that never includes the text. `read_inbox` lists up to five waiting senders with their
+  counts and the `hoptell contacts show <id>` command for each, and reminds the agent that the
+  decision is yours. A sender is named only when the relay authenticated it as a member. The
+  sender still can't tell whether you held, blocked or accepted the message.
+- Session titles: `HOPTELL_TITLE=<text>` shows a title next to the session's name in
+  `list_peers`, for example `emin-mac-61034 (reported host: mac) title: "review docs" online`.
+  A title is a label only: messages still go to the name, and no access decision reads it.
+  hoptell removes control and invisible characters and keeps at most 80 characters;
+  `HOPTELL_TITLE=off` sends none. Needs an updated relay; earlier relays ignore titles.
+- `list_peers` now shows the host as `(reported host: <host>)`.
+- Session titles from Claude Code: with `HOPTELL_TITLE_AUTO=on` (off by default), a plugin
+  session uses its custom name (`claude --name`, `/rename`) as its title. A new
+  `UserPromptSubmit` hook copies only that name and the session id, never the prompt. The hook
+  input doesn't say who set the custom name: if another hook sets it from prompt text, that
+  text becomes the title. An explicit `HOPTELL_TITLE` wins. A live session sends a new title
+  with the `set_title` frame (at most 10 changes a minute per session, 60 per member); others
+  see it the next time this session lists peers or reconnects.
+- The hoptell icon is shown in MCP clients that display server icons (`serverInfo`), in the MCP
+  Registry entry, as the favicon of `hoptell ui`, `hoptell relay admin ui`, the hosted owner page
+  and the Telegram app, and in Linux desktop notifications. The hosted owner page's
+  Content-Security-Policy now allows `img-src 'self'`.
+- PRIVACY.md: session titles and own-member contacts trust.
+- Fixed: in a new install, running `hoptell tmux` as the first hoptell command could set the home
+  up like an existing install, where every sender reaches your sessions. It now sets up the
+  contacts first, as the other commands do.
+- Fixed: with a members or policy file configured, a `kill -HUP` could stop the relay after it
+  began listening but before startup finished. The signal is now kept, and the reload runs once
+  startup is complete.
 
 ## 0.3.0 (2026-10-15)
 

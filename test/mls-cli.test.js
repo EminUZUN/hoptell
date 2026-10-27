@@ -72,7 +72,7 @@ test("enroll, list, verify with a safety number, then pin on confirmation", asyn
   assert.equal(ea.code, 0, ea.stderr);
   assert.match(ea.stdout, /Enrolled device [a-z2-7]{26} of member m_/);
   assert.match(ea.stdout, /Fingerprint: (\d{5} ){11}\d{5}/);
-  assert.match(ea.stdout, /20 KeyPackage\(s\) published/);
+  assert.match(ea.stdout, /20 KeyPackages published/);
   assert.equal((await run(bob, ["device", "enroll"])).code, 0);
   const st = await run(alice, ["device", "status"]);
   assert.match(st.stdout, /\(active\)/);
@@ -84,17 +84,22 @@ test("enroll, list, verify with a safety number, then pin on confirmation", asyn
   const number = /Safety number with \S+: ((\d{5} ){11}\d{5})/.exec(shown.stdout)?.[1];
   assert.ok(number, shown.stdout);
   assert.match(shown.stdout, /--yes --how in-person/);
+  // Two complete commands, never "in-person|out-of-band" (a pasted line would be a shell pipeline).
+  assert.match(shown.stdout, /^ {2}hoptell contacts verify m_\S+ --yes --how in-person --set [0-9a-f]{32}$/m);
+  assert.match(shown.stdout, /^ {2}hoptell contacts verify m_\S+ --yes --how out-of-band --set [0-9a-f]{32}$/m);
+  assert.doesNotMatch(shown.stdout, /\|/);
   assert.equal(fs.readFileSync(path.join(alice.HOPTELL_HOME, "contacts.json"), "utf8").includes('"pins"'), false, "nothing is pinned before the confirmation");
   // bob computes the same number from his side.
   const fromBob = await run(bob, ["contacts", "verify", w.members.alice.id]);
   assert.equal(/Safety number with \S+: ((\d{5} ){11}\d{5})/.exec(fromBob.stdout)?.[1], number);
   assert.equal((await run(alice, ["contacts", "verify", w.members.bob.id, "--yes"])).code, 1, "--how is required");
-  assert.equal((await run(alice, ["contacts", "verify", w.members.bob.id, "--yes", "--how", "in-person"])).code, 1, "--set is required");
+  const noSet = await run(alice, ["contacts", "verify", w.members.bob.id, "--yes", "--how", "in-person"]);
+  assert.equal(noSet.code, 1, "--set is required");
   const code = /--set ([0-9a-f]{32})/.exec(shown.stdout)?.[1];
   assert.ok(code, shown.stdout);
   const pinned = await run(alice, ["contacts", "verify", w.members.bob.id, "--yes", "--how", "in-person", "--set", code]);
   assert.equal(pinned.code, 0, pinned.stderr);
-  assert.match(pinned.stdout, /Pinned 1 device\(s\)/);
+  assert.match(pinned.stdout, /Pinned 1 device of /);
   const doc = JSON.parse(fs.readFileSync(path.join(alice.HOPTELL_HOME, "contacts.json"), "utf8"));
   assert.deepEqual([doc.pins[0].member, doc.pins[0].how, doc.pins[0].devices.length], [w.members.bob.id, "in-person", 1]);
   assert.doesNotMatch(pinned.stdout + shown.stdout, /[A-Za-z0-9+/]{43}=/, "no key is printed");

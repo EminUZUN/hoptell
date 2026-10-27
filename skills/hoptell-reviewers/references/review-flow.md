@@ -38,6 +38,18 @@ today's bytes with the digest. It does not validate the reply.
   answered yet.
 - If reviewers disagree, show both views to the user. Do not pick one silently.
 
+## Contacts and held messages
+
+With managed contacts (a new install, or after `hoptell contacts init`) and the default
+self-member setting, requests and replies between sessions authenticated by the relay as the
+same member in the same realm, with neither session hosted, can pass without a grant. Each
+receiving session still applies its own blocks, encryption requirements and default policy.
+`HOPTELL_CONTACTS_SELF=hold` disables this exception; messages then follow that session's usual
+contacts policy, as messages from shared-token senders and other members do. A held request
+wakes the reviewer with a notice; its text is not shown. Ask the user to inspect
+`hoptell contacts` and `hoptell contacts show <id>` for the available decisions. The decision is
+the user's: do not run `hoptell contacts allow` from this session.
+
 ## Many files
 
 - Send one snapshot per message. Keep one request id per file.

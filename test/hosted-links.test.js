@@ -40,6 +40,19 @@ test("after the replace, then an ordinary reopen: the new table is there and a r
   assert.equal(readLinks(d).counter, reopened.counter, "no second generation");
 });
 
+test("an unknown outcome names a check command that runs: with the same --state-dir, shell-quoted", async (t) => {
+  const d = path.join(dirOf(t), "it's here");
+  fs.mkdirSync(d);
+  const e = await link(d, { issuer: ISS, subject: "b", member: HUGO }, { fault: dirFsyncFails }).catch((x) => x);
+  assert.equal(e.phase, "after-replace");
+  const { unknownOutcome } = await import("../lib/hostedcli.js");
+  const shown = unknownOutcome(e, d);
+  assert.equal(shown.exitCode, 1);
+  assert.ok(shown.message.endsWith(`; check with hoptell mcp-hosted --experimental list --state-dir '${d.replace(/'/g, "'\\''")}'`), shown.message);
+  const before = Object.assign(new Error("x"), { phase: "before-replace" });
+  assert.equal(unknownOutcome(before, d), before, "a refused write stays refused");
+});
+
 test("after the replace, then a loss of unsynced metadata (the old file back): recovery reads the actual table and applies the change once", async (t) => {
   const d = dirOf(t);
   await link(d, { issuer: ISS, subject: "a", member: HANNA });

@@ -80,6 +80,16 @@ test("browser sign-in uses the relay's client registration; the token source sig
   await assert.rejects(tokenSource({ relayUrl, home, profile, keychainBackend })(), SignInError);
 });
 
+test("refused client credentials: the advice names every option a new client-credentials sign-in needs", async (t) => {
+  const clients = { "hoptell-cli": {}, "hoptell-relay": { secret: "rs" }, "build-bot": { secret: "bot-secret" } };
+  const { relayUrl, home, profile, keychainBackend } = await setup(t, { clients });
+  await login({ relayUrl, home, profile, mode: "service", service: { clientId: "build-bot", clientSecret: "bot-secret" }, keychainBackend });
+  clients["build-bot"].secret = "rotated"; // the provider no longer accepts the stored secret
+  await assert.rejects(tokenSource({ relayUrl, home, profile, keychainBackend })(), {
+    message: "the client credentials were refused (invalid_client): check them, then sign in again with --client-credentials --client-id <id> --client-secret-file <file>",
+  });
+});
+
 test("refreshes from several processes are serialized and never reuse a rotated refresh token", async (t) => {
   const { p, relayUrl, home, profile } = await setup(t, { refreshDelayMs: 50 });
   const passphrase = "correct horse battery staple";

@@ -2,9 +2,9 @@
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for security problems. Report them privately to the
-maintainers through the repository host's confidential issue or private security
-advisory feature. Include:
+Please don't open a public issue for security problems. Report them privately through
+[GitHub's private vulnerability reporting](https://github.com/EminUZUN/hoptell/security/advisories/new).
+Include:
 
 - what an attacker can do and what access they need (network access to the relay, a valid
   token, a local account on a peer machine, ...)
@@ -16,10 +16,12 @@ We aim to acknowledge reports within 7 days.
 
 hoptell delivers text written by one AI agent to another AI agent that may act on it.
 
-**Trusted:** the relay operator, and every holder of a valid token. A token holder can
-message any peer. With a shared `HOPTELL_TOKEN` they can also use any peer name; with
-per-member tokens they can only use their own `<member>` / `<member>-*` names (the relay
-refuses overlapping member names). Roles are self-chosen routing labels, not permissions.
+**Trusted:** the relay operator, and every holder of a valid token. A token holder can send to
+any peer that the relay's policy, the recipient's grants and the recipient's contacts allow.
+With a shared `HOPTELL_TOKEN` they can also use any peer name. With per-member tokens they can
+use only their own `<member>` and `<member>-*` names (the relay refuses overlapping member
+names). Roles and session titles are self-chosen labels, not permissions or identity. What
+reaches an agent is then up to the receiving machine's contacts (see below).
 
 **Protected against:**
 
@@ -29,6 +31,14 @@ refuses overlapping member names). Roles are self-chosen routing labels, not per
   a message boundary, or inject terminal control characters through the tmux injector
 - other local users on a peer machine: inboxes are per-user (`~/.hoptell`, 0700/0600),
   and symlinked or foreign-owned directories are refused
+- senders you have not allowed: in a new install, the receiving machine holds their messages
+  until you decide (`hoptell contacts`). The agent is woken with a fixed notice and never sees
+  the text. By default, messages that the relay states come from your own member, in the same
+  realm, with neither side hosted, skip this hold. `HOPTELL_CONTACTS_SELF=hold` removes that
+  exception; existing grants still apply. Blocks and `required` encryption still apply.
+- forged owner messages: an agent treats an answer or instruction as yours only when it is
+  signed by a bridge key you pinned with `hoptell telegram trust`. Statuses the bridge
+  generates (expired, cancelled) are marked as automatic.
 - runaway agents: 30 messages per 10 seconds per connection, 100,000 characters per
   message, bounded queues, at most 50 unconfirmed messages per receiver
 - typing into the wrong place: the tmux injector targets one pane by id, and holds the paste
@@ -43,8 +53,11 @@ refuses overlapping member names). Roles are self-chosen routing labels, not per
 - a token holder writing persuasive instructions: hoptell labels messages as coming from
   another agent, but the receiving agent's own permission settings are the real boundary
 - availability: there is one relay with in-memory queues
+- a relay that lies about who signed in: grants and own-member trust rely on the relay's
+  statement of the sender's member id
+- Telegram: owner-channel chats are not end-to-end encrypted, and Telegram can read them
 
-**Experimental encrypted messages (not released):** with `HOPTELL_EXPERIMENTAL_E2EE=1` and a
+**Experimental encrypted messages (off by default):** with `HOPTELL_EXPERIMENTAL_E2EE=1` and a
 relay started with `--experimental-e2ee` (or with `HOPTELL_EXPERIMENTAL_E2EE` set in the relay's
 environment), direct messages and encrypted fan-out are end-to-end encrypted with MLS (suite
 0x004D only). Larger file transfers use their own encryption of the file bytes (a key for that
@@ -93,8 +106,8 @@ edit the files, so none of these proves that a person decided. `hoptell ui` list
 launch link and an in-memory session cookie; every form carries a token bound to the session and
 to the choices it offered. Browsers send a `127.0.0.1` cookie to every port on that address, so a
 local server that the browser visits during the session receives the cookie and could replay it;
-this is outside what the UI protects against. The question in the client (`HOPTELL_ELICITATION=read_inbox`, off by
-default) offers only `allow-once` and `later`, and a client may answer it automatically.
+this is outside what the UI protects against. The question in the client
+(`HOPTELL_ELICITATION=read_inbox`, off by default) offers only `allow-once` and `later`, and a client may answer it automatically.
 
 ## Hardening checklist
 
@@ -104,3 +117,10 @@ default) offers only `allow-once` and `later`, and a client may answer it automa
 - Keep `.env` files `chmod 600` and out of version control.
 - Prefer agents that ask for approval on risky actions; avoid auto-approve modes for
   agents that receive messages from people you do not fully trust.
+- On an install that existed before contacts, run `hoptell contacts init` so unknown senders
+  are held.
+- Set `HOPTELL_CONTACTS_SELF=hold` when one of your own sessions reads untrusted input (web
+  pages, issues, other people's files), so it can't instruct your other sessions without your
+  decision.
+- Pin an owner-channel key only from the pin that `hoptell telegram setup` printed on your
+  bridge machine.

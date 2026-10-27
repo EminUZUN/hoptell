@@ -185,15 +185,20 @@ test("verify_review_set: match, changed (which files), expired, unknown", { skip
   const v = (id = sent.review_set_id) => m.call("verify_review_set", { review_set_id: id });
   const match = await v();
   assert.equal(match.state, "match");
-  assert.match(match.message, /match the recorded snapshot/);
+  assert.equal(match.message, "All file bytes match the recorded review set. This does not validate or apply a proposal.");
   fs.writeFileSync(path.join(m.dir.app, "b.js"), "b changed\n");
   const changed = await v();
   assert.equal(changed.state, "changed");
   assert.deepEqual(changed.changed.map((c) => c.file), ["app:b.js"]);
-  assert.equal((await v(crypto.randomUUID())).state, "unknown");
+  assert.match(changed.message, /^At least one file differs from the recorded review set\./);
+  const unknown = await v(crypto.randomUUID());
+  assert.equal(unknown.state, "unknown");
+  assert.equal(unknown.message, "No local record was found for this review_set_id. No files were checked.");
   const rec = m.store.read(sent.review_set_id);
   m.store.update(rec, { created_at: Date.now() - 9 * 86400_000, expires_at: Date.now() - 2 * 86400_000 });
-  assert.equal((await v()).state, "expired");
+  const expired = await v();
+  assert.equal(expired.state, "expired");
+  assert.equal(expired.message, "This review-set record expired. No files were checked. Send a new review set.");
 });
 
 test("the reviewer's check: every text against its sha256; the digest matches the sender's", { skip }, async (t) => {

@@ -1,14 +1,14 @@
 ---
 name: hoptell-safe-ops
-description: This skill should be used when stopping, restarting or cleaning up hoptell agent sessions, relays or tmux sessions, when the user asks "why was my name refused", "what does 4002 mean", "the session waits for its name", "kill the hoptell processes", "stop all hoptell stuff", when the same hoptell messages are shown again, or after switching to a member token. It covers stopping only what was started, peer names, close code 4002, name leases and receipts. Starting, stopping or restarting reviewer agents is covered by hoptell-reviewers. It is not for processes unrelated to hoptell.
+description: This skill should be used when stopping, restarting or cleaning up hoptell sessions or relays, including leftover hoptell-* tmux sessions from earlier runs; when resolving refused names, close code 4002 or name leases; when handling repeated inbox messages; or when switching to member tokens. Covers target identity, safe shutdown and receipts. Use hoptell-reviewers to stop, restart or resume reviewers within the current review workflow; use this skill for cleanup of leftover sessions and operational troubleshooting. Excludes unrelated processes.
 user-invocable: false
 ---
 
 # Safe operations with hoptell
 
-A machine that runs agents may also run a live relay or an owner channel bridge. The relay keeps
-offline messages in memory. Stopping it by mistake drops them. Act only on what this session
-started.
+A machine running agents may also run a live relay or owner channel bridge. The relay keeps
+offline messages in memory; stopping it drops them. Stop only targets covered by the user's
+request or this task's agreed cleanup, and verify each target's identity first.
 
 ## Stop only what you started
 
@@ -25,7 +25,7 @@ task started.
 - Do not stop processes by pattern (`pkill -f hoptell`, `killall node` and the like). A pattern
   can match the user's relay, bridge or other agents, and a relay drops the offline messages it
   holds in memory.
-- Before stopping something not started here, ask the user.
+- Before stopping a target outside the user's request or this task's agreed cleanup, ask the user.
 
 ## Restart
 
@@ -37,7 +37,7 @@ task started.
 
 ## Names and close code 4002
 
-- A peer name has letters, digits, `_` and `-`.
+- A peer name is 1 to 64 characters. Start with a letter or digit; use only letters, digits, `_` and `-`.
 - With a member token, a name must be `<member>` or start with `<member>-`, such as
   `alice-reviewer-1`. Any other name is refused with close code 4002, and the session does not
   connect.

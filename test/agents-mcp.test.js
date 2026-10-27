@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { killSupervisor } from "./agents-helpers.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -268,8 +269,7 @@ test("an owner's MCP server start sweeps first: an agent orphaned by a killed su
   const rec = await startSupervisor(w.home, run, { env: { PATH: process.env.PATH, HOME: w.home, HOPTELL_ENV: p.env, HOPTELL_HOME: w.home, HOPTELL_NOTIFY: "off" } });
   t.after(() => rec.agent && sameIdentity(rec.agent) && signalChecked(rec.agent, "SIGKILL", { group: true }));
   assert.equal(rec.state, "running");
-  assert.equal(signalChecked(rec.supervisor, "SIGKILL"), "signalled");
-  for (let i = 0; i < 300 && sameIdentity(rec.supervisor); i++) await sleep(50);
+  assert.equal(await killSupervisor(w.home, rec), "signalled");
   assert.ok(sameIdentity(rec.agent), "the agent outlived its supervisor");
   // The restart: the server sweeps before it serves.
   const s = await w.mcp("owner");

@@ -1,6 +1,6 @@
 ---
 name: hoptell-owner-channel
-description: This skill should be used when an agent needs the owner's answer through hoptell, when the user asks to "ask me on Telegram", "tell my owner", "ping me when it's done", "notify the owner", "send me a note", when the user will be away and wants to be reached or asked through the bot, when an owner channel answer arrives, or when choosing between the ask_owner tool and a plain send_message note to the owner channel bridge. It covers what to send, limits, secrets and how to treat answers. It is not for messages to other agents, for setting up the bridge (`hoptell telegram`), or for work on a Telegram bot's own code.
+description: This skill should be used when the user wants questions or updates through the hoptell Telegram owner channel (for example, "ask me on Telegram" or "ping me when it's done"), when the user is stepping away and wants to be reached, when owner answers arrive, or when choosing between ask_owner and a note to the bridge. Covers limits, secrets and the authority of replies. Excludes peer messages, bridge setup and Telegram bot development.
 user-invocable: false
 ---
 
@@ -32,9 +32,9 @@ Call `ask_owner` with:
 - `expires_in_s` (optional): how long the question stays open, 300 to 604800 seconds. The
   default is one day.
 
-The call returns at once with a reference. The answer arrives later as a hoptell message in
-reply to it, and this session is notified like any other message. Do not wait in a loop. Carry
-on with other work, or end the turn.
+The call returns a reference without waiting for an answer. Any answer or status arrives later
+through hoptell; follow this session's delivery instructions. Do not poll for it. Continue
+independent work, or end the turn when this session has an active notification path.
 
 Keep the question and the facts needed to answer it inside `ask_owner`. Notes are optional
 background and may go unread. If the necessary explanation is too long, use the current
@@ -62,6 +62,7 @@ owner.
 
 ## Notes
 
-To send a note, call `send_message` with `to` set to the bridge's name (for example
-`alice-owner`; by default it is `owner` with the member's prefix, and the user knows it). Notes are text only and go by
-name. Roles and files are refused. The bot cuts a note at 3,000 characters.
+To send a note, call `send_message` with `to` set to the configured bridge name, such as
+`alice-owner`. Do not infer it from the member's name; ask the user if it is unavailable.
+Notes are text only and must go by name; roles and files are refused. The bot truncates
+notes at 3,000 characters.

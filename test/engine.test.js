@@ -139,7 +139,7 @@ test("tool results pass through unchanged, including structured file-tool result
   assert.deepEqual(catalog.map((x) => x.name), ["list_peers", "send_message", "wait_for_message", "read_inbox", "ack_messages", "send_file", "verify_snapshot", "send_review_set", "verify_review_set"]);
   assert.equal(catalog.find((x) => x.name === "send_file").annotations.openWorldHint, true);
   assert.match(catalog.find((x) => x.name === "read_inbox").description, /listen --session "/);
-  assert.match(sam.instructions(), /as peer "sam"/);
+  assert.match(sam.instructions(), /Your hoptell peer name is "sam"/);
   const sent = await sam.call("send_message", { to: "rev", message: "plain" });
   assert.deepEqual(Object.keys(sent).sort(), ["content", "isError"]);
   assert.equal(sent.isError, false);
@@ -170,7 +170,7 @@ test("lifecycle: the first detach keeps the engine; the last stops it and frees 
   assert.equal(e.state, "running");
   const started = Date.now();
   h2.detach(); // the last one: the engine stops
-  assert.match(textOf(await waiting), /No messages/);
+  assert.match(textOf(await waiting), /Wait ended without returning messages/);
   assert.ok(Date.now() - started < 5000, "the wait settled on stop");
   await e.stop(); // the same stop
   assert.equal(e.state, "stopped");

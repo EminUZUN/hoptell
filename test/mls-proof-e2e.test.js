@@ -70,7 +70,7 @@ test("A9 end to end: the CLI's replenish attaches with a proof on its own connec
   await cmd(["enroll"]);
   await cmd(["replenish"]);
   assert.deepEqual(frames.at(-1), ["proof_challenge:attach", "e2ee_attach", "kp_status"], "attached first, on the command's own connection");
-  assert.match(out.at(-1), /0 KeyPackage\(s\) published; 20 available/);
+  assert.match(out.at(-1), /0 KeyPackages published; 20 available/);
   out.length = 0;
   await cmd(["status"]);
   assert.match(out[0], /\(active\)/);

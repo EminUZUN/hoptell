@@ -1,3 +1,3 @@
 ---
 ---
-No message arrived within the wait.
+Wait ended without returning messages (limit: 300s).

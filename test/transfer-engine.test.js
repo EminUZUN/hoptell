@@ -52,7 +52,7 @@ function reader(engine) {
   let receipt = null;
   return async () => {
     const out = textOf(await engine.call("read_inbox", receipt ? { ack: receipt } : {}));
-    receipt = /Receipt: (\S+?)\. When/.exec(out)?.[1] ?? null;
+    receipt = /Receipt: (\S+)\n/.exec(out)?.[1] ?? null;
     return out;
   };
 }
@@ -73,7 +73,7 @@ test("an agent session sends a file with send_transfer; the peer's session shows
   assert.match(textOf(r), /"state": "accepted"/);
   let got = "";
   const read = reader(bob.engine);
-  assert.ok(await until(async () => /a file transfer from alice \(600000 bytes, label "archive\.tar"\) is waiting for your user/.test((got += await read()))), got);
+  assert.ok(await until(async () => /a file transfer from alice; 600000 bytes; label "archive\.tar"/.test((got += await read()))), got);
   assert.equal(got.includes(root), false, "no path of the sender");
   const staging = createStaging({ home: bob.dir });
   const [e] = await until(() => (staging.list()[0]?.state === "staged" ? staging.list() : null));

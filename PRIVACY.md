@@ -57,12 +57,13 @@ process. None of this is sent to the relay.
   relay's configuration and is sent to clients. Apart from the broker and access files, the
   relay's database (its audit log and the experimental encrypted-message data) and the restore
   files described below, it holds no messages, names or tokens.
-  Session titles: a title can contain any text you typed into it, or a Claude Code custom name
-  that another hook derived from prompt text, and every peer that may see the session's name sees its title. The relay keeps
-  it in memory, with the session's hold on its name, and drops it when that hold ends; it is not
-  written to the relay's database or logs. It also appears in other sessions' `list_peers`
-  output, which their agent clients keep in their transcripts. `HOPTELL_TITLE=off` sends none.
-  Name leases and reservations (which session holds a name, for up to 30 seconds after its
+- Session titles: a title can contain any text you typed into it, or a Claude Code custom name
+  that another hook derived from prompt text, and every peer that may see the session's name
+  sees its title. The relay keeps it in memory, with the session's hold on its name, and drops
+  it when that hold ends; it is not written to the relay's database or logs. It also appears in
+  other sessions' `list_peers` output, which their agent clients keep in their transcripts.
+  `HOPTELL_TITLE=off` sends none.
+- Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender
   was authenticated: the sender's member id and member name, or that a shared token was used,
@@ -98,12 +99,12 @@ process. None of this is sent to the relay.
     protection, so do it only as a deliberate reset, not as routine cleanup. Member and shared
     tokens record nothing here;
   - pending contact requests: the sender's and recipient's member ids, the sender's member name,
-    a reason from a fixed list and times. They are removed after seven days or when answered;
+    a reason from a fixed list and times. They are removed after 7 days or when answered;
   - a count of requests per sender, for the current and the previous day;
   - reply allowances: two member ids and the message reference. Once used, they also hold the
     reply's message and delivery references, its operation id, a SHA-256 of its recipient, text,
-    reply reference and time-to-live, and the time of use. Unused ones are removed seven days
-    after the original message was released, used ones seven days after the reply.
+    reply reference and time-to-live, and the time of use. Unused ones are removed 7 days
+    after the original message was released, used ones 7 days after the reply.
 
   The relay removes expired entries in its periodic cleanup (every 15 seconds by default). The
   policy file belongs to the operator.
@@ -141,7 +142,7 @@ process. None of this is sent to the relay.
     each one taken (the requesting member and device, and the device it belongs to). The
     record ends when the package is used or expires, or when the reservation is given up (by
     the requester, after an hour without a group change, or when the device's key changes or it
-    is revoked). It is removed once the package has expired and seven days have passed since the
+    is revoked). It is removed once the package has expired and 7 days have passed since the
     record ended;
   - for each encrypted conversation: the two member ids, its group ids and the devices in each
     group; the group changes (MLS commits, with the member and device that made them), which
@@ -154,7 +155,7 @@ process. None of this is sent to the relay.
     size and times. To check access again before delivery, it also records the sender's sign-in
     at the time the message was accepted: the member id, the issuer and subject of a provider
     sign-in, and the id of a broker sign-in, when there is one. A waiting message is removed when
-    the recipient's device acknowledges it; otherwise it expires seven days (plus five minutes
+    the recipient's device acknowledges it; otherwise it expires 7 days (plus 5 minutes
     for clock differences) after it was accepted and is no longer delivered. Group invitations
     (MLS Welcomes) and group changes waiting for a device expire 30 days after they were queued.
     Cleanup removes expired messages.
@@ -175,7 +176,7 @@ process. None of this is sent to the relay.
     target (a member name, a member name with a device id, or a restore id), the outcome, and
     fixed codes and counts. It holds no message text, tokens, token digests, key material or
     grants contents. Each row carries a hash of the one before it. The relay deletes rows older
-    than 365 days, and the oldest rows beyond 100,000, in its maintenance (every five minutes
+    than 365 days, and the oldest rows beyond 100,000, in its maintenance (every 5 minutes
     while it runs); the last deleted row's number and hash are kept.
   - `members` commands and the admin views reach the running relay through a socket in
     `<state dir>/admin/` (0700), which only the relay's OS user can open. The views show the
@@ -199,7 +200,7 @@ process. None of this is sent to the relay.
   time-to-live (TTL). Expired queued messages are removed before forwarding or during periodic
   cleanup (every 15 seconds by default). Messages without a TTL have no scheduled expiry. This does not
   remove copies already delivered to a local inbox. Periodic cleanup removes a peer only when
-  it is offline, has no queued messages and was last seen more than six hours ago.
+  it is offline, has no queued messages and was last seen more than 6 hours ago.
 - The relay's default logger writes timestamps, connection and routing metadata,
   authentication failures, and socket or internal error descriptions to standard output.
   Metadata includes peer names, roles, host labels, IP addresses, message references (random
@@ -233,7 +234,7 @@ process. None of this is sent to the relay.
   `~/.hoptell/inbox/<peer name>/` (both under `$HOPTELL_HOME` when configured). The session
   folder also holds `binding.json` (realm id, member id, session name and creation time) and
   `seen/`, with one empty file per received delivery id, used to avoid storing a redelivered
-  message twice. Delivery ids older than eight days are removed when an agent session opens
+  message twice. Delivery ids older than 8 days are removed when an agent session opens
   the folder; message files follow the inbox rules below. Message file names include the
   delivery id. With receipts, the folder also holds `store.json` (format version, receipt policy,
   a counter), `claimed/` (batches handed to an agent or `hoptell listen`, with the consumer's
@@ -244,11 +245,13 @@ process. None of this is sent to the relay.
   holds that name, so the tmux injector and `hoptell listen <name>` read the right inbox. hoptell creates directories with Unix
   mode 0700 and files with mode 0600; access is subject to the operating system, including
   administrator privileges.
-- Message files are consumed and deleted by `read_inbox`, `wait_for_message`, or
-  `hoptell listen`. Consumption does not confirm that an agent processed the message. The tmux
-  injector and the hoptell hooks only announce waiting messages with a fixed notice; they do
-  not read or delete message files. Pending files have no automatic expiry. The standalone
-  `hoptell wait` command prints received messages directly to standard output instead of
+- With receipts on (the default), `read_inbox` and `wait_for_message` return a batch and keep
+  its message files until the receipt is acknowledged. With receipts off, reading deletes the
+  files. `hoptell listen` prints and acknowledges messages; with `--no-ack` it leaves them
+  waiting for acknowledgement. An acknowledgement does not prove that an agent processed the
+  messages. The tmux injector and the hoptell hooks announce waiting messages with a fixed
+  notice; they do not read or delete message files. Pending inbox files have no automatic
+  expiry. The standalone `hoptell wait` command prints messages to standard output instead of
   storing them in the inbox.
 - Contacts (who may reach your sessions) are kept in `~/.hoptell/contacts.json` (your policy:
   grants and blocks naming relay realm ids, member ids or shared-token sender names) and
@@ -257,7 +260,7 @@ process. None of this is sent to the relay.
   it, the receiving sessions and message sizes and times; decisions in progress; and the last 100
   finished requests). Held messages themselves are kept in each session folder's `quarantine/`
   (or `~/.hoptell/legacy/<name>/` for sessions on earlier relays) until you release or block them,
-  or for seven days. Desktop notifications show the sender label and session name, never message
+  or for 7 days. Desktop notifications show the sender label and session name, never message
   text. The receiving agent is told that a message was held, never its text: it sees the number
   of held messages, the request id and, only for a sender the relay authenticated as a member,
   that member's name. `~/.hoptell/contacts/reported/` keeps, per session folder, which held
@@ -299,7 +302,7 @@ process. None of this is sent to the relay.
   broker mode the stored credential is the relay's own refresh token (not the provider's), with
   a mark while a renewal is in flight; `hoptell logout` asks the relay to end it.
 - With several relays (a relays file), `~/.hoptell/routes.json` records, for messages read in the
-  last seven days (at most 10,000), which relay profile and realm each message reference came
+  last 7 days (at most 10,000), which relay profile and realm each message reference came
   from, so replies go through the same relay; it holds no message text or names.
   `~/.hoptell/sessions/<name>.stores.json` lists the storage folders a session reads (for the tmux
   notice), and is removed when the session ends. Sessions on earlier relays keep their files under
@@ -329,10 +332,9 @@ process. None of this is sent to the relay.
 - Session titles from Claude Code (only with `HOPTELL_TITLE_AUTO=on`): the `SessionStart` and
   `UserPromptSubmit` hooks copy the session's custom name and its session id into
   `<key>.title.json` in `~/.hoptell/wake/` (0600, at most 1 KiB). They never copy the prompt
-  field. Claude Code does not say whether the user, a hook or a tool set the custom name. Another
-  hook may derive it from prompt text, so a custom title can contain prompt text. With
-  `HOPTELL_TITLE_AUTO=on`, hoptell stores and shares that title. The file is removed together with the registration, which later SessionStart
-  hooks clean up after about 7 days once the Claude Code process has ended; a SessionStart with
+  field. The hook input doesn't say who set the custom name, so if another hook sets it from
+  prompt text, that text is stored in this file and shared as the title. The file is removed
+  together with the registration, which later SessionStart hooks clean up after about 7 days once the Claude Code process has ended; a SessionStart with
   `HOPTELL_TITLE_AUTO` off removes it. Other copies of a title: Claude Code's own transcripts and
   session files (hoptell does not write them), the relay's memory, and other sessions'
   `list_peers` output in their transcripts.
@@ -440,7 +442,7 @@ any fragment counts, never the rest of a cloud-config line. Hardening asks Codex
 the run's reads of those paths. It does not change what the agent CLI sends to its AI provider for
 the files it can read, and Codex's own helper folder inside CODEX_HOME stays readable to the run.
 
-hoptell removes ended runs older than seven days, and any beyond the 100 most recent ended runs;
+hoptell removes ended runs older than 7 days, and any beyond the 100 most recent ended runs;
 runs from the last hour are always kept. This cleanup runs when an agent session of yours starts,
 when an agent lists its runs, and with `hoptell agents list` and `hoptell doctor`. A run waiting
 for your confirmation expires after an hour and is marked discarded at the next cleanup, which also
@@ -539,7 +541,7 @@ stores them on its servers, and anyone with the bot token can read new messages 
 - **Stored on each agent machine**: `~/.hoptell/owner-channel/trusted.json` (or
   `$HOPTELL_HOME/owner-channel/trusted.json` when set) with the pins you
   trusted (realm, bridge name, public keys). `seen/` keeps signed-message nonces for at least
-  eight days plus a safety margin, and longer if a record cannot be safely pruned;
+  8 days plus a safety margin, and longer if a record cannot be safely pruned;
   `received.json` counts failed verifications and suppressed replays. The messages themselves
   remain in the normal inbox.
 
@@ -573,7 +575,7 @@ operator turned it on.
   The bridge keeps only a hash of it, in memory, so that one note opens one app session at a time.
 - The app stores nothing on your phone. The bridge keeps your drafts for up to 10 minutes (deleted
   when sent or cancelled), and the settings you change in `people.json`, as for the bot. In
-  `state.json` it keeps whether the app is on and its link id, the ids of recent app requests (one
+  `state.json` it keeps whether the app is on and its link id, the ids of recent app requests (1
   hour, no text), settings changes waiting for their line in the chat, and for each change made in
   the app, the old and new value of that one setting for its `Undo` button. `Undo` is available
   for up to 24 hours for the 500 most recent changes made in the app; older buttons stop working.

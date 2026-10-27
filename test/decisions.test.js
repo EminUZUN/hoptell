@@ -80,7 +80,7 @@ test("every kind's token changes when any shown field changes (rendered from fix
   for (const m of mutations(contact)) assert.notEqual(contactToken(withLeaf(contact, m.at, m.replace)), base, `contact: ${m.path}`);
 
   // encryption-violation: the contact view plus the setting it links to.
-  const violation = { ...contact, violation: true, setting: `encryption.${R}.${ALICE}`, request: "contact:q_aaaaaaaaaaaaaaaa", command: `hoptell contacts encryption ${ALICE} preferred|off` };
+  const violation = { ...contact, violation: true, setting: `encryption.${R}.${ALICE}`, request: "contact:q_aaaaaaaaaaaaaaaa", command: `hoptell contacts encryption ${ALICE} preferred` };
   const vt = `${violation.policyRevision}.${viewDigest(violation)}`;
   for (const m of mutations(violation)) assert.notEqual(`${violation.policyRevision}.${viewDigest(withLeaf(violation, m.at, m.replace))}`, vt, `encryption-violation: ${m.path}`);
 

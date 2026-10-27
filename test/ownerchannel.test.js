@@ -73,7 +73,7 @@ test("a question with choices: buttons, callback_data within 64 bytes, answered 
   tg.press(card, 1);
   const m = await alice.waitFor((x) => x.from === "me-owner");
   assert.equal(verifyFor(key, "me-alice")(m).env.text, "sqlite");
-  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "Sent."));
+  await until(() => tg.sent.some((s) => s.method === "answerCallbackQuery" && s.params.text === "✅ Sent."));
   await until(() => tg.sent.some((s) => s.method === "editMessageText" && s.params.text === "✅ Question 1 · alice asked:\nWhich database?\n\nYou chose: sqlite"));
   // A late tap, and a later reply, find it answered.
   tg.press(card, 0);
@@ -345,7 +345,7 @@ test("expiry: the card is edited and the asker gets a signed `expired` status; a
   assert.equal(v.ok, true, v.reason);
   assert.equal(v.env.kind, "status");
   assert.match(v.env.text, /^expired: /);
-  assert.ok(tg.sent.some((s) => s.method === "editMessageText" && /^⌛ Question 1 · alice asked:\n.*\n\nNo answer in time, so this question is closed\. Reply to send your answer as a new message\.$/s.test(s.params.text)));
+  assert.ok(tg.sent.some((s) => s.method === "editMessageText" && /^⌛ Question 1 · alice · Closed\n.*\n\nThe answer deadline passed\. Reply to start a new message\.$/s.test(s.params.text)));
   // A reply after expiry is not forwarded.
   tg.say("too late", { reply: tg.replyTo(tg.cards()[0]) });
   await until(() => tg.texts().some((x) => /^This question has expired\. Send your text to alice as a new message\?$/.test(x)));

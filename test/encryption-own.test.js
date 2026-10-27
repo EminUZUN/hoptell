@@ -110,7 +110,7 @@ test("receive side (unchanged): own-member plaintext under required is held as a
   const id = /^(q_[a-z2-7]{16})\s/m.exec(cli("list"))?.[1];
   assert.ok(id);
   const shown = cli("show", id);
-  assert.match(shown, /unencrypted, and this contact's encryption is required: they can only be blocked, or released after hoptell contacts encryption m_\S+ preferred\|off/);
+  assert.match(shown, /unencrypted, and this contact's encryption is required: they can only be blocked, or released after you set this contact's encryption to preferred or off \(hoptell contacts encryption m_\S+ preferred\)/);
   assert.match(shown, /hoptell contacts block /);
   assert.doesNotMatch(shown, /hoptell contacts allow/);
   writePolicy(s.home, OVERRIDE);
@@ -190,7 +190,7 @@ test("an outbox send prepared before the policy became required: refused for goo
   assert.deepEqual([q2, q3].map((x) => bridge.state().questions[x].status), ["expired", "expired"]);
   assert.equal(readAudit(home).filter((e) => e.event === "refused" && e.reason === "encryption_required" && e.kind === "status").length, 2);
   assert.equal(told().length, 2, "one more notice, for both statuses");
-  assert.match(told()[1].params.text, /^Messages to your agents are paused: .*For details, run hoptell telegram status on the computer running this bot\.$/);
+  assert.match(told()[1].params.text, /^⚠️ Messages to your agents are paused: .*Run hoptell telegram status on the bot's computer for details\.$/);
   assert.equal(alice.got.filter((m) => m.from === "me-owner").length, 0, "no status was sent either");
 });
 

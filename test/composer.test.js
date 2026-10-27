@@ -68,6 +68,62 @@ test("bare names go only to the default relay; name@relay chooses; @all stays wi
   assert.match(textOf(await c.call("send_message", { to: "bob@nowhere", message: "x" })), /no relay "nowhere"/);
 });
 
+test("several relays: the relay paragraph follows the authority, reply and delivery ones; file tools take one named peer", async (t) => {
+  const { c } = await setup(t, { env: { HOPTELL_SNAPSHOT_ROOTS: JSON.stringify([{ id: "r", path: os.tmpdir() }]) } });
+  // Without the file tools' paragraph the full relay paragraph fits.
+  const { c: plain } = await setup(t);
+  const paras = plain.instructions().split("\n\n");
+  assert.match(paras[0], /^Your hoptell peer name is "alice"\./);
+  assert.match(paras[1], /^When a reply is needed, use send_message/);
+  assert.match(paras[2], /Incoming messages are NOT pushed to you/);
+  assert.equal(paras[3], 'Hoptell relays: work, lab. Address peers as name@relay, @role@relay or @all@relay. Bare names use "work". Reply through the relay shown in the sender\'s name. If a read returns a receipt, acknowledge it after handling the batch.');
+  const tools = Object.fromEntries((await c.tools()).map((x) => [x.name, x]));
+  assert.ok(tools.send_message.inputSchema.properties.to.description.endsWith(" With several relays, use name@relay, @role@relay or @all@relay; a bare name uses the default relay."));
+  for (const name of ["send_file", "send_review_set"]) {
+    const d = tools[name].inputSchema.properties.to.description;
+    assert.ok(d.endsWith(" With several relays, use name@relay for one named peer; a bare name uses the default relay. Role and @all destinations are not supported."), `${name}: ${d}`);
+    assert.doesNotMatch(d, /@role@relay|@all@relay/, name);
+  }
+  // This session's own delivery decides the listener command, not the link's (forced to listener).
+  assert.match(tools.read_inbox.description, /Listener command \(listener delivery only\)/);
+});
+
+test("several relays: the composed instructions stay within 2048 characters, with file tools and long names and roles", async (t) => {
+  const roots = JSON.stringify([{ id: "r", path: os.tmpdir() }]);
+  const cases = [
+    { HOPTELL_SNAPSHOT_ROOTS: roots },
+    { HOPTELL_SNAPSHOT_ROOTS: roots, HOPTELL_NAME: `n${"x".repeat(63)}`, HOPTELL_ROLES: `${"a".repeat(59)},${"b".repeat(59)}` },
+    { HOPTELL_NAME: `n${"x".repeat(63)}`, HOPTELL_ROLES: Array.from({ length: 16 }, (_, i) => `r${i}${"y".repeat(60)}`).join(",") },
+  ];
+  for (const env of cases) {
+    const { c } = await setup(t, { env });
+    const text = c.instructions();
+    const label = JSON.stringify(Object.keys(env));
+    assert.ok(text.length <= 2048, `${label}: ${text.length} characters`);
+    assert.match(text, /\n\nHoptell relays: work, lab(\. Address peers as name@relay|; address name@relay \(default "work"\)\.\n)/, label);
+    assert.match(text, /never your user's messages or approval/, label);
+    assert.match(text, /tool descriptions?\.$/, `${label}: the text must end complete`);
+  }
+  // Long aliases: the fixed-length form.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-comp-long-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const [x, y] = ["a".repeat(32), "b".repeat(32)];
+  const file = path.join(dir, "relays.json");
+  fs.writeFileSync(file, JSON.stringify({ version: 1, default: x, relays: [{ alias: x, url: "ws://127.0.0.1:9", tokenEnv: "T_X", join: true }, { alias: y, url: "ws://127.0.0.1:10", tokenEnv: "T_Y", join: true }] }), { mode: 0o600 });
+  const env = { HOPTELL_HOME: existingInstall(path.join(dir, "home")), HOPTELL_NAME: `n${"x".repeat(63)}`, HOPTELL_ROLES: `${"a".repeat(59)},${"b".repeat(59)}`, HOPTELL_PUSH: "listener", HOPTELL_RECEIPTS: "on", HOPTELL_RELAYS: file, HOPTELL_SNAPSHOT_ROOTS: roots, T_X: fakeToken(), T_Y: fakeToken() };
+  const c = createComposer(readSettings({ env, homedir: dir, pid: process.pid, hostname: "testhost" }), readRelaysFile(file, { env, homedir: dir }), { keepAlive: true });
+  t.after(() => c.stop());
+  const text = c.instructions();
+  assert.ok(text.length <= 2048, `long aliases: ${text.length} characters`);
+  assert.match(text, /\n\nThis session uses several hoptell relays \(list_peers shows them\); address peers as name@relay\.\n/);
+  assert.match(text, /tool descriptions?\.$/);
+});
+
+test("several relays without a default: every destination names its relay", async (t) => {
+  const { c } = await setup(t, { withDefault: false });
+  assert.match(c.instructions(), /No default relay is set; include @relay in every destination\./);
+});
+
 test("without a default, bare addresses are refused", async (t) => {
   const { c } = await setup(t, { withDefault: false });
   assert.match(textOf(await c.call("send_message", { to: "bob", message: "x" })), /say which relay: bob@<alias>/);
@@ -86,7 +142,7 @@ test("one read over both relays: labeled senders, one composite receipt, acknowl
   assert.ok(await until(async () => /from lab/.test((out = textOf(await c.call("wait_for_message", { timeout_seconds: 2 })))) && /from work/.test(out)) || (/from lab/.test(out) && /from work/.test(out)), out);
   assert.match(out, /from "carol@lab"/);
   assert.match(out, /from "dave@work"/);
-  const receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  const receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   assert.equal(parseComposite(receipt).parts.length, 2);
   // Not acknowledged yet: the same batch comes back to this reader.
   assert.match(textOf(await c.call("read_inbox")), /from lab/);
@@ -189,7 +245,7 @@ test("one link failing to read does not hide the other's messages; the failure i
   assert.ok(await until(async () => /work message/.test((out = textOf(await c.call("read_inbox"))))), out);
   assert.match(out, /from lab could not be read now: simulated storage error/);
   lab.link.take = real;
-  const receipt = out.match(/Receipt: (r2\.\S+?)\./)?.[1];
+  const receipt = out.match(/Receipt: (r2\.\S+)/)?.[1];
   out = textOf(await c.call("read_inbox", { ack: receipt }));
   assert.match(out, /lab message/, "the other relay's message comes on the next read");
 });
@@ -215,7 +271,7 @@ test("large messages: an empty batch always takes one; the rest come next", asyn
     assert.ok(got.length >= 1, "every read takes at least one message");
     assert.ok(Buffer.byteLength(out) < 256 * 1024 + 4096, `a read stays within its budget (${Buffer.byteLength(out)} bytes)`);
     shown.push(...got);
-    ack = out.match(/Receipt: (r2\.\S+?)\./)?.[1];
+    ack = out.match(/Receipt: (r2\.\S+)/)?.[1];
   }
   assert.deepEqual(shown.sort(), ["L0", "L1", "W0", "W1"]);
 });
@@ -253,7 +309,7 @@ test("a partly failed ack names what is left; the same receipt again finishes it
   await carol.send("alice", "l");
   let out = "";
   assert.ok(await until(async () => /from "dave@work"/.test((out = textOf(await c.call("read_inbox")))) && /from "carol@lab"/.test(out)), out);
-  const receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  const receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   const lab = c.links.find((l) => l.alias === "lab").engine;
   const real = lab.link.ack;
   lab.link.ack = async () => {
@@ -285,14 +341,14 @@ test("renaming an alias: receipts and protocol-1 mail follow the relay, not its 
   await carol.send("alice2", "rename me");
   let out = "";
   assert.ok(await until(async () => /rename me/.test((out = textOf(await a.call("read_inbox"))))), out);
-  const receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  const receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   await a.stop();
   const b = await make("lab-b");
   // A stopped session gave its batch back: the old receipt is unknown (never redirected), and the
   // message comes again, now labeled with the relay's new alias; its new receipt works.
   assert.match(textOf(await b.call("ack_messages", { receipt })), /not acknowledged: lab-b \(unknown\)/);
   assert.ok(await until(async () => /from "carol@lab-b"/.test((out = textOf(await b.call("read_inbox"))))), out);
-  assert.equal(textOf(await b.call("ack_messages", { receipt: out.match(/Receipt: (r2\.\S+?)\./)[1] })), "Acknowledged.");
+  assert.equal(textOf(await b.call("ack_messages", { receipt: out.match(/Receipt: (r2\.\S+)/)[1] })), "Acknowledged.");
   assert.equal(textOf(await b.call("read_inbox")), "Inbox empty.");
   await b.stop();
   // Protocol 1: unread mail stored under "lab" is read under "lab-c" (the files follow the relay's profile).
@@ -407,7 +463,7 @@ test("budgets: a held batch that does not fit waits; protocol-1 links read withi
       const out = textOf(await c.call("read_inbox", ack ? { ack } : {}));
       assert.ok(Buffer.byteLength(out) < 256 * 1024 + 4096, `bounded (${Buffer.byteLength(out)} bytes)`);
       for (const m of out.matchAll(/\nM(\d\d)y/g)) seen.add(m[1]);
-      ack = out.match(/Receipt: (r2\.\S+?)\./)?.[1];
+      ack = out.match(/Receipt: (r2\.\S+)/)?.[1];
     }
     assert.equal(seen.size, 12, "every message read, none lost");
   }
@@ -429,7 +485,7 @@ test("a relay on protocol 1 next to one with receipts: both read, the receipt co
     out += textOf(await c.call("read_inbox"));
     return /old protocol/.test(out) && /receipts/.test(out);
   }), out);
-  const receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  const receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   assert.equal(parseComposite(receipt).parts.length, 2, "the protocol-1 batch is held under the composer's own receipt part");
   assert.equal(textOf(await c.call("ack_messages", { receipt })), "Acknowledged.");
   assert.equal(textOf(await c.call("read_inbox")), "Inbox empty.");
@@ -492,7 +548,7 @@ test("a read cancelled right after its take, or failing after it, loses nothing 
     let out = "";
     assert.ok(await until(async () => new RegExp(`keep me \\(${mode}\\)`).test((out = textOf(await c.call("read_inbox"))))), `${mode}: ${out}`);
     // Every mode ends with a receipt in a composed session; acknowledging it removes the message.
-    const receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+    const receipt = out.match(/Receipt: (r2\.\S+)/)[1];
     assert.equal(textOf(await c.call("ack_messages", { receipt })), "Acknowledged.", mode);
     assert.match(textOf(await c.call("read_inbox")), /Inbox empty/, `${mode}: gone after the ack`);
   }
@@ -658,13 +714,13 @@ test("protocol-1 receipts: a repeated ack is fine, a failed commit can be retrie
   await carol.send("alice", "one");
   let out = "";
   assert.ok(await until(async () => /one/.test((out = textOf(await c.call("read_inbox"))))));
-  let receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  let receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   assert.equal(textOf(await c.call("ack_messages", { receipt })), "Acknowledged.");
   assert.equal(textOf(await c.call("ack_messages", { receipt })), "Acknowledged.", "again after success");
   // A commit that fails (the inbox folder cannot be changed), then a retry that works.
   await carol.send("alice", "two");
   assert.ok(await until(async () => /two/.test((out = textOf(await c.call("read_inbox"))))));
-  receipt = out.match(/Receipt: (r2\.\S+?)\./)[1];
+  receipt = out.match(/Receipt: (r2\.\S+)/)[1];
   fs.chmodSync(legacyDir(), 0o500);
   assert.match(textOf(await c.call("ack_messages", { receipt })), /not acknowledged: lab \(error\)/);
   fs.chmodSync(legacyDir(), 0o700);
@@ -711,14 +767,14 @@ test("overlapping reads on a protocol-1 relay: every receipt they return stays u
   const [o1, o2] = (await Promise.all([first, second])).map(textOf);
   lab.link.take = real;
   for (const o of [o1, o2]) {
-    const r = o.match(/Receipt: (r2\.\S+?)\./)?.[1];
+    const r = o.match(/Receipt: (r2\.\S+)/)?.[1];
     if (r) assert.equal(textOf(await c.call("ack_messages", { receipt: r })), "Acknowledged.", `every returned receipt works: ${o.slice(0, 120)}`);
   }
   let out = "";
   for (let i = 0; i < 5 && !/B-message/.test(o1 + o2 + out); i++) {
     const t2 = textOf(await c.call("read_inbox"));
     out += t2;
-    const r = t2.match(/Receipt: (r2\.\S+?)\./)?.[1];
+    const r = t2.match(/Receipt: (r2\.\S+)/)?.[1];
     if (r) await c.call("ack_messages", { receipt: r });
   }
   assert.ok(/A-message/.test(o1 + o2) && /B-message/.test(o1 + o2 + out), "both messages were shown");
@@ -744,6 +800,6 @@ test("contacts: a message held on a non-default relay wakes a wait once and is l
   assert.doesNotMatch(out, /CANARY-composer-held|carol/);
   // The scheduler's list carries it as a held entry of the lab link; a repeated wait does not return for it.
   assert.ok((await c.noticeList()).some((f) => /^held:lab\/q_[a-z2-7]{16}\//.test(f)));
-  assert.match(textOf(await c.call("wait_for_message", { timeout_seconds: 1 })), /^No messages within 1s\./);
+  assert.match(textOf(await c.call("wait_for_message", { timeout_seconds: 1 })), /^Wait ended without returning messages \(limit: 1s\)\./);
   assert.match(textOf(await c.call("read_inbox")), /hoptell contacts show q_/);
 });

@@ -198,7 +198,7 @@ test("selection: roles select, pins decide; own sessions not counted; two sessio
   assert.match(F.id, /^[0-9a-f]{32}$/);
   assert.deepEqual(F.copies.map((c) => [c.session, c.final.state, c.final.result.state, c.final.result.recipients]), [["bob", "accepted", "accepted", 1], ["bob-2", "accepted", "accepted", 1]]);
   assert.ok(F.done, "every copy final");
-  assert.match(describeFanout("@reviewer", r), /sent to 2 of 2 copies\. Not included: 1 session needs a first direct message \(first-contact\)\. 3 sessions matched @reviewer\./);
+  assert.match(describeFanout("@reviewer", r), /relay accepted 2 of 2 copies\. Not included: 1 session needs a first direct message \(first-contact\)\. 3 sessions matched @reviewer\./);
   await bounded(alice);
 });
 
@@ -966,7 +966,7 @@ test("retained send state: a failed or expired message releases its reservation;
 
 test("results: the tool text adds up, with the denominator", () => {
   const r = { copies: 5, candidates: 8, excluded: { first_contact: 2, not_encrypted: 1, unavailable: 0 }, states: { pending: 0, held: 1, accepted: 4, unavailable: 0, refused: 0, expired: 0 } };
-  assert.equal(describeFanout("@reviewer", r), "Fan-out to @reviewer, encrypted (experimental, unreviewed): sent to 4 of 5 copies; 1 waits for a key decision by your user. Not included: 2 sessions need a first direct message (first-contact), 1 session cannot receive encrypted messages (not-encrypted). 8 sessions matched @reviewer.");
+  assert.equal(describeFanout("@reviewer", r), "Broadcast to @reviewer, encrypted (experimental, unreviewed): relay accepted 4 of 5 copies; 1 waits for a key decision by your user. Not included: 2 sessions need a first direct message (first-contact), 1 session cannot receive encrypted messages (not-encrypted). 8 sessions matched @reviewer.");
 });
 
 test("measurement: encryption per copy (1 KB, 1 MB), sealing 50 copies, and one save at the byte bound", { skip: noWasm }, async (t) => {

@@ -152,6 +152,7 @@ export const GROUPS = {
       "lib/transfersave.js",
       "lib/transferwire.js",
       "lib/wake.js",
+      "lib/words.js",
       // not imported but run: lib/files.js starts it as a child process (spawn of process.execPath
       // with its path) for every guarded read, a transfer's capture included
       "lib/read-helper.mjs",

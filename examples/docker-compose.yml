@@ -1,5 +1,5 @@
-# Relay with per-member tokens. Put members.json next to this file, then:
-# Replace 10.8.0.1 with the host's private or VPN address.
+# Relay with per-member tokens. Put members.json next to this file, replace 10.8.0.1 with the
+# host's private or VPN address, then run:
 #   chmod 600 members.json && HOPTELL_UID=$(id -u) HOPTELL_BIND=10.8.0.1 docker compose up -d
 # The relay runs as the file's owner, so it can read the private file.
 services:

@@ -42,7 +42,8 @@ test("hoptell transfers lists staged transfers by local id with relay_expires; l
   for (const { t: id } of s.list) assert.match(r.stdout, new RegExp(`${id}  staged  file from "alice"`));
   assert.match(r.stdout, /label "report-0\.pdf"/);
   assert.equal(r.stdout.includes("\u0007"), false);
-  assert.match(r.stdout, /at the relay until 20\d\d-/);
+  assert.match(r.stdout, /^ {4}relay copy expires 20\d\d-/m);
+  assert.match(r.stdout, /^ {4}staged here 20\d\d-\S+; cleaned up after 7 days unless saved$/m);
   assert.match(r.stdout, /Next: hoptell save <t_id> <path>/);
   const c = await cli(s.bob.dir, ["transfers", "cancel", s.list[1].t]);
   assert.equal(c.code, 0);
@@ -50,7 +51,17 @@ test("hoptell transfers lists staged transfers by local id with relay_expires; l
   assert.equal(fs.existsSync(path.join(incomingDir(s.bob.dir), s.list[1].t)), false);
   const again = await cli(s.bob.dir, ["transfers"]);
   assert.equal(again.stdout.includes(`${s.list[1].t}  staged`), false);
-  assert.equal((await cli(s.bob.dir, ["transfers", "cancel", "t_000000000000000000000000"])).code, 1);
+  const gone = await cli(s.bob.dir, ["transfers", "cancel", "t_000000000000000000000000"]);
+  assert.equal(gone.code, 1);
+  assert.match(gone.stderr, /^hoptell: /, "an error goes to stderr");
+  assert.equal(gone.stdout, "");
+  // Usage errors: stderr, one line naming the cause, exit 2.
+  const bogus = await cli(s.bob.dir, ["transfers", "bogus"]);
+  assert.deepEqual([bogus.code, bogus.stdout, bogus.stderr], [2, "", 'hoptell: unknown transfers command "bogus" (see hoptell transfers --help)\n']);
+  const short = await cli(s.bob.dir, ["transfers", "cancel"]);
+  assert.equal(short.code, 2);
+  assert.equal(short.stdout, "");
+  assert.match(short.stderr, /^hoptell: transfers cancel needs one <t_id>\nusage: hoptell transfers cancel <t_id>\n$/);
 });
 
 test("hoptell save: no clobber without --overwrite; --overwrite without a terminal needs --yes; then saved and the staging copy deleted", async (t) => {
@@ -60,11 +71,11 @@ test("hoptell save: no clobber without --overwrite; --overwrite without a termin
   fs.writeFileSync(dest, "keep me");
   const r1 = await cli(s.bob.dir, ["save", id, dest]);
   assert.equal(r1.code, 1);
-  assert.match(r1.stdout, /exists; nothing was replaced \(use --overwrite/);
+  assert.match(r1.stderr, /^hoptell: .* exists; nothing was replaced \(use --overwrite/);
   assert.equal(fs.readFileSync(dest, "utf8"), "keep me");
   const r2 = await cli(s.bob.dir, ["save", id, dest, "--overwrite"]);
   assert.equal(r2.code, 1);
-  assert.match(r2.stdout, /add --yes; nothing was saved/);
+  assert.match(r2.stderr, /add --yes; nothing was saved/);
   assert.equal(fs.readFileSync(dest, "utf8"), "keep me");
   const r3 = await cli(s.bob.dir, ["save", id, dest, "--overwrite", "--yes"]);
   assert.equal(r3.code, 0, r3.stdout + r3.stderr);
@@ -73,7 +84,11 @@ test("hoptell save: no clobber without --overwrite; --overwrite without a termin
   assert.equal(sha(fs.readFileSync(dest)), sha(bytes));
   assert.equal(fs.existsSync(path.join(incomingDir(s.bob.dir), id)), false);
   assert.equal((await cli(s.bob.dir, ["save", id, path.join(s.out, "again.bin")])).code, 1, "no longer staged");
-  assert.equal((await cli(s.bob.dir, ["save"])).code, 2);
+  const noArgs = await cli(s.bob.dir, ["save"]);
+  assert.equal(noArgs.code, 2);
+  assert.equal(noArgs.stdout, "");
+  assert.match(noArgs.stderr, /^hoptell: save needs a <t_id> and a <path>\nusage: hoptell save /);
+  assert.match((await cli(s.bob.dir, ["save", id, dest, "--bogus"])).stderr, /^hoptell: unknown option --bogus for hoptell save\n/);
 });
 
 test("hoptell doctor recovers an interrupted save, reports leftovers, and removes them with --fix; save --forget drops an ambiguous record only", async (t) => {
@@ -96,10 +111,10 @@ test("hoptell doctor recovers an interrupted save, reports leftovers, and remove
   // Leftovers: a stray folder; doctor reports it; --fix removes it.
   fs.mkdirSync(path.join(incomingDir(s.bob.dir), "t_0123456789abcdef01234567"));
   const d3 = await cli(s.bob.dir, ["doctor"]);
-  assert.match(d3.stdout, /1 folder\(s\) without a ledger entry/);
+  assert.match(d3.stdout, /0 failed cleanups, 0 staged files older than 7 days, 1 folder without a ledger entry, 0 entries without a folder, 0 outbox entries older/);
   assert.match(d3.stdout, /run hoptell doctor --fix/);
   const d4 = await cli(s.bob.dir, ["doctor", "--fix"]);
-  assert.match(d4.stdout, /1 stray folder\(s\)/);
+  assert.match(d4.stdout, /1 stray folder,/);
   assert.equal(fs.existsSync(path.join(incomingDir(s.bob.dir), "t_0123456789abcdef01234567")), false);
   assert.equal(fs.existsSync(path.join(incomingDir(s.bob.dir), b.t)), true, "a staged transfer is not a leftover");
 });

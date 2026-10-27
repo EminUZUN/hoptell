@@ -714,14 +714,14 @@ test("A12 fix: a failed contacts write while recording a registration never hide
   };
   // device list: the relay's devices are shown, with a warning.
   const listed = await listOver(a, connect);
-  assert.match(listed[0], /^Warning: .*could not be recorded.*another hoptell process holds the contacts lock/);
+  assert.match(listed[0], /^warning: .*could not be recorded.*another hoptell process holds the contacts lock/);
   assert.ok(listed.some((l) => l.startsWith(id)), listed.join("\n"));
   assert.equal(awaitingMark(a, w, id), true, "not recorded");
   // verify: both sets and the number shown, with a warning; nothing offered or confirmed.
   const shown = await verifyOver(a, b.id, connect);
   assert.ok(shown.some((l) => l.trim().startsWith(id)), shown.join("\n"));
   assert.ok(shown.some((l) => l.startsWith("Safety number")));
-  assert.ok(shown.some((l) => /^Warning: .*could not be recorded/.test(l)));
+  assert.ok(shown.some((l) => /^warning: .*could not be recorded/.test(l)));
   assert.ok(!shown.some((l) => /--set/.test(l)), "no confirmation offered");
   const s = await decisions.show({ home: a.dir, id: `device-verify:${b.id}`, sources: { contacts: a.contacts, devices: { fetch: (m) => fetchDevicesOver(connect, m) } } });
   assert.deepEqual(s.actions, []);
@@ -815,7 +815,7 @@ test("A12 fix: verify says a failed recording of the own list before refusing fo
     throw Object.assign(new Error("another hoptell process holds the contacts lock"), { code: "busy" });
   };
   const out = await verifyOver(a, b.id, connect);
-  const warn = out.findIndex((l) => /^Warning: .*could not be recorded.*contacts lock/.test(l));
+  const warn = out.findIndex((l) => /^warning: .*could not be recorded.*contacts lock/.test(l));
   const refused = out.findIndex((l) => l.startsWith("refused: verify refused:") && l.includes(other.device));
   assert.ok(warn >= 0 && refused > warn, out.join("\n"));
   assert.ok(!out.some((l) => /--set/.test(l)));

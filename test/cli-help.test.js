@@ -132,8 +132,52 @@ test("help as a word: agents, contacts, telegram, members, relay admin; hoptell 
   }
   const unknown = s.run(["help", "nosuch"]);
   assert.equal(unknown.status, 2);
-  assert.match(unknown.stderr, /unknown command "nosuch"/);
+  assert.equal(unknown.stdout, "");
+  assert.equal(unknown.stderr, 'hoptell: no help for "nosuch" (see hoptell --help)\n', "one line, not the whole help");
   assert.deepEqual(tree(s.root), before);
+});
+
+test("usage errors: one line on stderr naming the word, exit 2, nothing started or created", async (t) => {
+  const s = await sandbox(t);
+  const before = tree(s.root);
+  for (const [args, line] of [
+    [["nosuch"], 'hoptell: unknown command "nosuch" (see hoptell --help)'],
+    [["mcp-http", "bogus"], 'hoptell: unknown mcp-http command "bogus" (see hoptell mcp-http --help)'],
+    [["mcp-http", "--port", "0", "bogus"], 'hoptell: unknown mcp-http command "bogus" (see hoptell mcp-http --help)'],
+    [["members", "bogus"], 'hoptell: unknown members command "bogus" (see hoptell members --help)'],
+    [["members"], "hoptell: members needs a command (see hoptell members --help)"],
+    [["relay", "admin", "bogus"], 'hoptell: unknown relay admin command "bogus" (see hoptell relay admin --help)'],
+    [["transfers", "bogus"], 'hoptell: unknown transfers command "bogus" (see hoptell transfers --help)'],
+  ]) {
+    const r = s.run(args, { HOPTELL_MEMBERS: "" });
+    assert.deepEqual([r.status, r.stdout, r.stderr], [2, "", `${line}\n`], args.join(" "));
+  }
+  assert.deepEqual(tree(s.root), before, "nothing was created");
+});
+
+test("missing-operand errors: the cause on the first line, then the usage, both on stderr, exit 2", async (t) => {
+  const s = await sandbox(t);
+  for (const [args, cause] of [
+    [["send"], "send needs a recipient and a message"],
+    [["grants", "allow"], "grants allow needs a selector"],
+    [["grants", "bogus"], 'unknown grants command "bogus"'],
+    [["contacts", "request"], "contacts request needs a name"],
+    [["contacts", "show"], "contacts show needs an id"],
+    [["contacts", "allow"], "contacts allow needs an id"],
+    [["contacts", "accept-device", "m_x"], "contacts accept-device needs a member id and a device"],
+    [["contacts", "encryption", "m_x", "loud"], "contacts encryption needs a mode: required, preferred, off or clear"],
+    [["contacts", "check"], "contacts check is missing an argument"],
+    [["local-relay", "bogus"], 'unknown local-relay command "bogus"'],
+    [["local-relay", "start", "--purge"], "--purge goes with local-relay uninstall only"],
+    [["mcp-http", "client", "add"], "mcp-http client add needs a label"],
+    [["mcp-http", "client", "bogus"], 'unknown mcp-http client command "bogus"'],
+    [["login", "bogus"], 'login does not take "bogus"'],
+  ]) {
+    const r = s.run(args, { HOPTELL_MEMBERS: "" });
+    const lines = r.stderr.split("\n");
+    assert.deepEqual([r.status, r.stdout, lines[0]], [2, "", `hoptell: ${cause}`], `${args.join(" ")}\n${r.stderr}`);
+    assert.match(lines[1], /^usage: hoptell /, args.join(" "));
+  }
 });
 
 test("--version and -v print the package version", async (t) => {
@@ -210,6 +254,15 @@ test("hoptell help lists every command and the relay's options", async (t) => {
   for (const s2 of ["--state-dir", "--require-members", "--oidc", "--experimental-e2ee", "--transfer-quota", "device-approve", "contacts verify", "encryption <member id>", "telegram app", "fav|unfav", "sessions", "hoptell hook-header", "hoptell device enroll"]) assert.ok(r.stdout.includes(s2), s2);
   assert.doesNotMatch(r.stdout, /LAN\/VPN/);
   assert.doesNotMatch(r.stdout, /design \d/);
+  // Every line fits an 80-column terminal (78 columns), apart from the settings file paths.
+  const files = new Set(r.stdout.split("\n").filter((l) => l.startsWith(`  ${s.root}`)));
+  for (const args of [["help"], ...Object.keys(HELP).filter((c) => c !== "version").map((c) => [c, "--help"]), ["relay", "admin", "--help"]]) {
+    for (const line of s.run(args).stdout.split("\n")) if (!files.has(line)) assert.ok(line.length <= 78, `${args.join(" ")}: ${line.length} columns: ${line}`);
+  }
+  // A newcomer sees the common commands first, and every settings line says what it is.
+  assert.match(r.stdout, /^Common commands:\n {2}hoptell list {17}who is on the relay$/m);
+  assert.match(r.stdout, /^ {2}HOPTELL_PROFILE {16}relay profile key$/m);
+  assert.match(r.stdout, /Invalid values\nare refused or reported; some settings warn and use their default\./);
   // The mcp-hosted entry ends with its own text; the client tokens line belongs to mcp-http.
   assert.match(HELP["mcp-http"], /tokens for those clients/);
   assert.doesNotMatch(HELP["mcp-hosted"], /tokens/);
@@ -233,7 +286,7 @@ test("relay admin views of a directory without relay state create none", async (
 test("grants: a selector the relay would refuse is refused before the preview", async (t) => {
   const s = await sandbox(t);
   for (const [args, want] of [
-    [["grants", "allow", "bogus"], /"bogus" is not a selector: use \*, group:<name> or member:<id>/],
+    [["grants", "allow", "bogus"], /"bogus" is not a selector: use '\*' \(quote it\), group:<name> or member:<id>/],
     [["grants", "deny", "member:alice"], /"member:alice" is not a selector/],
     [["grants", "deny-forever", "group:x"], /"group:x" is not a member selector/],
   ]) {

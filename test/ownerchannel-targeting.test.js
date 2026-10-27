@@ -259,8 +259,8 @@ test("a reply to a closed card asks first; the confirm button sends once, is bou
   tg.press(confirm, 0);
   const m = await fromOwner(alice, "also bump the version");
   assert.equal(verifyFor(key, "me-alice")(m).env.kind, "instruction");
-  await until(() => tg.calls("editMessageText").some((c) => c.params.message_id === confirm.message_id && c.params.text === "Sent to alice."));
-  assert.ok(tg.calls("answerCallbackQuery").some((c) => c.params.text === "Sent."));
+  await until(() => tg.calls("editMessageText").some((c) => c.params.message_id === confirm.message_id && c.params.text === "✅ Sent to alice."));
+  assert.ok(tg.calls("answerCallbackQuery").some((c) => c.params.text === "✅ Sent."));
   // Once: a second tap finds nothing.
   tg.press(confirm, 0);
   await until(() => tg.calls("answerCallbackQuery").filter((c) => c.params.text === "This button has expired.").length === 2);
@@ -268,7 +268,7 @@ test("a reply to a closed card asks first; the confirm button sends once, is bou
   assert.equal(alice.got.filter((x) => x.from === "me-owner").length, 2);
   assert.equal(JSON.stringify(bridge.state()).includes("also bump the version"), false, "the text is gone from state");
   // The edited confirmation is a route: a reply to it continues with the agent.
-  tg.say("thanks", { reply: { message_id: confirm.message_id, text: "Sent to alice." } });
+  tg.say("thanks", { reply: { message_id: confirm.message_id, text: "✅ Sent to alice." } });
   await fromOwner(alice, "thanks");
 });
 
@@ -305,7 +305,7 @@ test("replies: to a refusal it retries that agent; to an untracked message it sa
   // A bot message the bridge never routed, whose text names an agent: nothing is sent.
   s.tg.say("/help");
   await until(() => s.tg.last(/^How this works:/));
-  s.tg.say("to alice", { reply: { message_id: s.tg.last(/^How this works:/).message_id, text: "Sent to alice." } });
+  s.tg.say("to alice", { reply: { message_id: s.tg.last(/^How this works:/).message_id, text: "✅ Sent to alice." } });
   await until(() => s.tg.texts().includes("I can't tell who that message was for. To answer a question, use /pending; to write to an agent, use /msg."));
   // Routes expire after 7 days.
   s.clock.skew = 8 * 86400_000;

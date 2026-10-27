@@ -412,7 +412,7 @@ test("offline: the CLI opens the store under the lock; status works through a re
   const audit = await run(["relay", "admin", "audit"]);
   assert.match(audit.stdout, /offline-cli\tmembers\.add\tgina\tintent/);
   assert.match(audit.stdout, /offline-cli\tmembers\.add\tgina\tresult\tok/);
-  assert.match(audit.stdout, /hash chain verified: 2 row\(s\)/);
+  assert.match(audit.stdout, /hash chain verified: 2 rows from the start/);
   fs.mkdirSync(path.join(state, "restore"), { mode: 0o700 });
   fs.writeFileSync(path.join(state, "restore", "intent.json"), JSON.stringify({ v: 1, id: "0123456789abcdef", phase: "evidence" }));
   assert.match((await run(["relay", "admin", "status"])).stdout, /unfinished 0123456789abcdef at evidence/);
@@ -466,7 +466,10 @@ test("UI (3.4's shared gate): one origin, a single-use launch token, the session
   assert.equal((await get(port, stale.pathname + stale.search)).status, 403, "expired");
   const launch = new URL(ui.launchUrl());
   assert.equal(launch.origin, `http://127.0.0.1:${port}`);
-  assert.equal((await get(port, "/")).status, 403, "no session: refused");
+  const noSession = await get(port, "/");
+  assert.equal(noSession.status, 403, "no session: refused");
+  assert.ok(noSession.body.includes('<meta name="viewport" content="width=device-width, initial-scale=1">'));
+  assert.ok(noSession.body.includes("<h1>Refused</h1><p>Open the launch link that hoptell relay admin ui printed.</p>"), noSession.body);
   assert.equal((await get(port, `/launch?t=${"0".repeat(43)}`)).status, 403);
   assert.equal((await get(port, launch.pathname + launch.search, { host: `localhost:${port}` })).status, 403, "another host name for the same address");
   assert.equal((await get(port, launch.pathname + launch.search, { headers: { "sec-purpose": "prefetch" } })).status, 403, "a prefetch never burns the token");

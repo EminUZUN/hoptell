@@ -152,6 +152,40 @@ test("relay: unknown, off and retired ids answer 404; an owned id whose bridge i
   assert.equal(readApps(s.stateDir).apps[id].state, "retired");
 });
 
+test("relay: the browser opening the app gets a short page for 404, 429, 503 and 504; the app's own requests keep JSON", async (t) => {
+  const s = await setup(t, { limits: { timeoutMs: 400, perClient: { max: 5, ms: 60_000 } } });
+  const html = { accept: "text/html,application/xhtml+xml,*/*;q=0.8" };
+  const page = (r, status, title) => {
+    assert.equal(r.status, status);
+    assert.equal(r.headers["content-type"], "text/html; charset=utf-8");
+    assert.equal(r.headers["cache-control"], "no-store");
+    assert.match(r.body, new RegExp(`<h1>${title.replace(/[.?]/g, "\\$&")}</h1>`));
+  };
+  page(await request(s.base(), `/app/${appId()}/`, { headers: html }), 404, "This app link isn't available.");
+  assert.match((await request(s.base(), `/app/${appId()}/`, { headers: html })).body, /<p>Send \/app in the bot chat to check the current link\.<\/p>/);
+  page(await request(s.base(), `/app/${appId()}/`, { headers: { "sec-fetch-dest": "document" } }), 404, "This app link isn't available.");
+  const c = await s.bridge();
+  const id = appId();
+  await s.register(c, id);
+  c.answer = () => null; // never answers
+  page(await request(s.base(), `/app/${id}/`, { headers: html }), 504, "The app is unavailable right now.");
+  // An API call or a file the page's script fetches: JSON as before.
+  const api = await request(s.base(), `/app/${id}/api/sessions`, { headers: html });
+  assert.deepEqual([api.status, JSON.parse(api.body)], [504, { error: "slow" }]);
+  // The bridge goes away while the page request waits for it: the page too, not JSON.
+  const forwarded = c.reqs.length;
+  const waiting = request(s.base(), `/app/${id}/`, { headers: html });
+  for (let i = 0; i < 100 && c.reqs.length === forwarded; i++) await sleep(20);
+  assert.equal(c.reqs.length, forwarded + 1, "forwarded to the bridge");
+  c.close();
+  page(await waiting, 503, "The app is unavailable right now.");
+  await sleep(100);
+  page(await request(s.base(), `/app/${id}/`, { headers: html }), 503, "The app is unavailable right now.");
+  assert.deepEqual(JSON.parse((await request(s.base(), `/app/${id}/app.js`)).body), { error: "offline" });
+  page(await request(s.base(), `/app/${id}/`, { headers: html }), 429, "Too many attempts.");
+  assert.match((await request(s.base(), `/app/${id}/`, { headers: html })).body, /<p>Wait a minute, then open the app again\.<\/p>/);
+});
+
 test("relay: the path grammar, the body bound, the JSON content type and WebSocket upgrades on /app/", async (t) => {
   const s = await setup(t);
   const c = await s.bridge();

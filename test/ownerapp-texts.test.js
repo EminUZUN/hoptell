@@ -37,8 +37,10 @@ test("display: every text in the API's answers passes the scan; colliding labels
   const list = keep(await app.get("sessions")).json.sessions;
   const labels = list.map((s) => s.label).sort();
   // Two agents named Main show their full forms (the 7.3 display rule); alice's alias was saved on
-  // another computer, so it is marked "?".
-  assert.deepEqual(labels, ["Main (alice)?", "Main (bob)"]);
+  // another computer: no marker in the label, a warning on its details instead.
+  assert.deepEqual(labels, ["Main (alice)", "Main (bob)"]);
+  const moved = (await app.get(`session/${list.find((s) => s.label === "Main (alice)").h}`)).body;
+  assert.match(moved, /Main \(alice\) reports a different computer: /);
   const h = list[0].h;
   keep(await app.get(`session/${h}`));
   keep(await app.get("questions"));

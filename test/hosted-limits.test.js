@@ -16,7 +16,7 @@ const until = async (fn, ms = 4000) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(25)) if (await fn()) return true;
   return Boolean(await fn());
 };
-const receiptOf = (t) => /Receipt: ([^ .]+)\./.exec(t)?.[1];
+const receiptOf = (t) => /Receipt: (\S+)/.exec(t)?.[1];
 const MB = 1024 * 1024;
 
 /** A world whose volume reports `disk.free` bytes, with these storage limits and store faults. */

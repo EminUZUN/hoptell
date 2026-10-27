@@ -60,7 +60,8 @@ test("install modes: new install is managed; existing state is legacy-allow; a p
 test("held messages: quarantine, one request per sender, one rate-limited notification, budgets drop new arrivals", async (t) => {
   const home = tmpHome(t);
   const notes = [];
-  const c = await openContacts(home, { notifier: (_title, text) => notes.push(text) });
+  const titles = [];
+  const c = await openContacts(home, { notifier: (title, text) => (titles.push(title), notes.push(text)) });
   const { bound, store } = await sessionStore(home, "s");
   const r1 = await c.hold(bound.dir, session("s"), fromAlice("one"), "ask");
   assert.equal(r1.disposition, "quarantined");
@@ -70,6 +71,8 @@ test("held messages: quarantine, one request per sender, one rate-limited notifi
   assert.equal(st.requests[0].items, 2);
   assert.equal(notes.length, 1, "one notification per request");
   assert.doesNotMatch(notes[0], /one|two/, "no message text");
+  assert.deepEqual(titles, ["hoptell · Message held"]);
+  assert.match(notes[0], / wants to reach s\. Review it with hoptell contacts or hoptell ui\.$/);
   assert.equal(await store.take(processConsumer("engine", "e")), null, "nothing reaches the inbox");
   // A second sender within the minute: listed, not notified (rate limit).
   await c.hold(bound.dir, session("s"), fromAlice("bob", "m_bbbbbbbbbbbbbbbbbbbbbbbbbb"), "ask");
