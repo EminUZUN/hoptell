@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-10-27)
+
+- Fixed: owner-channel signing keys whose public and private parts do not belong together now
+  consistently report hoptell's "does not match its public key" error, including on Node.js
+  releases that reject the key during import. These keys remain rejected.
+
 ## 0.3.0 (2026-10-27)
 
 This release adds a large set of features and changes the relay protocol. Upgrade the relay

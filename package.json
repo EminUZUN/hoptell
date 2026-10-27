@@ -1,6 +1,6 @@
 {
   "name": "hoptell",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host, and reach you on Telegram.",
   "type": "module",
   "bin": {
