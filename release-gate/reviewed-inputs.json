@@ -99,7 +99,7 @@
       "lib/ownerchannel.js": "55ce8452b9b327522a418def538f1bb2e3b719f5a7341896d4feefa5b9495dfe",
       "lib/ownerchannelcli.js": "9d18a56d2c3c3d15a2183a619f6c046b85735789d07381be4f44c4d3259f8bb8",
       "lib/ownerpeople.js": "a8200ebc52118f7136134326e7c706a4c3487216375dea095a75a8a0c25e9ae5",
-      "lib/ownersig.js": "e8c1679fcdd0f114dce9e006baabb19c5ab24ac92f4a28228f5a852a96c57a50",
+      "lib/ownersig.js": "7dda30183cd6b5a620384de3cf0406fcbc8e0e93c1c108f458607cb3104fa28b",
       "lib/ownertexts.js": "5930bafabf469bbbbddb53ecbc43b9745d1ba28deb6d4d89192dd7910b5449ab",
       "lib/ownerui.js": "3a283eeb69bbd9de674aa8780fa857341aaabd007900ee1d3f7ad3fda788d6c7",
       "lib/profiles.js": "d1beb60fcccf9ee7738d6f20f6a2e3de646f460ffc84165900edc1a65ccaa24f",
@@ -128,8 +128,8 @@
       "lib/transferwire.js": "f981e7cd6e63bfefbcbb4de85008ceda4da0f50f9401c751096d6c25b371845a",
       "lib/wake.js": "7bb068d6012b9ba0b4e177b6ccdf17e0bed4b3db95288c71d122d17fc749a94e",
       "lib/words.js": "7659cf985f8eb028bef802e4326599e204610274a83e00d0ce73a22a7c267545",
-      "package-lock.json": "2dca3d818fa57d922e6c704b9d117ca5f8f6304e8a7dbaef93da29b4cbead854",
-      "package.json": "dd76b192341f9403d9923e2d573b899d835a277920b2c33c8d48a64d4fa544ee"
+      "package-lock.json": "6b6c601181513a85d6fecf40188d371d3211313489e34676b65cc6768aed6fb6",
+      "package.json": "57fcbc2125f449c9fc75bc400e6c7c555e500c8212fa5675f254ce9dc65de8bf"
     }
   },
   "library": {
