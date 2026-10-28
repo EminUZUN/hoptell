@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { labelOf, parseAddress, readRelaysFile, routeOf } from "../lib/relays.js";
 
 const tmp = (t) => {
@@ -82,4 +83,30 @@ test("addresses and routing: bare names only to the default; @all and @role scop
   assert.throws(() => routeOf("@all", { aliases: ["work", "local"], defaultAlias: null }), /@all@<alias>/);
   assert.equal(labelOf("alice", "work", true), "alice@work");
   assert.equal(labelOf("alice", "default", false), "alice");
+});
+
+test("doctor with a relays file: no HOPTELL_RELAY or HOPTELL_TOKEN is not a failure", (t) => {
+  const d = tmp(t);
+  write(path.join(d, "local.token"), "local-token-0123456789\n");
+  const file = path.join(d, "relays.json");
+  write(file, { version: 1, default: "local", relays: [{ alias: "local", url: "ws://127.0.0.1:1", tokenFile: path.join(d, "local.token") }] });
+  // A fresh process, so no settings file loaded by another test leaks in.
+  const doctorUrl = new URL("../lib/doctor.js", import.meta.url).href;
+  const run = (env) => {
+    const script = `const { doctor } = await import(${JSON.stringify(doctorUrl)});
+      const lines = [];
+      await doctor(${JSON.stringify({ HOPTELL_HOME: path.join(d, "home"), ...env })}, (l) => lines.push(l), { homedir: ${JSON.stringify(d)} });
+      process.stdout.write(lines.join("\\n"));`;
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", script], { cwd: d, encoding: "utf8", env: { PATH: process.env.PATH, HOME: d } });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  const withFile = run({ HOPTELL_RELAYS: file });
+  assert.match(withFile, /info +relay URL: HOPTELL_RELAY is not set: sessions use the relays file/);
+  assert.match(withFile, /info +token: HOPTELL_TOKEN is not set: each relay in the relays file has its own token/);
+  assert.match(withFile, /ok +relays: local; bare names go to local/);
+  assert.doesNotMatch(withFile, /FAIL +(relay URL|token):/);
+  const without = run({});
+  assert.match(without, /FAIL +relay URL: HOPTELL_RELAY is not set/);
+  assert.match(without, /FAIL +token: HOPTELL_TOKEN is not set/);
 });

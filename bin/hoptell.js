@@ -26,6 +26,24 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
   process.exit(code);
 }
 
+// Antigravity's Stop hook (lib/agyhook.js): prints its decision, never an error; any problem
+// lets the turn end as it would without the hook.
+if (process.argv[2] === "hook-agy-stop") {
+  let out = { decision: "allow" };
+  try {
+    const { readHookInput } = await import("../lib/wake.js");
+    readHookInput(undefined, { drain: true, parse: false }); // agy's input is not needed
+    const i = process.argv.indexOf("--home", 3);
+    if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
+    loadEnv();
+    const { hookAgyStop } = await import("../lib/agyhook.js");
+    const relay = { relayUrl: process.env.HOPTELL_RELAY, protocol: parseProtocol(process.env.HOPTELL_PROTOCOL), profile: process.env.HOPTELL_PROFILE || null };
+    out = await hookAgyStop({ home: defaultHome(process.env, os.homedir()), env: process.env, relay });
+  } catch {}
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  process.exit(0);
+}
+
 // A client's headers helper for hoptell mcp-http: prints {"X-Hoptell-Hook-Registration": id} for
 // the Claude Code process it runs under, or {} (never an error: the client then has no hooks).
 // `hook-header --help` prints its help (Claude Code never passes it).
@@ -1102,14 +1120,18 @@ try {
     case "tmux": {
       const sep = args.indexOf("--");
       const head = sep < 0 ? args : args.slice(0, sep);
-      if (sep < 0 || !(head.length === 1 || (head.length === 3 && head[1] === "--roles"))) {
-        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
+      // The name, then --roles <list> and --detach, each at most once, in either order.
+      const detach = head.includes("--detach");
+      const rest = head.filter((a) => a !== "--detach");
+      const usable = head.length - rest.length <= 1 && (rest.length === 1 || (rest.length === 3 && rest[1] === "--roles")) && !rest[0]?.startsWith("--");
+      if (sep < 0 || !usable) {
+        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] [--detach] -- <agent command...>", 2);
       }
       const { launch } = await import("../lib/tmux.js");
       // Once the checks pass, the home is classified first (a new install becomes managed): the
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
-      await launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf() });
+      await launch(rest[0], args.slice(sep + 1), rest[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), detach });
       break;
     }
     case "inject": {
@@ -1437,7 +1459,12 @@ try {
       break;
     }
     case "hooks": {
-      // Settings for Claude Code without the plugin: printed only, never written.
+      // Settings for Claude Code without the plugin, or with --agy for Antigravity: printed only, never written.
+      if (args.includes("--agy")) {
+        const { agyHooksSnippet } = await import("../lib/agyhook.js");
+        console.log(JSON.stringify(agyHooksSnippet(process.execPath, process.env.HOPTELL_HOME), null, 2));
+        break;
+      }
       const { hooksSnippet } = await import("../lib/wake.js");
       console.log(JSON.stringify(hooksSnippet(process.execPath, process.env.HOPTELL_HOME), null, 2));
       break;
