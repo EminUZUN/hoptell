@@ -330,6 +330,10 @@ process. None of this is sent to the relay.
   prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and
   notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of
   ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed.
+- The Antigravity Stop hook (`hoptell hooks --agy`) keeps `agy-<name>.stop.json` in
+  `~/.hoptell/wake/` (0600): the names of the inbox entries it already announced for the session
+  `<name>`, as the tmux injector lists them (a time, ids and a file name). It holds no message text,
+  sender, relay URL or token. An entry is dropped once its message is no longer waiting.
 - Session titles from Claude Code (unless `HOPTELL_TITLE_AUTO=off`): the `SessionStart` and
   `UserPromptSubmit` hooks copy the session's custom name and its session id into
   `<key>.title.json` in `~/.hoptell/wake/` (0600, at most 1 KiB). They never copy the prompt

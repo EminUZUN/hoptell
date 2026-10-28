@@ -26,6 +26,24 @@ if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
   process.exit(code);
 }
 
+// Antigravity's Stop hook (lib/agyhook.js): prints its decision, never an error; any problem
+// lets the turn end as it would without the hook.
+if (process.argv[2] === "hook-agy-stop") {
+  let out = { decision: "allow" };
+  try {
+    const { readHookInput } = await import("../lib/wake.js");
+    readHookInput(undefined, { drain: true, parse: false }); // agy's input is not needed
+    const i = process.argv.indexOf("--home", 3);
+    if (i > 0 && process.argv[i + 1]) process.env.HOPTELL_HOME = process.argv[i + 1];
+    loadEnv();
+    const { hookAgyStop } = await import("../lib/agyhook.js");
+    const relay = { relayUrl: process.env.HOPTELL_RELAY, protocol: parseProtocol(process.env.HOPTELL_PROTOCOL), profile: process.env.HOPTELL_PROFILE || null };
+    out = await hookAgyStop({ home: defaultHome(process.env, os.homedir()), env: process.env, relay });
+  } catch {}
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  process.exit(0);
+}
+
 // A client's headers helper for hoptell mcp-http: prints {"X-Hoptell-Hook-Registration": id} for
 // the Claude Code process it runs under, or {} (never an error: the client then has no hooks).
 // `hook-header --help` prints its help (Claude Code never passes it).
@@ -1441,7 +1459,12 @@ try {
       break;
     }
     case "hooks": {
-      // Settings for Claude Code without the plugin: printed only, never written.
+      // Settings for Claude Code without the plugin, or with --agy for Antigravity: printed only, never written.
+      if (args.includes("--agy")) {
+        const { agyHooksSnippet } = await import("../lib/agyhook.js");
+        console.log(JSON.stringify(agyHooksSnippet(process.execPath, process.env.HOPTELL_HOME), null, 2));
+        break;
+      }
       const { hooksSnippet } = await import("../lib/wake.js");
       console.log(JSON.stringify(hooksSnippet(process.execPath, process.env.HOPTELL_HOME), null, 2));
       break;

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Antigravity (`agy`): `hoptell hooks --agy` prints a Stop hook for `~/.gemini/config/hooks.json`.
+  When an agy turn ends while messages wait in the inbox of the session named `HOPTELL_NAME`,
+  the hook keeps agy running with the fixed inbox notice (or the held notice), once per message,
+  so agy reads them without `hoptell tmux` or another prompt. It cannot wake an idle agy; use
+  `hoptell tmux` for that.
 - `hoptell tmux --detach` starts an agent's tmux session without attaching to it, so a script
   or one terminal can start several agents (see the swarm example in the README).
 - `hoptell doctor` no longer reports `HOPTELL_RELAY` and `HOPTELL_TOKEN` as failures when a

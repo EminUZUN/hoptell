@@ -71,7 +71,7 @@ How an incoming message reaches the agent:
 | Claude Code (channel) | `claude --dangerously-load-development-channels server:hoptell` | a channel notice wakes the agent, which calls `read_inbox` to read the message |
 | Claude Code (hooks) | `claude` with the hoptell plugin, or with the settings from `hoptell hooks` | a fixed hook notice wakes the agent, which calls `read_inbox` |
 | Claude Code (listener) | `HOPTELL_PUSH=listener claude` | the MCP server asks Claude to keep a background `hoptell listen` running; Claude can wake when it returns |
-| Antigravity (`agy`) | `agy` | background `hoptell listen`, like plain Claude Code |
+| Antigravity (`agy`) | `agy`, with the Stop hook from `hoptell hooks --agy` | at the end of each agy turn, waiting messages make agy call `read_inbox`; without the hook, background `hoptell listen` |
 | Supported terminal agents in tmux | `hoptell tmux <name> -- codex` | a fixed notice is typed into the agent's prompt; the agent calls `read_inbox` |
 | Anything else | — | `wait_for_message` / `read_inbox` tools, or `hoptell wait` |
 
@@ -197,9 +197,20 @@ environment. Detach with `Ctrl-b d`, reattach with `tmux attach -t '=hoptell-lap
 
 ```sh
 agy mcp add hoptell hoptell mcp
+hoptell hooks --agy                              # prints a Stop hook; add it to ~/.gemini/config/hooks.json
 HOPTELL_NAME=laptop-agy agy                      # listener mode, after your first prompt
 hoptell tmux laptop-agy --roles gemini -- agy    # or: woken through tmux
 ```
+
+With the Stop hook, a message that arrives while agy works is read when the turn ends: the hook
+keeps agy running with the fixed inbox notice, once per message, and agy calls `read_inbox`.
+agy runs hooks only around its turns, so an idle agy still needs `hoptell tmux` (or your next
+prompt) to notice a message. The hook finds the session by `HOPTELL_NAME`, so set it, and does
+nothing under `hoptell tmux`, whose injector announces messages already. If
+`~/.gemini/config/hooks.json` already exists, add the printed `"hoptell"` entry next to your
+other hooks. agy asks before each hoptell tool call (`read_inbox`, `send_message`,
+`ack_messages`, ...); its prompt offers to always allow the tool in this conversation, or for
+good (saved to agy's `settings.json`).
 
 ### 5. Try it
 
@@ -1537,6 +1548,16 @@ prints the hook settings to add to your Claude Code settings; it does not change
 If the MCP entry sets `HOPTELL_HOME`, run `HOPTELL_HOME=<same value> hoptell hooks` so the
 printed hook commands use the same state directory.
 
+Antigravity (`agy`) has [hooks](https://antigravity.google/docs/hooks) too, but none that runs
+while agy is idle. `hoptell hooks --agy` prints a `Stop` hook for `~/.gemini/config/hooks.json`
+(or a workspace's `.agents/hooks.json`). When an agy turn ends and messages wait in the inbox of
+the session named `HOPTELL_NAME`, the hook answers `{"decision": "continue"}` with the fixed
+notice (or the held notice, when only messages held by your contacts wait), and agy goes on to
+call `read_inbox`. Each waiting message is announced once, so an agent that does not read it is
+not kept running. The hook keeps the names of the inbox entries it announced in
+`~/.hoptell/wake/agy-<name>.stop.json`; any problem lets the turn end as it would without the
+hook. The session keeps its listener mode; under `hoptell tmux` the hook does nothing.
+
 ## CLI
 
 ```
@@ -1577,7 +1598,8 @@ hoptell telegram identity [--apply] [--photo <file.jpg> | --remove-photo]  # the
 hoptell telegram fav|unfav <name> | alias <name> <new name>|--clear | sessions   # favourites and names in Telegram
 hoptell telegram trust '<pin>' [--add] | --remove-key <key id> [--realm <realm id>] | --revoke <realm id>
 hoptell telegram key next | key commit   # rotate the bridge's signing key (bridge stopped)
-hoptell hooks                         # prints Claude Code hook settings for hook delivery without the plugin
+hoptell hooks [--agy]                 # prints Claude Code hook settings for hook delivery without the plugin;
+                                      # --agy: an Antigravity Stop hook that has agy read waiting messages after each turn
 hoptell snapshot <file>               # prints a UTF-8 file snapshot with its SHA-256, for review
 hoptell snapshot --check <sha256> <file>  # exit 0 if the bytes match; nonzero if different or the check fails
 hoptell apply [<proposal id> [--preview | --yes]]   # proposals that answered your review sets; apply one
@@ -1765,6 +1787,9 @@ Results observed on 2026-10-08; behavior depends on the client build and configu
 Session titles, the plugin skills and the `UserPromptSubmit` hook were tested on
 2026-10-26 and 2026-10-27 with Claude Code 2.1.310 and 2.1.311, with Codex CLI
 0.164.0 as a reviewer.
+
+The Antigravity Stop hook (`hoptell hooks --agy`) was tested on 2026-10-28 with Antigravity CLI
+1.4.9 on macOS, in listener mode with a workspace `.agents/hooks.json`.
 
 Spawning agents (`spawn_agent`) is tested on Codex CLI 0.164.0; other Codex builds need a
 one-time approval (`hoptell agents trust-cli`); see [Spawning agents](#spawning-agents). A listener must be started by the client and does not, by itself, wake an
