@@ -1,6 +1,6 @@
 {
   "name": "hoptell",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Message other Claude Code and Codex sessions through a relay you host. Supported idle sessions can wake when a message arrives. Includes reviewer and Telegram owner-channel skills.",
   "author": { "name": "Emin Uzun", "url": "https://github.com/EminUZUN" },
   "homepage": "https://github.com/EminUZUN/hoptell",

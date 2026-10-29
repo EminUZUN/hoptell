@@ -1,10 +1,14 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-10-30)
 
 Upgrade note: this release changes the relay protocol (capability `status`). Upgrade the relay
 and the Telegram bridge, restart the bridge, and restart lead sessions. With an older relay
-nothing is published; with an older bridge `/team` is an unknown command.
+nothing is published; with an older bridge `/team` is an unknown command. The Telegram cards
+for landing, auto-land and Codex's folder trust need the bridge from this release too. An older
+relay still sends `@all` and `@<role>` messages to the injectors' own connections (below), and
+hoptell before 0.4.0 lists those connections in `list_peers`. A session started with `hoptell
+tmux` before the upgrade keeps its old injector, which does not watch for prompts; start it again.
 
 - Agent CLI capabilities: `hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff]
   [--json]` shows what each installed agent CLI offers (flags, and models and efforts from the
@@ -141,6 +145,48 @@ nothing is published; with an older bridge `/team` is an unknown command.
 - Landing, while one is pending: `team down` keeps the worktree of a member whose landing or
   candidate is not resolved, `team land` still reaches it, and `team up` waits for it;
   `hoptell worktree add` and `remove` refuse that member name.
+- Landing onto a moved target: when the target moved since the member started (another member
+  landed), `--prepare` re-bases the member's change onto it, but only when the two touch no
+  common path (a file that became a folder counts); otherwise it refuses and names the paths.
+  When preparation succeeds, test and review exactly `T..C`. hoptell still runs no merge and
+  resolves no conflicts.
+- `team up` warns when the lead is not online at the relay (the members' messages to it would
+  fail), when the team has no reviewer (its landings are then decided in a terminal with `team
+  land <member> --approve <T> <C>`), when a Codex member's hoptell MCP server belongs to another
+  hoptell install, and, once per repository, when Codex's `config.toml` marks neither the
+  repository nor a Codex member's folder trusted. hoptell never trusts a folder for you. `team
+  stop` and `team down` wait, within one time budget, for processes still working in the
+  worktree. `hoptell worktree add` says so when the name is not a member of the running team.
+- `hoptell worktree commit` commits a file replaced by a folder, or a folder replaced by a file,
+  in one commit, and refuses a nested repository (a folder holding a `.git`) anywhere it reads.
+- Sessions that wait: the injector of a `hoptell tmux` session normally looks at its pane every
+  15 seconds, or every 2 seconds while watching Codex's startup trust prompt. When the agent shows a prompt that needs you (a folder trust question, an approval, a
+  sign-in, an update) or its screen has not changed for 10 minutes while it works
+  (`HOPTELL_STALL_MINUTES`), `hoptell team status` shows it with the attach command, a team
+  member's lead gets one inbox message, and your Telegram owner channel gets a short note that
+  names the session but never shows its screen (at most one per session and kind every 5
+  minutes, and 20 such notes an hour, followed by one line saying notes are paused). Nothing is answered for you. The injector sends these through
+  a connection of its own, named after your member with `-c` and a random suffix; peer lists, the
+  bot and `@all` or `@<role>` sends leave it out.
+- Codex's folder trust from Telegram: for the folder trust question of Codex 0.165.0, right after
+  `hoptell tmux` started it in its folder (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto` or
+  `--dangerously-bypass-approvals-and-sandbox`), the owner channel gets a card with Trust folder
+  and Quit instead of the note, for at most 10 minutes. Your tap is signed by the bridge and
+  goes only to that session's injector, which presses only that option, only in that session's
+  terminal, while the same dialog is on the screen, nobody typed or scrolled there since the card
+  was made, and the tap is at most 2 minutes old. Trust is "1", a fresh look that shows Trust
+  selected, then Enter; Quit is "2". The first answer wins and is never tried twice, and the card
+  shows whether hoptell pressed it, pressed nothing, or may have pressed part of it. With no
+  result from the Mac within 3 minutes of the tap, the card says to look at the terminal; a late
+  result still replaces that. Only options whose keys were checked live on that Codex version
+  get a button; `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` shows and presses unchecked ones
+  too, and its card says it is in test mode. Other prompts, including Claude Code's own trust
+  question, stay notes. Limit: hoptell sees the screen in snapshots. If Codex was already past
+  its startup prompt before hoptell's first look and later shows text that looks the same, a tap
+  could type a stray "1" and Enter, or "2", into the session, and between its last look and the
+  key hoptell does not see the screen.
+- Fixed: after you pair Telegram again, the bridge no longer files an agent's "last talked" time
+  from the earlier pairing under the new one.
 
 ## 0.3.2 (2026-10-27)
 

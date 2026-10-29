@@ -1199,18 +1199,18 @@ line wins over both.
 `tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
 The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you.
 
-**Sessions that wait.** The injector also looks at its pane every 15 seconds. When the agent
+**Sessions that wait.** The injector also looks at its pane, normally every 15 seconds, or every 2 seconds while it watches Codex's startup trust prompt. When the agent
 shows a prompt that needs you (a folder trust question, an approval, a sign-in, an update) or its
 screen has not changed for 10 minutes while it works (`HOPTELL_STALL_MINUTES`), `hoptell team
 status` shows it, for example `waiting for you: Codex folder trust (P3, 2 min)`, with the attach
 command. A team member's lead gets one inbox message about it, and your Telegram owner channel
 gets a short note that names the session but never shows its screen: at most one per session and
-kind every 5 minutes, and 20 an hour in all. The injector sends these through a connection of its
+kind every 5 minutes, and 20 such notes an hour, followed by one line saying notes are paused. The injector sends these through a connection of its
 own, named after your member with `-c` and a random suffix. Nothing is answered for you.
 
 **Codex's folder trust from Telegram.** One prompt can be answered from the owner channel: the
 folder trust question of Codex 0.165.0 right after `hoptell tmux` started it, in the folder it was
-started for (with only `-s`, `-a`, `-m`, `--full-auto` or
+started for (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto` or
 `--dangerously-bypass-approvals-and-sandbox` on its command line). Instead of the note you get a
 card with a button for each option whose keys were checked live on that Codex version, worded as
 on the screen, for at most 10 minutes; on 0.165.0 that is Trust folder and Quit. Test mode is only
@@ -1540,8 +1540,8 @@ The member's work is landed from its commits: stop it and commit what its worktr
 another implementer of the repository that still runs stops the command) and makes the candidate.
 When the target moved since the member started (another member landed), the candidate is the
 member's change re-based onto the target, only when the two touch no common path (a file that
-became a folder counts); otherwise it is refused, naming the paths. Either way the tests and the
-review are of exactly `T..C`, never of the member's own commits. The lead tests exactly `C` in a
+became a folder counts); otherwise it is refused, naming the paths. When preparation succeeds,
+the tests and the review are of exactly `T..C`, never of the member's own commits. The lead tests exactly `C` in a
 folder of its own and records the result with `team evidence`: the full `C`, which must be the
 member's current candidate, `pass` or `fail`, each command it ran, and the report (a text file of
 at most 64 KiB, stored by its digest). "pass" is the lead's claim, and a reviewer's verdict is a

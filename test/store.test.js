@@ -245,14 +245,21 @@ test("several processes appending and taking at once lose and duplicate nothing"
   const code = (role, n) => `
     const { openStore, processConsumer } = await import(${JSON.stringify(mod)});
     const s = await openStore(${JSON.stringify(b)});
+    // The store lock is short but not fair: under load a call can give up waiting ("busy",
+    // before it changed anything), as a real caller sees it. It is tried again, as they do.
+    const again = async (f) => {
+      for (let i = 0; ; i++) {
+        try { return await f(); } catch (e) { if (e?.code !== "busy" || i >= 20) throw e; }
+      }
+    };
     const out = [];
     if (${JSON.stringify(role)} === "writer") {
-      for (let i = 0; i < ${n}; i++) await s.append({ id: crypto.randomUUID(), text: process.pid + "-" + i, ts: 1 });
+      for (let i = 0; i < ${n}; i++) { const m = { id: crypto.randomUUID(), text: process.pid + "-" + i, ts: 1 }; await again(() => s.append(m)); }
     } else {
       const me = processConsumer("listen");
       for (let i = 0; i < 200; i++) {
-        const got = await s.take(me);
-        if (got) { for (const m of got.messages) out.push(m.msg.text); await s.ack(got.receipt); }
+        const got = await again(() => s.take(me));
+        if (got) { for (const m of got.messages) out.push(m.msg.text); await again(() => s.ack(got.receipt)); }
         else await new Promise((r) => setTimeout(r, 20));
       }
     }
