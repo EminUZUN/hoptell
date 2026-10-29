@@ -39,7 +39,7 @@ node test/skill-evals/render-commands.mjs
 # run, named in evals/.staged-cli for the scaffold scripts (they fail when it is missing).
 cli=$(mktemp -d "${TMPDIR:-/tmp}/hoptell-eval-cli.XXXXXX")
 mkdir -p "$cli/node_modules"
-cp -R bin lib presets schema package.json "$cli/"
+cp -R bin lib presets schema templates package.json "$cli/"
 cp -RL node_modules/ws "$cli/node_modules/"
 echo "$cli" > evals/.staged-cli
 env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR claude plugin eval . \

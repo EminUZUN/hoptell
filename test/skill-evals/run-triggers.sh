@@ -33,7 +33,7 @@ chmod +x "$work/bin/claude"
 git -C "$work/project" init -q
 
 description() { sed -n 's/^description: //p' "$repo/skills/$1/SKILL.md" | head -1; }
-skills=(hoptell-reviewers hoptell-owner-channel hoptell-safe-ops)
+skills=(hoptell-reviewers hoptell-owner-channel hoptell-safe-ops hoptell-implementers)
 for skill in ${ONLY:-${skills[@]}}; do
   rm -f "$work/project/.claude/commands/"*.md
   for other in "${skills[@]}"; do

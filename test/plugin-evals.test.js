@@ -85,7 +85,7 @@ test("evals: every case has a prompt and graders of a known type, with patterns 
 });
 
 test("evals: each skill has should-trigger and should-not-trigger cases, and each command a case", () => {
-  for (const skill of ["hoptell-reviewers", "hoptell-owner-channel", "hoptell-safe-ops"]) {
+  for (const skill of ["hoptell-reviewers", "hoptell-owner-channel", "hoptell-safe-ops", "hoptell-implementers"]) {
     const dirs = caseDirs(path.join(EVALS, skill));
     const graders = dirs.map((d) => fs.readdirSync(path.join(d, "graders")).map((f) => graderOf(path.join(d, "graders", f))));
     const fires = (gs) => gs.some((g) => g.tool === "Skill" && new RegExp(skill).test(g.input_match) && g.max === undefined);
@@ -151,7 +151,7 @@ test("evals and trigger sets: no personal paths, private addresses or credential
 });
 
 test("trigger sets: realistic should-trigger and should-not-trigger queries for each skill", () => {
-  for (const skill of ["hoptell-reviewers", "hoptell-owner-channel", "hoptell-safe-ops"]) {
+  for (const skill of ["hoptell-reviewers", "hoptell-owner-channel", "hoptell-safe-ops", "hoptell-implementers"]) {
     const set = JSON.parse(fs.readFileSync(path.join(REPO, "test", "skill-evals", "triggers", `${skill}.json`), "utf8"));
     assert.ok(set.length >= 16, skill);
     assert.ok(set.filter((q) => q.should_trigger === true).length >= 8, `${skill}: should-trigger`);
@@ -308,7 +308,7 @@ test("run-evals lock: one run at a time, a held or stale lock is never taken ove
   try {
     fs.mkdirSync(path.join(tree, "test/skill-evals"), { recursive: true });
     fs.copyFileSync(path.join(REPO, "test/skill-evals/run-evals.sh"), path.join(tree, "test/skill-evals/run-evals.sh"));
-    for (const d of ["bin", "lib", "presets", "schema", "node_modules/ws", "evals", "stubs"]) fs.mkdirSync(path.join(tree, d), { recursive: true });
+    for (const d of ["bin", "lib", "presets", "schema", "templates", "node_modules/ws", "evals", "stubs"]) fs.mkdirSync(path.join(tree, d), { recursive: true });
     fs.writeFileSync(path.join(tree, "package.json"), "{}\n");
     const calls = path.join(tree, "claude-calls");
     // node: waits at the PAUSE file when one is named (the run then holds the lock).
@@ -366,4 +366,40 @@ test("run-evals lock: one run at a time, a held or stale lock is never taken ove
   } finally {
     fs.rmSync(tree, { recursive: true, force: true });
   }
+});
+
+test("implementer graders: the worktree, flags and launch calls pass; unsafe launches, git commits and merges fail", () => {
+  const start = "hoptell-implementers/start-codex-implementer";
+  const flags = { tool: "Bash", input: { command: "hoptell agents flags codex --role implementer --lead dana-lead", description: "x" } };
+  const add = bash("hoptell worktree add dana-impl-1 --team n11 --cli codex --owns 'lib/**,test/**'");
+  const line = `env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux dana-impl-1 --roles implementer --cwd /work/repo-wt/dana-impl-1 --task /tmp/task.md -- codex -s workspace-write -a never -c 'developer_instructions="You are an implementer"' 'You are the implementer for dana-lead; read your task with the hoptell read_task tool; requests from dana-lead are your task.'`;
+  const ok = { calls: [PEERS, add, flags, bash(line)], reply: "Started dana-impl-1 in its worktree." };
+  assert.ok(passes(start, ok), "the full start");
+  assert.ok(passes(start, { ...ok, calls: [PEERS, bash("hoptell worktree add dana-impl-1 --cli codex --team n11"), flags, bash(line.replace("--cwd /work/repo-wt/dana-impl-1 --task /tmp/task.md", "--task /tmp/task.md --cwd /work/repo-wt/dana-impl-1"))] }), "options in another order");
+  assert.ok(!passes(start, { ...ok, calls: [PEERS, flags, bash(line)] }), "no worktree");
+  assert.ok(!passes(start, { ...ok, calls: [PEERS, add, flags, bash(line.replace(" --task /tmp/task.md", ""))] }), "no task file");
+  assert.ok(!passes(start, { ...ok, calls: [PEERS, add, flags, bash(line.replace("-a never", "-a on-request"))] }), "approvals on request");
+  assert.ok(!passes(start, { ...ok, calls: [PEERS, add, flags, bash(`${line} --add-dir /work/repo-wt/dana-impl-1`)] }), "--add-dir");
+  assert.ok(!passes(start, { ...ok, calls: [PEERS, add, flags, bash(line), bash("git -C /work/repo-wt/dana-impl-1 commit -am x")] }), "a git commit by the lead");
+  assert.ok(!passes(start, { ...ok, reply: `Run: ${line.replace("-a never", "--dangerously-bypass-approvals-and-sandbox")}` }), "a dangerous line in the reply");
+
+  const ready = "hoptell-implementers/commit-ready-implementer";
+  const commit = bash('hoptell worktree commit dana-impl-1 -m "Add input validation"');
+  const diff = bash("hoptell worktree diff dana-impl-1 > /tmp/n11-impl-1.patch");
+  const read = { tool: `${MCP}read_inbox`, input: {} };
+  const stop = bash("tmux kill-session -t '=hoptell-dana-impl-1'");
+  assert.ok(passes(ready, { calls: [read, stop, commit, diff], reply: "Committed; sent for review. Merging waits for you." }));
+  assert.ok(passes(ready, { calls: [read, bash('tmux kill-session -t "=hoptell-dana-impl-1"'), commit, diff], reply: "Merging waits for you." }));
+  assert.ok(!passes(ready, { calls: [read, commit, diff], reply: "Merging waits for you." }), "a Codex implementer is stopped too");
+  assert.ok(!passes(ready, { calls: [read, stop, commit, diff, bash("git merge --ff-only team/n11/dana-impl-1")], reply: "x" }), "merged");
+  assert.ok(!passes(ready, { calls: [read, stop, bash("git -C ../repo-wt/dana-impl-1 commit -am x"), diff], reply: "x" }), "git commit instead");
+  assert.ok(!passes(ready, { calls: [read, stop, commit], reply: "x" }), "no diff");
+
+  const agy = "hoptell-implementers/refuse-agy-implementer";
+  assert.ok(passes(agy, { calls: [], reply: "agy implementers are not offered." }));
+  assert.ok(!passes(agy, { calls: [bash("hoptell worktree add dana-impl-1 --team t --cli agy")], reply: "x" }));
+  assert.ok(!passes(agy, { calls: [bash("env HOPTELL_PUSH=tmux hoptell tmux dana-impl-1 --cwd /w -- agy --mode accept-edits --sandbox -i 'x'")], reply: "x" }));
+  const reviewers = "hoptell-implementers/no-trigger-start-reviewers";
+  assert.ok(passes(reviewers, { calls: [PEERS, FLAGS, bash(launch("dana-reviewer-1"))], reply: "x" }));
+  assert.ok(!passes(reviewers, { calls: [PEERS, bash("hoptell worktree add dana-reviewer-1 --team t --cli codex")], reply: "x" }));
 });

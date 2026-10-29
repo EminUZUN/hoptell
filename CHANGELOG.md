@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+- Agent CLI capabilities: `hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff]
+  [--json]` shows what each installed agent CLI offers (flags, and models and efforts from the
+  CLI's own caches, as advice), what hoptell's tests verified about its sandbox and permission
+  modes on which versions, and what changed since the last record. It runs only `--version`,
+  `--help` and a few listing commands, each with an empty home and working folder, and never
+  starts a model. `hoptell doctor` notes a CLI that changed.
+- Role presets: `hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead>
+  [--model <model>] [--effort <effort>]` prints the agent command to put after `hoptell tmux ...
+  --`: the role's safety flags, then the model and effort as that CLI takes them, with warnings.
+  The presets ship in `presets/roles.json` with their sources and dates; your
+  `<hoptell home>/presets/roles.json` overrides them per CLI and role. agy takes its effort in
+  the model id and never gets `--effort`. agy reviewers start in plan mode with `--sandbox` and
+  without per-tool prompts; agy implementers are not offered.
+- `/hoptell:reviewers [count] [codex|claude|agy] [model] [effort]`, and the `hoptell-reviewers`
+  skill takes every launch's flags from `hoptell agents flags`.
+- Agent profiles (`spawn_agent`): the fixed Codex effort map is gone. `max` now passes as `max`;
+  a profile with effort `minimal` or `ultra` is refused when it loads, naming the efforts the
+  recorded gates allow.
+- Implementers: `hoptell worktree add | list | commit | diff | remove` gives each implementer a
+  git worktree next to the repository, on a branch `team/<team>/<member>`. Implementers never
+  commit; the lead commits their changes with `hoptell worktree commit` and takes the patch for
+  review from `hoptell worktree diff`. These commands run git with no global configuration and no
+  hook, filter, textconv or external diff, commit through plumbing that applies no filter, and
+  refuse a repository whose config sets anything outside a short allow list. They need Git 2.43
+  or later, and they refuse while any implementer of the repository is running, whatever its CLI,
+  or while any other process of yours works in a member's worktree: stop the implementer (or let
+  it quit) before you commit or diff its work. See "Working with implementer
+  agents" in the README.
+- `hoptell tmux --cwd <dir>` starts the agent in that folder, and `--task <file>` stores a task
+  (at most 32 KiB) for the session, which reads it with the new `read_task` tool. This keeps the
+  task off the command line; it is not hidden from other programs that run as you.
+- Role templates (`reviewer`, `implementer`, `tester`): `hoptell agents flags ... --lead <name>`
+  adds the template with the CLI's own per-session flag, and a launch prompt that points at
+  `read_task`. `~/.config/hoptell/roles/<role>.md` replaces the shipped text.
+- Claude Code plugin: a new `hoptell-implementers` skill covers worktrees, task files, the
+  implement-and-review loop and cleanup.
+
 ## 0.3.2 (2026-10-27)
 
 - Telegram and the Mini App now show session titles. An agent without an alias is labelled with

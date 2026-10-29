@@ -50,7 +50,7 @@ const read = (rel) => fs.readFileSync(path.join(REPO, rel), "utf8");
 
 test("skills: each SKILL.md has a name that matches its folder and a sensible description", () => {
   const names = skillNames();
-  assert.deepEqual(names, ["hoptell-owner-channel", "hoptell-reviewers", "hoptell-safe-ops"]);
+  assert.deepEqual(names, ["hoptell-implementers", "hoptell-owner-channel", "hoptell-reviewers", "hoptell-safe-ops"]);
   for (const n of names) {
     const fm = frontmatter(read(path.join("skills", n, "SKILL.md")));
     assert.ok(fm, `${n}: no frontmatter`);

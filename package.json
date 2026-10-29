@@ -11,6 +11,7 @@
     "lib/",
     "presets/",
     "schema/",
+    "templates/",
     ".env.example",
     "README.md",
     "SECURITY.md",

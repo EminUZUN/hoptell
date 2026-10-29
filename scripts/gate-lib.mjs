@@ -141,6 +141,7 @@ export const GROUPS = {
       "lib/records.js",
       "lib/relays.js",
       "lib/reviewsets.js",
+      "lib/roles.js",
       "lib/routes.js",
       "lib/session.js",
       "lib/settings.js",
@@ -155,9 +156,12 @@ export const GROUPS = {
       "lib/transferwire.js",
       "lib/wake.js",
       "lib/words.js",
+      "lib/worktrees.js",
       // not imported but run: lib/files.js starts it as a child process (spawn of process.execPath
       // with its path) for every guarded read, a transfer's capture included
       "lib/read-helper.mjs",
+      // not imported but run: lib/worktrees.js starts it as a child process (worktree commit capture)
+      "lib/capture-helper.mjs",
       // not imported but read: lib/ownerapppage.js reads these at bridge start and serves them as
       // the owner app's page (design 7.4)
       "lib/miniapp/app.css",
@@ -169,6 +173,12 @@ export const GROUPS = {
       "lib/icons/apple-touch-icon.png",
       "lib/icons/favicon-32.png",
       "lib/icons/icon-64.png",
+      // not imported but read: lib/capabilities.js reads the role presets
+      // (launch and safety flags per CLI); lib/roles.js reads the role templates (design 8)
+      "presets/roles.json",
+      "templates/roles/implementer.md",
+      "templates/roles/reviewer.md",
+      "templates/roles/tester.md",
       // the Node dependencies loaded on this path
       "package.json",
       "package-lock.json",

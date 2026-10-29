@@ -1102,14 +1102,25 @@ try {
     case "tmux": {
       const sep = args.indexOf("--");
       const head = sep < 0 ? args : args.slice(0, sep);
-      if (sep < 0 || !(head.length === 1 || (head.length === 3 && head[1] === "--roles"))) {
-        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
+      const { launch, TMUX_USAGE } = await import("../lib/tmux.js");
+      // The peer name first, then each option once, with its value.
+      const opts = {};
+      let bad = sep < 0 || head.length % 2 !== 1 || head[0].startsWith("-");
+      for (let i = 1; !bad && i < head.length; i += 2) {
+        if (!["--roles", "--cwd", "--task"].includes(head[i]) || head[i] in opts || head[i + 1].startsWith("--")) bad = true;
+        else opts[head[i]] = head[i + 1];
       }
-      const { launch } = await import("../lib/tmux.js");
+      if (bad) fail(`tmux needs a peer name, then -- and the agent's command\nusage: ${TMUX_USAGE}`, 2);
       // Once the checks pass, the home is classified first (a new install becomes managed): the
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
-      await launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf() });
+      await launch(head[0], args.slice(sep + 1), opts["--roles"] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), cwd: opts["--cwd"] ?? null, task: opts["--task"] ?? null });
+      break;
+    }
+    case "worktree": {
+      // Implementer worktrees (design 8, topic 2).
+      const { worktreeCommand } = await import("../lib/worktrees.js");
+      await worktreeCommand({ args, home: home(), cwd: process.cwd(), fail, out: (l) => console.log(l) });
       break;
     }
     case "inject": {

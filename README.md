@@ -1117,7 +1117,7 @@ groups count as the uploader is signed in now.
 ## Working with reviewer agents
 
 You can ask a Claude Code session to start other agents as reviewers, send them a file, and
-collect their verdicts. The Claude Code plugin ships three skills for this, and slash commands
+collect their verdicts. The Claude Code plugin ships skills for this, and slash commands
 that use them:
 
 | Command | Skill | What it does |
@@ -1218,6 +1218,93 @@ can be resumed, or you can start a fresh one:
 ```sh
 HOPTELL_PUSH=tmux hoptell tmux <name> --roles reviewer -- codex resume -s read-only -a never <session id>
 ```
+
+## Working with implementer agents
+
+An implementer is an interactive Codex or Claude Code session that edits files in a git worktree
+of its own and reports to your lead session. It never commits: the lead commits its work with
+hoptell's controlled git, sends the diff to reviewers, and asks you before anything lands. The
+`hoptell-implementers` skill of the Claude Code plugin walks a lead session through these steps.
+Like reviewers, implementers run in your terminal with your account; start them only when you
+want them, because they have write access in their worktree. hoptell does not offer agy
+implementers: in its test (agy 1.4.8), agy's `--sandbox` did not keep writes in the workspace or
+block the network.
+
+**A worktree per implementer.** From the repository, with your own work committed:
+
+```sh
+$ hoptell worktree add alice-impl-1 --team n11 --cli codex --owns 'lib/**,test/**'
+Worktree for alice-impl-1: /srv/src/app-wt/alice-impl-1
+  branch team/n11/alice-impl-1 at 3f1c9e2a7b4d6c8e0f1a2b3c4d5e6f708192a3b4
+```
+
+The worktree goes next to the repository, in `<repo>-wt/<member>` (`--folder` names another
+folder), on a new branch `team/<team>/<member>` at your `HEAD` (or `--base <commit>`). An existing
+branch or folder, or uncommitted changes in your tree, are refused. `--owns` lists what the member
+may change; a commit with other files is refused unless you pass `--allow-outside`.
+`hoptell worktree list` shows each member's worktree, branch, base and last commit.
+
+**The task and the launch.** Write the task to a file and pass it with `--task`: hoptell copies it
+into `<hoptell home>/sessions/<name>.task` (0600) at launch, and the session reads it with the
+`read_task` tool, which serves only the task stored for that session at its start. This keeps the
+task off the command line and out of the tmux pane; it is not hidden from other programs that run
+as you. `--lead` makes `hoptell agents flags` add a role template and a launch prompt that points
+at `read_task`:
+
+```sh
+hoptell agents flags codex --role implementer --lead alice-lead
+HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles implementer --cwd ../app-wt/alice-impl-1 --task task.md -- <its output>
+```
+
+`--cwd` starts the agent in its worktree; `hoptell tmux` refuses a member's worktree for another
+name or another CLI than the one `worktree add` recorded. The role templates (`reviewer`,
+`implementer`, `tester`) are short texts: who the lead is, what counts as the task, how to reply,
+and what never to do (commit, push, tag, change git config, ask the owner directly). Claude Code
+gets the template with `--append-system-prompt`; Codex with `-c developer_instructions` on the
+versions where hoptell verified that it applies (otherwise in the prompt); agy in its `-i` prompt.
+`~/.config/hoptell/roles/<role>.md` replaces the shipped text for a role, with `{{lead}}` for the
+lead's name. hoptell never writes `AGENTS.md`, `CLAUDE.md`, `~/.codex` or `~/.claude`.
+
+**The loop.** The implementer edits files, runs the tests its task names, and sends
+`ready: <summary>, tests: <result>`. Stop its session (or let it quit), then:
+
+```sh
+hoptell worktree commit alice-impl-1 -m "Validate the settings file"   # prints the commit id
+hoptell worktree diff alice-impl-1 > n11-impl-1.patch                  # base..head, for the reviewers
+```
+
+Send the patch to the reviewers with the base and head commit ids. Findings go back to the
+implementer; a new head means a new review. When the reviewers approve, merging the branch is
+your call: the lead asks you and never merges, pushes or tags by itself.
+
+**Controlled git.** The lead's git runs outside any sandbox on files an agent wrote, so
+`hoptell worktree` runs git with no system or global configuration, an empty `HOME` and no
+inherited `GIT_*` variables, with hooks, fsmonitor, external diff, textconv and the ssh command
+turned off, and attributes taken from an empty tree instead of the worktree's `.gitattributes`.
+Commits use plumbing that applies no filter (`hash-object --no-filters`, a private index,
+`write-tree`, `commit-tree`) and are unsigned working commits. The repository's config must hold
+only allow-listed keys (`core` basics, `remote.*`, `branch.*`, `user.name`, `user.email`, and the
+SSH signing settings recorded at `worktree add`); a hook path, filter, textconv, include or any
+other program is refused, as is a change to the signing settings or to `.git/info/attributes`.
+These checks find changes; they do not stop one that races them. The guarantee rests on the
+repository's `.git` staying trusted, and no implementer is kept away from it: they run as you,
+whatever their CLI or sandbox flags. So every `hoptell worktree` command refuses while any member
+of the repository is running. `hoptell tmux --cwd <worktree>` records the member's session (its
+tmux session id and its pane's process, then also the processes that one started). A member
+counts as running while any of those processes is alive, or while any process of yours (other
+than hoptell and the shell it runs in) has its working folder in the member's worktree, such as
+a tool command an agent's background service runs there. hoptell reads those folders with `lsof`
+on macOS and from `/proc` on Linux; when it cannot tell, it refuses. A process that left the
+worktree but still writes into it is not seen, which is why an implementer must have quit, not
+only gone quiet. Start implementers with `hoptell tmux --cwd`. Before `worktree commit`, `diff`,
+`remove` or a new `worktree add` in that repository, stop the implementer or let it quit, and
+`cd` out of the worktree in other shells. Set `user.name` and `user.email` in the repository's own config; the
+controlled git reads no global configuration. `hoptell worktree` needs Git 2.43 or later.
+
+**Cleanup.** Stop the member's session, then `hoptell worktree remove alice-impl-1`. It removes only
+a clean worktree of a stopped member whose branch is still at the commit hoptell recorded. The branch is deleted only
+when it has no commits of the member; otherwise it is kept and named. hoptell never runs
+`git reset`, `git clean` or `git worktree remove --force`; anything it refuses stays for you.
 
 ## Spawning agents
 
@@ -1589,7 +1676,7 @@ hoptell logout                        # removes the stored sign-in and revokes i
 hoptell mcp
 hoptell mcp-http [--port 7790]        # the same over HTTP on 127.0.0.1 (see "MCP over HTTP on this machine")
 hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>
-hoptell tmux <name> [--roles a,b] -- <agent command...>
+hoptell tmux <name> [--roles a,b] [--cwd <dir>] [--task <file>] -- <agent command...>
 hoptell list [--relay <alias>]
 hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>
                                       # to: name, @role or @all; sends as $HOPTELL_NAME without going online
@@ -1606,7 +1693,9 @@ hoptell agents profiles              # agent profiles and their approval state (
 hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
 hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   # what each agent CLI offers and what changed
-hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>]   # flags for hoptell tmux ... --
+hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>] [--lead <name> [--template <t>]]   # flags for hoptell tmux ... --
+hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>]   # an implementer's worktree (see "Working with implementer agents")
+hoptell worktree list | commit <member> -m <message> [--allow-outside] | diff <member> [--stat] | remove <member>
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
 hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
 hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it

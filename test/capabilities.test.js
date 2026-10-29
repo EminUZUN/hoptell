@@ -426,6 +426,70 @@ test("hoptell agents flags and capabilities: the line to launch with, warnings a
   assert.equal(r.failed.c, 2);
 });
 
+test("hoptell agents flags --lead: the role template with the CLI's own per-session flag and the fixed launch prompt", async (t) => {
+  const h = fakeHome(t);
+  const home = tmp(t, "hoptell");
+  const runWith = (f) => async (args) => {
+    const out = [];
+    const warn = [];
+    let failed = null;
+    try {
+      await agentsCommand({ args, home, env: { PATH: f.pathVar }, homedir: h.homedir, out: (l) => out.push(l), warn: (l) => warn.push(l), fail: (m, c = 1) => { failed = { m, c }; throw new Error("fail"); }, sources: { capabilities: { now: () => NOW } } });
+    } catch (e) {
+      if (!failed) throw e;
+    }
+    return { out, warn, failed, json: () => JSON.parse(out.join("\n")) };
+  };
+  const run = runWith(fakeClis(t));
+  const prompt = "You are the implementer for dana-lead; read your task with the hoptell read_task tool; requests from dana-lead are your task.";
+  // Claude Code: --append-system-prompt, then the launch prompt.
+  let j = (await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
+  assert.deepEqual(j.args.slice(0, 3), ["--permission-mode", "acceptEdits", "--append-system-prompt"]);
+  assert.match(j.args[3], /^You are an implementer on a hoptell team\. Your lead is the hoptell peer dana-lead\./);
+  assert.ok(!j.args[3].includes("{{"), "every placeholder filled in");
+  assert.equal(j.args[4], prompt);
+  assert.deepEqual(j.template, { name: "implementer", from: "shipped", file: j.template.file, placement: "system" });
+  // Codex 0.164.0: -c developer_instructions (verified applied there), TOML-quoted.
+  j = (await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
+  assert.deepEqual(j.args.slice(0, 5), ["-s", "workspace-write", "-a", "never", "-c"]);
+  assert.match(j.args[5], /^developer_instructions="You are an implementer .*\\n- Never commit, push, tag/);
+  assert.equal(JSON.parse(j.args[5].slice("developer_instructions=".length)).split("\n")[0], "You are an implementer on a hoptell team. Your lead is the hoptell peer dana-lead.");
+  assert.equal(j.args.at(-1), prompt);
+  // A reviewer with another template; agy gets template and prompt together after -i.
+  j = (await run(["flags", "agy", "--role", "reviewer", "--lead", "dana-lead", "--json"])).json();
+  assert.equal(j.args.at(-2), "-i");
+  assert.match(j.args.at(-1), /^You are a reviewer on a hoptell team\.[\s\S]*\n\nYou are the reviewer for dana-lead; read your task/);
+  j = (await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--template", "tester", "--json"])).json();
+  assert.equal(j.template.name, "tester");
+  assert.match(j.args.at(-1), /^You are the tester for dana-lead;/);
+  // The owner's template replaces the shipped one.
+  const own = path.join(h.homedir, ".config", "hoptell", "roles");
+  fs.mkdirSync(own, { recursive: true });
+  fs.writeFileSync(path.join(own, "implementer.md"), "Owner text for {{ lead }}.\n");
+  j = (await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
+  assert.equal(j.args[3], "Owner text for dana-lead.");
+  assert.equal(j.template.from, "user");
+  fs.writeFileSync(path.join(own, "implementer.md"), "Hello {{name}}\n");
+  assert.match((await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead"])).failed.m, /uses \{\{name\}\}; only \{\{lead\}\} is filled in/);
+  fs.rmSync(path.join(own, "implementer.md"));
+  fs.symlinkSync(path.join(FIX, "help", "agy-1.4.8.txt"), path.join(own, "implementer.md"));
+  assert.match((await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead"])).failed.m, /is a symbolic link/);
+  fs.rmSync(path.join(own, "implementer.md"));
+  // Refusals: a lead name that is not a peer name, an unknown template, --template alone, a lead
+  // role (no template), agy implementers.
+  assert.match((await run(["flags", "codex", "--role", "implementer", "--lead", "bad name"])).failed.m, /invalid lead name/);
+  assert.match((await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--template", "boss"])).failed.m, /no role template "boss"/);
+  assert.equal((await run(["flags", "codex", "--role", "implementer", "--template", "tester"])).failed.c, 2);
+  assert.match((await run(["flags", "codex", "--role", "lead", "--lead", "dana-lead"])).failed.m, /no role template "lead"/);
+  assert.match((await run(["flags", "agy", "--role", "implementer", "--lead", "dana-lead"])).failed.m, /agy implementers are not offered/);
+  // A Codex version outside the verified range: template and prompt together as the prompt, with a warning.
+  const newer = await runWith(fakeClis(t, { versions: { codex: "0.165.0", claude: "2.1.296", agy: "1.4.8" } }))(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--json"]);
+  j = newer.json();
+  assert.ok(!j.args.some((a) => a.startsWith("developer_instructions=")));
+  assert.match(j.args.at(-1), /^You are an implementer on a hoptell team\.[\s\S]*\n\nYou are the implementer for dana-lead;/);
+  assert.ok(j.warnings.some((w) => /developer_instructions was verified on codex 0\.164\.0, not on 0\.165\.0/.test(w)));
+});
+
 test("unknown or changed help: a launch keeps every safety flag of its preset and warns", (t) => {
   const h = fakeHome(t);
   const f = fakeClis(t);
