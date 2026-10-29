@@ -1242,7 +1242,10 @@ The worktree goes next to the repository, in `<repo>-wt/<member>` (`--folder` na
 folder), on a new branch `team/<team>/<member>` at your `HEAD` (or `--base <commit>`). An existing
 branch or folder, or uncommitted changes in your tree, are refused. `--owns` lists what the member
 may change; a commit with other files is refused unless you pass `--allow-outside`.
-`hoptell worktree list` shows each member's worktree, branch, base and last commit.
+`hoptell worktree list` shows each member's worktree, branch, base and last commit. A worktree you
+add by hand for a name that is not a member of the running team is in no team: `team land` and
+`team status` do not see it, and `worktree add` says so. Members come from the team file, through
+`team up`.
 
 **The task and the launch.** Write the task to a file and pass it with `--task`: hoptell copies it
 into `<hoptell home>/sessions/<name>.task` (0600) at launch, and the session reads it with the
@@ -1378,9 +1381,13 @@ with: git config user.name ..."), and for landing SSH signing: `gpg.format ssh`,
 The lead must be a session connected to the relay under the lead name: an agent session, or
 `hoptell wait`. `hoptell listen` only reads a local inbox, so the members' messages to a lead that
 only listens fail. After the start, `team up` checks the relay and warns when the lead is not
-online. Interactive Codex asks you to trust each new folder in its pane before it starts;
-`team up` names every Codex member whose folder Codex's `config.toml` does not mark trusted, and
-hoptell never trusts a folder for you. A Codex member's hoptell MCP server is the one in Codex's
+online. Interactive Codex asks you to trust a repository in its pane before it starts. Checked
+with Codex 0.165.0 (Codex's docs do not say), it keeps that trust under the repository's root, so
+its worktrees count as trusted after that. `team up`
+names the Codex members when Codex's `config.toml` marks neither the repository nor their folder
+trusted, once per repository, and hoptell never trusts a folder for you. A team needs a reviewer
+for `--request-approval`; `team up` warns when it has none, and its landings are then decided in a
+terminal with `hoptell team land <member> --approve <T> <C>`. A Codex member's hoptell MCP server is the one in Codex's
 `config.toml` (`[mcp_servers.hoptell]`), which can be another hoptell install than the one that
 runs `team up`; `team up` warns when it is, and names both.
 
@@ -1470,14 +1477,16 @@ never to other members or to shared-token sessions. It needs a relay with the `s
 update.
 
 **Landing.** The lead prepares a landing, and only you decide it. The lead may prepare a
-candidate signed with the key you configured for the repository, and only your separate decision
-lets hoptell land it. The signature shows that the candidate was made with your key, not that
+candidate signed with the key you configured for the repository, and only your separate decision,
+or an auto-land grant you gave, lets hoptell land it. The signature shows that the candidate was made with your key, not that
 you decided anything: hoptell's own code uses the key only in `team land --target`, but a key
 without a passphrase or a presence check can be used by any process of yours, your agents
 included. Your decision is typed in your terminal, and typing `land` proves that a process typed
 it, not that a person is present. The lead's route, then your one visit:
 
 ```sh
+$ hoptell team stop alice-n11-impl-1
+$ hoptell worktree commit alice-n11-impl-1 -m "Validate the settings file"
 $ hoptell team land alice-n11-impl-1 --target main -m "Validate the settings file (n11)" --prepare
 alice-n11-impl-1: exited.
 Candidate 19380d22...7892 on main (at 96789d8a...28b7), signed and verified; squash of alice-n11-impl-1 at 893eb789...29f.
@@ -1490,8 +1499,13 @@ Landing L7: 19380d22...7892 on main (at 96789d8a...28b7), checked out in /srv/sr
 The owner decides it in a terminal before 2026-10-29T10:15:00.000Z: hoptell team approve L7
 ```
 
-`--prepare` stops the member's session (by its recorded id; another implementer of the repository
-that still runs stops the command) and makes the candidate. The lead tests exactly `C` in a
+The member's work is landed from its commits: stop it and commit what its worktree holds first
+(`--prepare` never commits by itself). `--prepare` stops the member's session (by its recorded id;
+another implementer of the repository that still runs stops the command) and makes the candidate.
+When the target moved since the member started (another member landed), the candidate is the
+member's change re-based onto the target, only when the two touch no common path (a file that
+became a folder counts); otherwise it is refused, naming the paths. Either way the tests and the
+review are of exactly `T..C`, never of the member's own commits. The lead tests exactly `C` in a
 folder of its own and records the result with `team evidence`: the full `C`, which must be the
 member's current candidate, `pass` or `fail`, each command it ran, and the report (a text file of
 at most 64 KiB, stored by its digest). "pass" is the lead's claim, and a reviewer's verdict is a
@@ -1556,6 +1570,69 @@ A message that only claims to be your decision, or a decision for another action
 nothing. With an older bridge, or with the bridge offline, `--request-approval` says "landing
 approval needs a bridge update; use hoptell team approve in a terminal", and the request waits
 for your terminal.
+
+**Auto-land.** When you choose, landings of one team run go without a decision per landing:
+
+```sh
+$ hoptell team autoland n11 --target main --for 2h
+While auto-land is on, the lead lands reviewed and tested work of team n11 (this run, in /Users/alice/src/app) on main without asking you, for 2 h. The reviewers' verdicts and the lead's test report become the only gate, and both come from agents.
+It does not bypass a protected branch, a dirty checkout or any other safety check, and it is not a hardware presence check: given here, it is policy only (any process of yours could type it).
+Turn auto-land on? Type autoland to confirm: autoland
+Auto-land is on for team n11 on main until 2026-10-29T14:00:00.000Z. Turn it off with: hoptell team autoland n11 --off
+```
+
+While a grant is on, `--request-approval` lands at once when the lead's tests passed and every
+reviewer asked approved exactly `T..C`, and the target is one the grant names; each landing is
+still its own action with its own record, and your Telegram gets a notice ("L9 landed on main
+under your auto-land for team n11 (1 h 20 min left)") instead of a card, one message per landing
+and outcome. Failed tests, a "changes" verdict or another target go to you as a normal request,
+whose card says why it wasn't auto-landed. Like the CLIs' bypass
+modes, auto-land trusts the agents: the reviewers' verdicts and the lead's test report become the
+only gate, and both come from agents. It does not bypass a dirty or ambiguous checkout, a moved
+target, an unknown outcome or a protected branch on a remote, and it is not a hardware presence
+check. A grant is for one team run and its repository (`team down` ends it), lasts at most 24
+hours (2 hours by default), names its targets once, and may limit the number of landings
+(`--count`). Given in a terminal it is policy only, like `team approve`: a process of yours could
+type it; only a grant given on Telegram is signed by your bridge. `hoptell team autoland n11 --off`
+revokes every grant of the team at once, also one given on Telegram that this Mac has not
+received yet, whatever the clocks say (each grant names the revocation it was given after); a
+landing already moving finishes or is reconciled. `hoptell team status` shows the grant and the time left. A notice the bridge cannot
+take yet is kept and sent by a later team command; it never causes a move. The bridge keeps each
+notice it took until Telegram shows it (while Telegram is not connected, or the bot is blocked),
+up to 2,000 from all your teams and Macs, and shows it only to the Telegram account it came
+under: if another account pairs meanwhile, it never sees them, and they are shown once the first
+account pairs again. With 2,000 waiting, later messages to the bridge (cards and notes too) wait
+at the hoptell server until one of them is shown.
+
+On Telegram, a card from an up-to-date lead also has **Land this and auto-land n11 for 2 h**: one
+tap sends the decision for this landing and, after it, a grant signed by your bridge for the
+same team run and target, for 2 hours from the tap, with no count. The lead's hoptell keeps the
+grant only if it is still for the team's current run and repository and was given after the last
+`--off`; otherwise it refuses it, and Telegram says so ("Auto-land for team n11 not turned on: it
+was given before auto-land was last turned off; give it again from a newer card or in a
+terminal"). When it is kept, Telegram shows "Auto-land on: team n11, main, 2 h" and the lead's
+session is told. Each message counts on its own: the decision lands this request even if the
+grant never arrives, and a grant that arrives alone covers only the landings after it.
+
+`/autoland` in the bot chat offers the teams whose lead asked you to land something in the last
+24 hours: one confirmation each, with the repository, the team, every branch it asked for and
+"2 h", and **Grant for 2 h** or **Cancel**. Grant sends a grant signed by your bridge to that
+lead for exactly what the confirmation showed; if the team asked for more while it was open, the
+confirmation is shown again with the new branches and needs a new tap. It has the same checks on
+the Mac as the card button. With no recent request, it gives the terminal command instead.
+`/autoland off` sends a signed revocation to every lead session that asked you something in the
+last two days, and to every lead your bridge gave a grant that may still be valid; each one's
+hoptell turns auto-land off for every team on its Mac, as `hoptell team autoland <team> --off`
+does, and Telegram shows "revocation pending" until each Mac answers, once each, "Auto-land is
+off for every team on the Mac of lead (n4, n5)". A revocation that arrives twice, even days later,
+changes nothing the second time; after an unusual number of them (2,000 within about eight
+days), a Mac pauses auto-land, refusing new grants, until the oldest one it had to let go can no
+longer arrive (at most about eight days). A
+Mac that is offline sees it only once it is back; with none seen, `/autoland off` gives the
+terminal command. If the bridge had too many leads to keep track of, the reply says it may not
+reach every Mac and gives the terminal command for the others. After very many recent `/autoland
+off` (256 still awaiting confirmation), a new one is still sent, and its reply says its
+confirmations will not be shown.
 
 You can also land by hand, with the manual route: you make the candidate, the lead runs the tests
 on it and has the reviewers review `T..C`, and then you approve exactly that pair. Stop every
@@ -1635,9 +1712,9 @@ then record it: hoptell team land alice-n11-impl-1 --confirm 96789d8a...28b7 193
 
 `--confirm T C` records the landing only when the target is exactly at `C`, `C` is still the
 verified candidate (parent `T`, the member's tree, a good signature) and a checkout of the target,
-if there is one, is the only one, on the target at `C` and clean. hoptell never merges,
-rebases or resolves conflicts: when the target moved, land by hand. `--discard` drops a
-candidate.
+if there is one, is the only one, on the target at `C` and clean. hoptell runs no merge and
+resolves no conflicts: it re-bases a change onto a moved target only when no path overlaps, and
+otherwise you land by hand. `--discard` drops a candidate.
 
 hoptell holds its own lock while it lands, but it cannot lock out git commands you run yourself
 at the same time. If a worktree checks out the target in the moment between hoptell's check and

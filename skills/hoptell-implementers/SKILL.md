@@ -156,6 +156,11 @@ terminal is available to you.
 5. When your owner's decision on L7 arrives in your inbox, run `hoptell team apply L7` at once:
    it carries out only the decision the user made, checks it again, and works for 15 minutes
    after it. Report what it printed.
+6. If the user gave an auto-land grant (in a terminal, or on Telegram with "Land this and
+   auto-land" or `/autoland`; your inbox says when it was turned on, not kept, or turned off),
+   step 4 lands at once and says so, or says why it did not (then the user decides as usual).
+   Never ask the user for a grant to get past failed tests or a "changes" verdict, and never
+   turn auto-land on or off yourself.
 
 `hoptell team down <team>` ends the team; it removes clean worktrees and landed branches and
 names everything it keeps. Report the kept ones to the user.

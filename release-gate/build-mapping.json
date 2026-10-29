@@ -39,7 +39,7 @@
     "glueUnwrapped": "4904b18804ae0814a3b809dba6879dcadb73b9076bd0d64744443f3305046de5",
     "wasm": "6af5d7041c07ca48abf725651ed154fd9a8e52d487ee8a60c63a09bb090c1f82"
   },
-  "reviewedInputs": "d9dd0de81d5dd170a8633b2faf51e3d6bec21c265cf52f0d127314ca69737513",
+  "reviewedInputs": "bb1a91a35df3f472cdaa7ebd25423770733a85e461e671047afd4d1d3d6d36cd",
   "toolchain": {
     "rust": "1.99.0",
     "wasmBindgen": "0.2.129"

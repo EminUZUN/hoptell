@@ -100,6 +100,23 @@ nothing is published; with an older bridge `/team` is an unknown command.
   the test result and the verdicts are the agents' claims. New evidence, a later verdict or a new
   request supersedes an undecided request, and an expired one says what to do. The manual route
   (`--target` and `--approve` in your terminal) stays.
+- Auto-land: `hoptell team autoland <team> --target <branch>[,<branch>] [--for 2h] [--count n]`
+  lets the lead land reviewed and tested work of one team run on those targets without asking
+  you, for at most 24 hours; `--off` revokes it at once (also a grant this Mac has not seen yet).
+  Each auto-landing is its own action, checked against the grant when it starts and again before
+  the move, and the owner's Telegram gets a notice instead of a card; a notice an older bridge
+  cannot take stays pending and never causes a move. Failed tests or a "changes" verdict go to
+  you as a normal request. Auto-land trusts the agents' verdicts and test report, does not bypass
+  any safety check, and given in a terminal is policy only.
+- Auto-land from Telegram: a landing card from an up-to-date lead has "Land this and auto-land
+  <team> for 2 h", which sends the decision and a grant signed by the bridge (that team run and
+  target, 2 hours, no count). The lead's hoptell keeps it only for the team's current run and
+  repository and only if it was given after the last `--off`, and Telegram shows whether it is on.
+  A card that a grant did not decide says why ("Why it wasn't auto-landed: ..."), and each
+  auto-landing gets its own message on Telegram. `/autoland` offers the teams of the last day's
+  requests and grants 2 hours from a confirmation; `/autoland off` sends a signed revocation to
+  every lead session seen, whose hoptell turns auto-land off for every team on that Mac and says
+  so on Telegram. This needs the bridge from this release.
 - Landing from Telegram: with an up-to-date bridge, `--request-approval` also sends the request
   to your owner channel as one message (the patch kept inline up to 64 KiB, the whole record up
   to 90,000 bytes). The bridge checks every digest itself and shows a card with Land, Reject and

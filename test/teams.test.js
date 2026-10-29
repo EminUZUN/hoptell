@@ -11,12 +11,13 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
 import { BIN } from "../lib/config.js";
-import { MANIFEST_FIT, NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { MANIFEST_FIT, NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamApply, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
 import { APPLY_WINDOW_MS, decisionText, newActionId, parseLandingRequest, parseLandingStatus, readTombstone, teamOfAction } from "../lib/landings.js";
 import * as ownersig from "../lib/ownersig.js";
+import { grantText, newGrantId, noticeText, parseNotice, readGrantState, storeGrant, writeGrantState } from "../lib/grants.js";
 import { canonicalize } from "../lib/jcs.js";
-import { addWorktree, commitWorktree, landApprove, landCandidate, readWorktreeRecord, registrationOf, removeWorktree, worktreeCommand, worktreePaths } from "../lib/worktrees.js";
-import { findGit } from "../lib/gitsafe.js";
+import { addWorktree, candidateTree, commitWorktree, landApprove, landCandidate, readWorktreeRecord, registrationOf, removeWorktree, worktreeCommand, worktreePaths } from "../lib/worktrees.js";
+import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { MEMBER_HIDDEN, serveEngine } from "../lib/mcp.js";
@@ -166,7 +167,8 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   // Codex members: no config.toml, so Codex asks to trust the worktree, and which hoptell it runs
   // could not be checked.
   const wt = path.join(s.root, "repo-wt", "dana-n1-impl-1");
-  assert.ok(dry.warn.includes(`warning: dana-n1-impl-1: Codex will ask you to trust ${wt} in its pane before it starts`), dry.warn);
+  assert.ok(dry.warn.includes(`warning: Codex will ask you to trust ${s.repo} in a pane before it starts (dana-n1-impl-1); Codex (checked with 0.165.0) asks once per repository: its worktrees count as trusted after that`), dry.warn);
+  assert.doesNotMatch(dry.warn, /has no reviewer/);
   assert.match(dry.warn, /could not check which hoptell the Codex members run as their MCP server: \S+config\.toml: it does not exist/);
   assert.doesNotMatch(dry.warn, /dana-n1-rev-1: Codex/, "a Claude Code member is not checked");
   // A trusted folder, and Codex's hoptell: another install (named, with its version), then this one.
@@ -189,8 +191,18 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   // A config that cannot be read: Codex may ask.
   fs.chmodSync(path.join(codexHome, "config.toml"), 0);
   w = (await run(["up", file, "--dry-run"])).warn;
-  if (process.getuid() !== 0) assert.match(w, /dana-n1-impl-1: Codex may ask you to trust \S+ in its pane before it starts \(\S+config\.toml: it could not be read \(EACCES\)\)/);
+  if (process.getuid() !== 0) assert.match(w, /Codex may ask you to trust \S+ in a pane before it starts \(dana-n1-impl-1; \S+config\.toml: it could not be read \(EACCES\)\); Codex \(checked with 0\.165\.0\) asks once per repository/);
   fs.chmodSync(path.join(codexHome, "config.toml"), 0o600);
+  // Codex keeps trust under the repository's root: with only the repository trusted, its
+  // worktrees are too.
+  fs.writeFileSync(path.join(codexHome, "config.toml"), `[projects.${JSON.stringify(s.repo)}]\ntrust_level = "trusted"\n`);
+  assert.doesNotMatch((await run(["up", file, "--dry-run"])).warn, /Codex will ask|Codex may ask/);
+  // A team without a reviewer: its landings cannot be requested from the owner, and team up says so.
+  const solo = path.join(s.root, "solo.json");
+  fs.writeFileSync(solo, JSON.stringify(teamDoc({ team: "n9", members: [memberOf({ name: "dana-n9-impl-1", cli: "codex", owns: ["lib/**"] })] })));
+  const sw = await run(["up", solo, "--dry-run"]);
+  assert.equal(sw.failed, null, sw.failed?.m);
+  assert.ok(sw.warn.includes("warning: team n9 has no reviewer, so its landings cannot be requested from the owner (--request-approval needs a review of the candidate); the owner lands them in a terminal with hoptell team land <member> --approve <T> <C>"), sw.warn);
   // No terminal and no --yes: refused before anything starts.
   const no = await run(["up", file]);
   assert.match(no.failed.m, /run it in a terminal to confirm, or pass --yes/);
@@ -426,10 +438,11 @@ test("landing refuses: no signing settings, a target that moved from the base, a
   fs.writeFileSync(path.join(rec.path, "lib", "x.js"), "3\n");
   await commitWorktree(s.home, "dana-impl-1", { message: "m2" });
   await refusal(() => landApprove(s.home, "dana-impl-1", { T: c.T, C: c.C, candidate, landRef, bound: reg(s.home) }, opts), "head_moved");
-  // The target moved: refused, and a new candidate is refused too (no merge machinery).
+  // The target moved with a change to the member's own file: refused, the path named (no merge machinery).
   git(s.repo, "update-ref", "-d", landRef, c.C);
-  git(s.repo, "commit", "-q", "--allow-empty", "-m", "elsewhere");
-  await refusal(() => landCandidate(s.home, "dana-impl-1", { target: "main", message: "Land", landRef, bound: reg(s.home) }, opts), "target_moved", /hoptell runs no merge/);
+  fs.writeFileSync(path.join(s.repo, "lib", "x.js"), "elsewhere\n");
+  git(s.repo, "commit", "-q", "-am", "elsewhere");
+  await refusal(() => landCandidate(s.home, "dana-impl-1", { target: "main", message: "Land", landRef, bound: reg(s.home) }, opts), "target_moved", /touch the same paths: lib\/x\.js; hoptell builds a candidate on the moved target only when no path overlaps/);
   assert.notEqual(git(s.repo, "rev-parse", "main"), c.C);
   // A repository without SSH signing cannot land.
   const u = repoSetup(t);
@@ -454,6 +467,119 @@ test("landing refuses: no signing settings, a target that moved from the base, a
   // (landApprove finishes landings journaled before landing actions: it never moves a checkout.)
   await refusal(() => landApprove(v.home, "dana-impl-1", { T: dev.T, C: dev.C, candidate: { target: "dev", T: dev.T, C: dev.C, H: dev.H }, landRef: "refs/heads/team/n2/land", journaled: "intent", bound: reg(v.home) }, { homedir: v.homedir }), "land_blocked", new RegExp(`dev is checked out in ${fs.realpathSync(path.join(v.root, "devwt"))}; nothing was moved`));
   assert.equal(git(v.repo, "rev-parse", "dev"), vrec.base, "a checked-out target is never moved by the old path");
+});
+
+test("a target that moved: the member's change re-based onto it when no path overlaps (adds, deletes, a symlink), signed and landed; overlapping paths and a file that became a folder refuse, named", async (t) => {
+  const s = repoSetup(t, { signing: true });
+  fs.mkdirSync(path.join(s.repo, "docs"));
+  fs.writeFileSync(path.join(s.repo, "docs", "a.md"), "a\n");
+  fs.writeFileSync(path.join(s.repo, "old.txt"), "old\n");
+  git(s.repo, "add", "-A");
+  git(s.repo, "commit", "-q", "-m", "more");
+  const rec = await addWorktree(s.home, { repo: s.repo, member: "dana-impl-1", team: "n1", cli: "codex", owns: ["lib/**", "old.txt"] });
+  const other = await addWorktree(s.home, { repo: s.repo, member: "dana-impl-2", team: "n1", cli: "codex" });
+  // The member: a change, a new file, a symlink, a delete.
+  fs.writeFileSync(path.join(rec.path, "lib", "x.js"), "mine\n");
+  fs.writeFileSync(path.join(rec.path, "lib", "new.js"), "new\n");
+  fs.symlinkSync("x.js", path.join(rec.path, "lib", "link.js"));
+  fs.rmSync(path.join(rec.path, "old.txt"));
+  const H = (await commitWorktree(s.home, "dana-impl-1", { message: "mine" })).commit;
+  // Meanwhile the target moves elsewhere: another file changed, one deleted, one added.
+  fs.writeFileSync(path.join(s.repo, "README.md"), "# moved\n");
+  fs.rmSync(path.join(s.repo, "docs", "a.md"));
+  fs.writeFileSync(path.join(s.repo, "docs", "b.md"), "b\n");
+  git(s.repo, "add", "-A");
+  git(s.repo, "commit", "-q", "-m", "moved");
+  const T = git(s.repo, "rev-parse", "main");
+  const landRef = "refs/heads/team/n1/land";
+  const opts = { homedir: s.homedir };
+  const c = await landCandidate(s.home, "dana-impl-1", { target: "main", message: "Land", landRef, bound: reg(s.home) }, opts);
+  assert.equal(c.rebased, true);
+  assert.equal(c.T, T);
+  assert.equal(git(s.repo, "rev-parse", `${c.C}^`), T);
+  const files = git(s.repo, "ls-tree", "-r", "--name-only", c.C).split("\n").sort();
+  assert.deepEqual(files, ["README.md", "docs/b.md", "lib/link.js", "lib/new.js", "lib/x.js"]);
+  assert.equal(git(s.repo, "show", `${c.C}:README.md`), "# moved");
+  assert.equal(git(s.repo, "show", `${c.C}:lib/x.js`), "mine");
+  assert.match(git(s.repo, "ls-tree", c.C, "lib/link.js"), /^120000 blob /);
+  assert.deepEqual(git(s.repo, "diff", "--name-only", T, c.C).split("\n").sort(), ["lib/link.js", "lib/new.js", "lib/x.js", "old.txt"]);
+  // Approved exactly (T, C): the tree is checked again, the same way, and the target moves to C.
+  git(s.repo, "checkout", "-q", "--detach");
+  const landed = await landApprove(s.home, "dana-impl-1", { T, C: c.C, candidate: { target: "main", T, C: c.C, H }, landRef, journaled: "intent", bound: reg(s.home) }, opts);
+  assert.equal(landed.C, c.C);
+  assert.equal(git(s.repo, "rev-parse", "main"), c.C);
+  // The second member's base is now behind; its change to the file the first changed overlaps,
+  // and a file that became a folder on the target overlaps with a file in it.
+  fs.writeFileSync(path.join(other.path, "lib", "x.js"), "theirs\n");
+  fs.writeFileSync(path.join(other.path, "README.md"), "# theirs\n");
+  await commitWorktree(s.home, "dana-impl-2", { message: "theirs" });
+  await refusal(() => landCandidate(s.home, "dana-impl-2", { target: "main", message: "Land", landRef, bound: reg(s.home, "dana-impl-2") }, opts), "target_moved", /touch the same paths: README\.md, lib\/x\.js;/);
+  const u = repoSetup(t, { signing: true });
+  const urec = await addWorktree(u.home, { repo: u.repo, member: "dana-impl-1", team: "n1", cli: "codex" });
+  fs.mkdirSync(path.join(urec.path, "notes"));
+  fs.writeFileSync(path.join(urec.path, "notes", "n.md"), "n\n");
+  await commitWorktree(u.home, "dana-impl-1", { message: "a folder" });
+  fs.writeFileSync(path.join(u.repo, "notes"), "a file\n");
+  git(u.repo, "add", "-A");
+  git(u.repo, "commit", "-q", "-m", "a file");
+  await refusal(() => landCandidate(u.home, "dana-impl-1", { target: "main", message: "Land", landRef, bound: reg(u.home) }, { homedir: u.homedir }), "target_moved", /touch the same paths: notes\/n\.md;/);
+});
+
+test("a re-base reads Git's names exactly: a name that is not UTF-8 refuses (it never reads as another), and a path a case- or normalization-insensitive checkout takes for another refuses, both named", async (t) => {
+  const s = repoSetup(t);
+  const scratch = path.join(s.root, "scratch");
+  fs.mkdirSync(scratch);
+  const g = controlledGit({ git: findGit(), scratch });
+  const run = (args, input, env = {}) => execFileSync("git", args, { cwd: s.repo, env: { ...gitEnv, ...env }, input });
+  const blob = (text) => run(["hash-object", "-w", "--stdin"], text).toString().trim();
+  // A tree with raw names (Buffers), written through a private index: no checkout has to hold them.
+  let n = 0;
+  const tree = (files) => {
+    const env = { GIT_INDEX_FILE: path.join(scratch, `test-index-${n++}`) };
+    run(["update-index", "-z", "--index-info"], Buffer.concat(files.map(([name, oid]) => Buffer.concat([Buffer.from(`100644 ${oid}\t`), Buffer.isBuffer(name) ? name : Buffer.from(name), Buffer.from([0])]))), env);
+    return run(["write-tree"], undefined, env).toString().trim();
+  };
+  const commit = (tr, parent) => run(["commit-tree", ...(parent ? ["-p", parent] : []), "-m", "c", tr]).toString().trim();
+  const rebase = (files, onT, onH) => {
+    const B = commit(tree(files));
+    const T = commit(tree([...files, ...onT]), B);
+    const H = commit(tree(onH(files)), B);
+    return candidateTree(g, { repo: s.repo, base: B, member: "dana-impl-1", objectFormat: "sha1" }, T, H, scratch);
+  };
+  // B holds "bad-\xEF\xBF\xBD" (a valid "bad-\uFFFD") and "bad-\xFF" (not UTF-8); the member changes only the first.
+  const valid = Buffer.from([...Buffer.from("bad-"), 0xef, 0xbf, 0xbd]);
+  const invalid = Buffer.from([...Buffer.from("bad-"), 0xff]);
+  const one = blob("one\n");
+  assert.throws(() => rebase([[valid, one], [invalid, one]], [["other.txt", blob("t\n")]], (f) => [[valid, blob("two\n")], f[1]]), (e) => e.code === "target_moved" && e.message.includes('the path "bad-\\xff" is not UTF-8'));
+  // A byte order mark is part of the name: an unchanged "\uFEFFa.txt" never reads as the changed "a.txt".
+  const bom = Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from("a.txt")]);
+  const c = rebase([[bom, one], ["a.txt", one]], [["other.txt", blob("t\n")]], (f) => [f[0], ["a.txt", blob("two\n")]]);
+  assert.equal(run(["rev-parse", `${c.tree}:a.txt`]).toString().trim(), blob("two\n"));
+  assert.equal(run(["rev-parse", `${c.tree}:\uFEFFa.txt`]).toString().trim(), one);
+  // Case only: the target adds Notes.md, the member notes.md.
+  assert.throws(() => rebase([["a.txt", one]], [["Notes.md", blob("t\n")]], (f) => [...f, ["notes.md", blob("m\n")]]), (e) => e.code === "target_moved" && e.message.includes("notes.md (the target has Notes.md)"));
+  // NFC and NFD: the target adds "café" composed, the member decomposed.
+  const nfc = "caf\u00e9.md";
+  const nfd = "cafe\u0301.md";
+  assert.throws(() => rebase([["a.txt", one]], [[nfc, blob("t\n")]], (f) => [...f, [nfd, blob("m\n")]]), (e) => e.code === "target_moved" && e.message.includes(`${nfd} (the target has ${nfc})`));
+  // A folder whose name differs only in case is an alias too.
+  assert.throws(() => rebase([["a.txt", one]], [["Docs/x.md", blob("t\n")]], (f) => [...f, ["docs/y.md", blob("m\n")]]), (e) => e.code === "target_moved" && e.message.includes("docs (the target has Docs)"));
+  // Without aliases the same shapes re-base.
+  assert.equal(rebase([["a.txt", one]], [["Notes.md", blob("t\n")]], (f) => [...f, ["other.md", blob("m\n")]]).rebased, true);
+});
+
+test("prepare with only uncommitted changes names the stop and the commit, in order; worktree add --team says when the name is in no running team", async (t) => {
+  const s = repoSetup(t, { signing: true });
+  const rec = await addWorktree(s.home, { repo: s.repo, member: "dana-impl-1", team: "n1", cli: "codex" });
+  fs.writeFileSync(path.join(rec.path, "lib", "x.js"), "2\n");
+  await refusal(() => landCandidate(s.home, "dana-impl-1", { target: "main", message: "Land", landRef: "refs/heads/team/n1/land", bound: reg(s.home) }, { homedir: s.homedir }), "nothing_to_land", /^dana-impl-1 has no commits yet, only uncommitted changes in its worktree: run hoptell team stop dana-impl-1, then hoptell worktree commit dana-impl-1 -m <message>, then this command again$/);
+  const lines = [];
+  const add = (member, inTeam) => worktreeCommand({ args: ["add", member, "--team", "n1", "--cli", "codex"], home: s.home, cwd: s.repo, fail: (m) => assert.fail(m), out: (l) => lines.push(l), inTeam });
+  await add("dana-impl-2", () => false);
+  assert.ok(lines.includes("Note: dana-impl-2 is not a member of the running team n1, so this worktree is in no team: hoptell team land and team status do not see it. Members come from the team file, through hoptell team up."), lines.join("\n"));
+  lines.length = 0;
+  await add("dana-impl-3", (team, member) => team === "n1" && member === "dana-impl-3");
+  assert.ok(!lines.some((l) => l.startsWith("Note:")));
 });
 
 test("worktree remove after a landing: the branch goes only when its head landed and the landed commit is in the target", async (t) => {
@@ -2434,7 +2560,7 @@ test("team up's lead check only warns: online says nothing, offline and a failed
  * landingSetup without a candidate, with a reviewer in the team: the lead prepares the candidate
  * (--prepare), and the helpers record evidence, a review and a request.
  */
-async function preparedSetup(t, { checkout = true, change = null } = {}) {
+async function preparedSetup(t, { checkout = true, change = null, beforePrepare = null } = {}) {
   const x = await landingSetup(t, "n4", { candidate: false });
   const st = readState(x.s.home, "n4");
   st.members.push(memberRow("dana-n4-rev-1", "reviewer", null));
@@ -2444,6 +2570,7 @@ async function preparedSetup(t, { checkout = true, change = null } = {}) {
     await commitWorktree(x.s.home, x.member, { message: "more" });
   }
   if (checkout) git(x.s.repo, "checkout", "-q", "main");
+  await beforePrepare?.(x);
   const report = path.join(x.s.root, "report.txt");
   fs.writeFileSync(report, "ok 12 tests\n");
   const c = await teamLandPrepare(x.s.home, x.member, { target: "main", message: "Land the change", homedir: x.s.homedir });
@@ -2467,6 +2594,38 @@ async function preparedSetup(t, { checkout = true, change = null } = {}) {
   };
   return { ...x, c, report, review, evidence, request, cli };
 }
+
+test("a team without a reviewer: --request-approval says the owner lands it in a terminal", async (t) => {
+  const x = await landingSetup(t, "n4", { candidate: false });
+  git(x.s.repo, "checkout", "-q", "main");
+  const c = await teamLandPrepare(x.s.home, x.member, { target: "main", message: "Land", homedir: x.s.homedir });
+  const report = path.join(x.s.root, "report.txt");
+  fs.writeFileSync(report, "ok\n");
+  await teamEvidence(x.s.home, x.member, { C: c.C, tests: "pass", commands: ["npm test"], report });
+  await refusal(() => teamLandRequest(x.s.home, x.member), "no_review", new RegExp(`team n4 has no reviewer, so this landing cannot be requested from the owner; the owner lands it in a terminal with hoptell team land ${x.member} --approve ${c.T} ${c.C}`));
+});
+
+test("a candidate re-based onto a moved target: a review of the member's own commits does not count; only a review of exactly T..C does", async (t) => {
+  let stale = null;
+  const x = await preparedSetup(t, {
+    beforePrepare: async (y) => {
+      // The reviewers reviewed the member's own commits (base..head), then main moved elsewhere.
+      const rec = readWorktreeRecord(y.s.home, y.member).rec;
+      stale = (await reviewRequest(y.s.home, { team: "n4", base: rec.base, head: rec.head }, { send: async () => "sent" })).review.id;
+      await reviewVerdict(y.s.home, { team: "n4", id: stale, reviewer: "dana-n4-rev-1", verdict: "approve" });
+      fs.writeFileSync(path.join(y.s.repo, "README.md"), "# moved\n");
+      git(y.s.repo, "commit", "-q", "-am", "moved");
+    },
+  });
+  assert.equal(x.c.rebased, true);
+  assert.equal(x.c.T, git(x.s.repo, "rev-parse", "main"));
+  await x.evidence();
+  await refusal(() => x.request(), "no_review", new RegExp(`--base ${x.c.T} --head ${x.c.C}`));
+  await x.review("approve");
+  const r = await x.request();
+  assert.equal(r.C, x.c.C);
+  assert.notEqual(r.evidence?.review?.id ?? null, stale);
+});
 
 test("the lead prepares, records the tests and asks; the owner decides L<n> in one visit with team approve", async (t) => {
   const x = await preparedSetup(t);
@@ -2678,8 +2837,13 @@ const REALM_ID = "0123456789abcdef0123456789abcdef";
 const OWN_MEMBER = `m_${"a".repeat(26)}`;
 
 /** A bridge connection as bin/hoptell.js gives it to teamCommand: what was sent, in order. */
-function fakeBridge(sent, { problem = null, failSend = false } = {}) {
-  return async () => (problem ? { problem } : { realm: REALM_ID, member: OWN_MEMBER, send: async (text) => (failSend ? Promise.reject(new Error("relay did not answer in time")) : sent.push(text)), close: () => {} });
+function fakeBridge(sent, { problem = null, why = undefined, failSend = false, caps = ["landing"], ack = "delivered" } = {}) {
+  const send = async (text) => {
+    if (failSend) throw new Error("relay did not answer in time");
+    sent.push(text);
+    return { state: ack };
+  };
+  return async () => (problem ? { problem, ...(why ? { why } : {}) } : { realm: REALM_ID, member: OWN_MEMBER, caps, send, close: () => {} });
 }
 
 /** The bridge's signed decision for `m` (the original bytes the lead's engine keeps). */
@@ -2712,7 +2876,9 @@ test("a request sent to the owner's Telegram: the lead's session is its recipien
   const req = parseLandingRequest(sent[0]);
   const a = readState(x.s.home, "n4").actions[0];
   assert.equal(req.digest, a.digest);
-  assert.deepEqual(req.manifest.recipient, { realm: REALM_ID, member: OWN_MEMBER, lead: x.lead });
+  // The recipient names the team's revocation generation: the bridge offers auto-land with it.
+  assert.deepEqual(req.manifest.recipient, { realm: REALM_ID, member: OWN_MEMBER, lead: x.lead, generation: 0 });
+  assert.equal(req.auto, null, "no grant was active: nothing to explain");
   assert.equal(req.manifest.realm, REALM_ID);
   // No decision yet.
   await assert.rejects(x.cli(["apply", "L1"]), /the owner has not decided L1 yet \(it expires at .*\); its decision arrives in this session's inbox/);
@@ -2800,6 +2966,9 @@ test("without a bridge that takes landing requests: the terminal route, with the
   const f = await x.cli(["land", x.member, "--request-approval"], { warned: failed, deps: { landingChannel: fakeBridge([], { failSend: true }) } });
   assert.match(failed[0], /^The request could not be sent to the owner's Telegram \(relay did not answer in time\)\.$/);
   assert.match(f.at(-1), /^The owner decides it in a terminal before .*: hoptell team approve L3$/);
+  // A relay that lists no statuses, and a bridge that is offline, are told apart from an old bridge.
+  for (const why of ["relay", "offline"]) await x.cli(["land", x.member, "--request-approval"], { warned, deps: { landingChannel: fakeBridge([], { problem: "x", why }) } });
+  assert.deepEqual(warned.slice(1), ["landing approval needs a relay update (hoptell 0.4.0 or later on the relay); use hoptell team approve in a terminal", "the owner's Telegram bridge is offline, so the request was not sent there; use hoptell team approve in a terminal"]);
   await assert.rejects(x.cli(["land", x.member, "--request-approval"], { env: { HOPTELL_TEAM_MEMBER: "implementer:n4" } }), /asking the owner for a landing is the lead's step/);
 });
 
@@ -2952,4 +3121,357 @@ test("team apply after a crash during the move with an unknown outcome: blocked,
   assert.deepEqual(parseLandingStatus(x.sent.at(-1)), { digest: readState(x.s.home, "n4").actions[0].digest, state: "blocked", text: "L1 is blocked; check its state on the Mac." });
   const again = await x.cli(["apply", "L1"]).catch((e) => e);
   assert.match(again.message, /hoptell team apply does not move it again\. The owner checks it on the Mac \(hoptell team status n4\)$/);
+});
+
+// ---- auto-land grants (design 8 addendum, option 6) ---------------------------------------------
+
+const AUTOLAND = ["landing", "autoland"];
+/** A grant given in the terminal: team autoland with its typed confirmation. */
+const autolandOn = (x, args = ["--target", "main"], deps = {}) => x.cli(["autoland", "n4", ...args], { tty: true, answer: "autoland", deps });
+/** A grant as the owner's bridge signs it (landing_grant), kept as the lead's engine will keep it (L3b-2). */
+function signedGrant(x, { key = x.key, issued = Date.now(), forMs = 2 * 60 * 60_000, targets = ["main"], maxCount = null, generation = readGrantState(x.s.home, "n4").generation } = {}) {
+  const st = readState(x.s.home, "n4");
+  const scope = { hoptell_landing_grant: 1, id: newGrantId(), team: "n4", run: st.run, generation, enrolment: st.enrolment, recipient: { lead: st.lead, member: OWN_MEMBER }, targets, issued_at: issued, not_before: issued, expires_at: issued + forMs, max_count: maxCount, op: "land", origin: null };
+  const envelope = ownersig.signEnvelope({ kind: "landing_grant", realm: REALM_ID, from: "dana-owner", to: { name: st.lead, member: OWN_MEMBER }, q: crypto.randomUUID(), text: grantText(scope), pairing: { id: "p_abcdefghijklmnop", at: 1_700_000_000_000 }, ts: issued, nonce: crypto.randomBytes(32).toString("base64url") }, key);
+  storeGrant(x.s.home, "n4", { source: "telegram", scope, envelope });
+  return scope;
+}
+const grantRow = (x, id) => readGrantState(x.s.home, "n4").grants[id] ?? null;
+const onlyGrant = (x) => Object.keys(readGrantState(x.s.home, "n4").grants)[0];
+const crash = () => {
+  throw new Error("crash");
+};
+
+test("auto-land given in a terminal: the lead's request lands at once under it, one slot used, and the owner's Telegram gets a notice instead of a card", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await assert.rejects(x.cli(["autoland", "n4", "--target", "main"]), /auto-land is the owner's choice: run hoptell team autoland n4 in a terminal/);
+  await assert.rejects(x.cli(["autoland", "n4", "--target", "main"], { tty: true, env: { HOPTELL_TEAM_MEMBER: "lead:n4" } }), /a team member's session cannot change it/);
+  await assert.rejects(autolandOn(x, ["--target", "main", "--for", "25h"]), /--for takes a duration of at most 24 hours/);
+  await assert.rejects(x.cli(["autoland", "n4", "--target", "main"], { tty: true, answer: "yes" }), /not confirmed; auto-land stays off/);
+  const on = await autolandOn(x, ["--target", "main", "--for", "90m", "--count", "3"]);
+  assert.equal(on[0], `While auto-land is on, the lead lands reviewed and tested work of team n4 (this run, in ${x.s.repo}) on main without asking you, for 1 h 30 min or 3 landings. The reviewers' verdicts and the lead's test report become the only gate, and both come from agents.`);
+  assert.match(on[1], /does not bypass a protected branch.*not a hardware presence check: given here, it is policy only/);
+  assert.match(on.at(-1), /^Auto-land is on for team n4 on main until .*, for at most 3 landings\. Turn it off with: hoptell team autoland n4 --off$/);
+  const status = await x.cli(["status", "n4"]);
+  assert.match(status.join("\n"), /auto-land ON for main: 1 h (29|30) min left, 3 of 3 landings left \(grant g_[a-z2-7]{16}, given in a terminal\); hoptell team autoland n4 --off ends it/);
+  const sent = [];
+  const out = await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } });
+  assert.match(out.join("\n"), /The owner's auto-land grant covers main \(1 h (29|30) min left\), so L1 lands now without asking\.\nLanded \w+ on main \(was \w+\), landing L1\./);
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  assert.equal(moves(x.s.repo), 1);
+  const end = readTombstone(x.s.home, "n4", "L1");
+  assert.deepEqual([end.state, end.route], ["finished", "grant"]);
+  // No card: one notice, landed, with the time left; sent, acknowledged and no longer queued.
+  assert.equal(sent.length, 1);
+  const n = parseNotice(sent[0]);
+  assert.deepEqual([n.id, n.team, n.target, n.state], ["L1", "n4", "main", "landed"]);
+  assert.ok(n.left_s > 85 * 60 && n.left_s <= 90 * 60, String(n.left_s));
+  assert.deepEqual(grantRow(x, onlyGrant(x)), { status: "active", actions: ["L1"], slots: ["L1"], noticed: ["L1:landed"] });
+  assert.deepEqual(readGrantState(x.s.home, "n4").notices, []);
+  assert.match(out.at(-1), /^The owner's Telegram was told: L1 landed\.$/);
+});
+
+test("the terminal grant is for what the owner was shown: a team started again during the prompt gets nothing", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const ask = async () => {
+    writeTeam(x.s.home, { ...readState(x.s.home, "n4"), run: "9".repeat(32) });
+    return "autoland";
+  };
+  await assert.rejects(x.cli(["autoland", "n4", "--target", "main"], { tty: true, deps: { ask } }), /^Error: team n4 changed while you confirmed \(it was started again, or its repository changed\); nothing was granted\. Run hoptell team autoland n4 again$/);
+  assert.deepEqual(readGrantState(x.s.home, "n4").grants, {});
+});
+
+test("auto-land only for reviewed and tested work on its targets: otherwise the request goes to the owner and says why", async (t) => {
+  // A "changes" verdict: the card, with the reason.
+  const x = await preparedSetup(t, { checkout: false });
+  await x.evidence();
+  await x.review("changes");
+  await autolandOn(x);
+  const sent = [];
+  const out = await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } });
+  assert.ok(out.includes("Not auto-landed under the owner's grant: dana-n4-rev-1 asked for changes. The owner decides it."), out.join("\n"));
+  assert.deepEqual(parseLandingRequest(sent[0]).auto, ["changes"], "the normal card, with the reason as a code");
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.deepEqual(readState(x.s.home, "n4").actions.map((a) => [a.state, a.route]), [["ready", null]]);
+  // Failed tests: the same.
+  const y = await preparedSetup(t, { checkout: false });
+  await y.evidence({ tests: "fail" });
+  await y.review("approve");
+  await autolandOn(y);
+  const out2 = await y.cli(["land", y.member, "--request-approval"]);
+  assert.ok(out2.includes("Not auto-landed under the owner's grant: the lead's tests failed. The owner decides it."), out2.join("\n"));
+  // Another target than the grant's: the request says so.
+  const z = await preparedSetup(t, { checkout: false });
+  await z.evidence();
+  await z.review("approve");
+  await autolandOn(z, ["--target", "release,dev"]);
+  const out3 = await z.cli(["land", z.member, "--request-approval"]);
+  assert.ok(out3.includes("Not auto-landed under the owner's grant: main is not covered by the grant's targets (dev, release). The owner decides it."), out3.join("\n"));
+  assert.equal(refOf(z.s.repo, "main"), z.c.T);
+});
+
+test("auto-land off is a new revocation generation: every earlier grant is dead, also one signed by a bridge whose clock runs ahead and delivered after the --off", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  // Signed before the --off by a bridge clock 3 minutes ahead (so dated after it), kept only after it.
+  const g0 = readGrantState(x.s.home, "n4").generation;
+  const off = await x.cli(["autoland", "n4", "--off"]);
+  assert.equal(off[0], "Auto-land is off for team n4 (1 grant revoked). The lead asks you again for every landing. This also covers every grant you gave on Telegram before now that this Mac has not received yet; give a new one if you want auto-land again.");
+  const ahead = signedGrant(x, { issued: Date.now() + 3 * 60_000, generation: g0 });
+  const sent = [];
+  const out = await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } });
+  assert.ok(!out.join("\n").includes("lands now"), out.join("\n"));
+  assert.ok(parseLandingRequest(sent[0]), "the normal card");
+  assert.equal(readGrantState(x.s.home, "n4").grants[ahead.id].status, "revoked");
+  // A new grant, of the new generation, works; the revoked ones stay revoked.
+  const fresh = signedGrant(x);
+  assert.equal(fresh.generation, g0 + 1);
+  const out2 = await x.cli(["land", x.member, "--request-approval"]);
+  assert.match(out2.join("\n"), /so L2 lands now without asking/);
+  assert.equal(readGrantState(x.s.home, "n4").grants[ahead.id].status, "revoked");
+});
+
+test("an auto-landing that stopped after its slot was reserved: a revocation, team down or the grant's expiry still stop it before the move; a resume never takes a second slot", async (t) => {
+  // Count 1, stopped after acceptance, then --off: team apply ends it; nothing moves.
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x, ["--target", "main", "--count", "1"]);
+  await assert.rejects(x.cli(["land", x.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
+  assert.equal(readState(x.s.home, "n4").actions[0].state, "accepted");
+  const gid = onlyGrant(x);
+  assert.deepEqual(grantRow(x, gid).slots, ["L1"]);
+  await x.cli(["autoland", "n4", "--off"]);
+  const sent = [];
+  const r = await x.cli(["apply", "L1"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } }).catch((e) => e);
+  assert.match(r.message, /^the owner turned auto-land off \(the grant g_[a-z2-7]{16} is revoked\) before the move, so the landing L1 ended; nothing was moved\./);
+  assert.equal(moves(x.s.repo), 0);
+  assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["rejected", "grant"]);
+  assert.deepEqual(grantRow(x, gid).slots, ["L1"]);
+  assert.deepEqual([parseNotice(sent.at(-1)).state, parseNotice(sent.at(-1)).left_s], ["rejected", null]);
+  // Count 1, stopped after acceptance, then the team is down: the same.
+  const d = await telegramSetup(t, { checkout: false });
+  await autolandOn(d, ["--target", "main", "--count", "1"]);
+  await assert.rejects(d.cli(["land", d.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
+  writeTeam(d.s.home, { ...readState(d.s.home, "n4"), status: "down" });
+  const rd = await d.cli(["apply", "L1"]).catch((e) => e);
+  assert.match(rd.message, /^the auto-land grant g_[a-z2-7]{16} was for an earlier run of team n4 before the move, so the landing L1 ended; nothing was moved\./);
+  assert.equal(moves(d.s.repo), 0);
+  // A slot reserved before the acceptance (a run stopped in between), retried after the grant expired: ended, nothing moved.
+  const e = await telegramSetup(t, { checkout: false });
+  await autolandOn(e, ["--target", "main", "--count", "1", "--for", "30m"]);
+  await e.request();
+  const ge = onlyGrant(e);
+  const st = readGrantState(e.s.home, "n4");
+  st.grants[ge].slots.push("L1");
+  st.grants[ge].status = "exhausted";
+  writeGrantState(e.s.home, "n4", st);
+  const re = await e.cli(["apply", "L1"], { deps: { now: () => Date.now() + 31 * 60_000 } }).catch((err) => err);
+  assert.match(re.message, /^the auto-land grant g_[a-z2-7]{16} expired, so the landing L1 was not auto-landed and ended; nothing was moved\./);
+  assert.equal(readTombstone(e.s.home, "n4", "L1").state, "expired");
+  assert.equal(moves(e.s.repo), 0);
+  // Not revoked: an accepted one resumes with the same slot, once, even past the grant's expiry.
+  const y = await telegramSetup(t, { checkout: false });
+  await autolandOn(y, ["--target", "main", "--count", "1", "--for", "30m"]);
+  await assert.rejects(y.cli(["land", y.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
+  const gy = onlyGrant(y);
+  const out = await y.cli(["apply", "L1"], { deps: { now: () => Date.now() + 60 * 60_000 } });
+  assert.match(out.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.equal(moves(y.s.repo), 1);
+  assert.deepEqual(grantRow(y, gy).slots, ["L1"]);
+  // An unknown outcome after the move: blocked, never moved again, the slot not given back.
+  const z = await telegramSetup(t, { checkout: false });
+  await autolandOn(z, ["--target", "main", "--count", "2"]);
+  await assert.rejects(z.cli(["land", z.member, "--request-approval"], { deps: { afterMoving: crash } }), /crash/);
+  const gz = onlyGrant(z);
+  const sentZ = [];
+  const b = await z.cli(["apply", "L1"], { deps: { landingChannel: fakeBridge(sentZ, { caps: AUTOLAND }) } }).catch((err) => err);
+  assert.match(b.message, /the landing L1 is blocked/);
+  assert.equal(parseNotice(sentZ.at(-1)).state, "blocked");
+  assert.deepEqual(grantRow(z, gz).slots, ["L1"]);
+});
+
+test("auto-land grants are bound: a Telegram grant verifies against the trusted pin; a new team run, another key or a used-up count cover nothing", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const g = signedGrant(x, { maxCount: 1 });
+  const out = await x.cli(["land", x.member, "--request-approval"]);
+  assert.match(out.join("\n"), /so L1 lands now without asking/);
+  assert.deepEqual(grantRow(x, g.id).slots, ["L1"]);
+  assert.match((await x.cli(["status", "n4"])).join("\n"), new RegExp(`auto-land grant ${g.id} for main: exhausted, 1 landing`));
+  const y = await telegramSetup(t, { checkout: false });
+  signedGrant(y, { key: ownersig.newKey() });
+  const out2 = await y.cli(["land", y.member, "--request-approval"]);
+  assert.ok(!out2.join("\n").includes("lands now"), out2.join("\n"));
+  const z = await telegramSetup(t, { checkout: false });
+  await autolandOn(z);
+  writeTeam(z.s.home, { ...readState(z.s.home, "n4"), run: "9".repeat(32) });
+  const out3 = await z.cli(["land", z.member, "--request-approval"]);
+  assert.ok(!out3.join("\n").includes("lands now"), out3.join("\n"));
+  assert.deepEqual(Object.values(readGrantState(z.s.home, "n4").grants).map((r) => r.status), ["retired"]);
+});
+
+test("a Telegram grant from a bridge whose clock runs 60 s ahead covers the next landing at once; the duration still counts from the bridge's issue time", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const g = signedGrant(x, { issued: Date.now() + 60_000 });
+  const out = await x.cli(["land", x.member, "--request-approval"]);
+  assert.match(out.join("\n"), /so L1 lands now without asking/);
+  assert.deepEqual(grantRow(x, g.id).slots, ["L1"]);
+  assert.equal(g.expires_at - g.issued_at, 2 * 60 * 60_000);
+});
+
+test("a notice the bridge has not taken (200 lines held, the 201st left unconfirmed at the relay) stays owed on the Mac, and reaches Telegram once there is room", async (t) => {
+  const { ME, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, tmpHome, until } = await import("./owner-helpers.js");
+  const r = await ownerRelay(t);
+  const home = tmpHome(t);
+  const tg = fakeTelegram();
+  const b = bridgeOn(t, { home, telegram: tg.client(), url: r.url, token: r.tokens.me, key: newKey(), tickMs: 200, autolandMax: 200 });
+  await until(() => b.bridge.leading(), 4000, "leadership");
+  // The relay takes at most 30 messages per 10 s per connection: the 200 come from 8 connections.
+  const clis = [];
+  for (let i = 1; i <= 8; i++) clis.push(await agent(t, r.url, r.tokens.me, `me-cli-${i}`));
+  const sendBy = (c) => (text, ttl = 600) => c.client.send("me-owner", text, ttl, undefined, { toMember: ME });
+  const send = sendBy(clis[0]);
+  await Promise.all(clis.map(async (c, j) => {
+    for (let i = j * 25 + 1; i <= j * 25 + 25; i++) await sendBy(c)(noticeText({ digest: i.toString(16).padStart(64, "0"), id: `L${100 + i}`, team: "web", target: "main", state: "landed", left_s: null }));
+  }));
+  await until(() => (b.bridge.state().autoland_pending ?? []).length === 200, 15000, "200 held while unpaired");
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  const channel = async () => ({ realm: REALM_ID, member: OWN_MEMBER, caps: AUTOLAND, send, close: () => {} });
+  const warned = [];
+  const out = await x.cli(["land", x.member, "--request-approval"], { warned, deps: { landingChannel: channel } });
+  assert.match(out.join("\n"), /so L1 lands now without asking/);
+  assert.ok(warned.some((w) => /notice pending: the owner's Telegram was not told of 1 auto-landing \(the bridge has not taken it yet\)/.test(w)), warned.join("\n"));
+  const owed = readGrantState(x.s.home, "n4");
+  assert.deepEqual(owed.notices.map((n) => [n.id, n.state]), [["L1", "landed"]], "still owed on the Mac");
+  assert.deepEqual(Object.values(owed.grants)[0].noticed, []);
+  // Paired: the held lines go out, the bridge takes the one the relay kept, and shows it once.
+  paired(home);
+  const line = /^🤖 L1 landed on main under your auto-land for team n4/;
+  await until(() => tg.texts().some((x) => line.test(x)), 20000, "the owed notice on Telegram");
+  assert.equal(tg.texts().filter((x) => /^🤖 L\d+ landed/.test(x)).length, 201);
+  // The Mac sends it again (it was owed), the bridge takes it as a repeat; nothing is shown twice.
+  await x.cli(["status", "n4"], { deps: { landingChannel: channel } });
+  const done = readGrantState(x.s.home, "n4");
+  assert.deepEqual(done.notices, []);
+  assert.deepEqual(Object.values(done.grants)[0].noticed, ["L1:landed"]);
+  await sleep(300);
+  assert.equal(tg.texts().filter((x) => line.test(x)).length, 1);
+});
+
+test("auto-land notices are owed by the records: pending on a bridge that cannot show them, owed after a run stopped before queueing or a queue that could not be written, never dropped, sent once", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  const warned = [];
+  const old = [];
+  await x.cli(["land", x.member, "--request-approval"], { warned, deps: { landingChannel: fakeBridge(old, { caps: ["landing"] }) } });
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  assert.deepEqual(old, []);
+  assert.deepEqual(warned, ["notice pending: the owner's Telegram was not told of 1 auto-landing (the bridge needs an update to show auto-land notices); the next hoptell team command for n4 tries again"]);
+  const failing = [];
+  await x.cli(["status", "n4"], { warned: failing, deps: { landingChannel: fakeBridge([], { caps: AUTOLAND, failSend: true }) } });
+  assert.match(failing[0], /^notice pending: .*\(relay did not answer in time\)/);
+  const sent = [];
+  const out = await x.cli(["status", "n4"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } });
+  assert.equal(out.at(-1), "The owner's Telegram was told: L1 landed.");
+  await x.cli(["status", "n4"], { deps: { landingChannel: fakeBridge(sent, { caps: AUTOLAND }) } });
+  assert.deepEqual(sent.map((m) => parseNotice(m).state), ["landed"], "sent once");
+  assert.equal(moves(x.s.repo), 1);
+  // A run that stopped right after the landing ended, before any notice was queued: still owed.
+  const y = await telegramSetup(t, { checkout: false });
+  await autolandOn(y);
+  const r = await y.request();
+  await teamLandApprove(y.s.home, y.member, { T: r.T, C: r.C, homedir: y.s.homedir, actionId: r.id, route: "grant" });
+  assert.deepEqual(readGrantState(y.s.home, "n4").notices, []);
+  // The queue cannot be written: pending, and owed still.
+  const dir = path.join(y.s.home, "teams", "n4", "grants");
+  fs.chmodSync(dir, 0o500);
+  t.after(() => {
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {}
+  });
+  const w1 = [];
+  await y.cli(["status", "n4"], { warned: w1, deps: { landingChannel: fakeBridge([], { caps: AUTOLAND }) } });
+  assert.match(w1[0], /^notice pending: the owner's Telegram is owed auto-land notices that could not be queued \(/);
+  fs.chmodSync(dir, 0o700);
+  const sentY = [];
+  await y.cli(["status", "n4"], { deps: { landingChannel: fakeBridge(sentY, { caps: AUTOLAND }) } });
+  assert.deepEqual(sentY.map((m) => [parseNotice(m).id, parseNotice(m).state]), [["L1", "landed"]]);
+  // 50 notices still owed: no new auto-landing; the request goes to the owner, and nothing is dropped.
+  const z = await telegramSetup(t, { checkout: false });
+  await autolandOn(z);
+  const gs = readGrantState(z.s.home, "n4");
+  for (let i = 1; i <= 50; i++) gs.notices.push({ digest: crypto.createHash("sha256").update(String(i)).digest("hex"), id: `L${100 + i}`, team: "n4", target: "main", state: "landed", left_s: null });
+  writeGrantState(z.s.home, "n4", gs);
+  const outZ = await z.cli(["land", z.member, "--request-approval"]);
+  assert.ok(outZ.includes("Not auto-landed under the owner's grant: too many auto-land notices are pending (50); check the owner's Telegram. The owner decides it."), outZ.join("\n"));
+  assert.equal(refOf(z.s.repo, "main"), z.c.T);
+  assert.equal(readGrantState(z.s.home, "n4").notices.length, 50);
+});
+
+test("an auto-landing that stopped after acceptance stays the grant's on every route: after --off, the owner's terminal --approve and team apply both refuse, and nothing moves", async (t) => {
+  for (const route of ["terminal", "apply"]) {
+    const x = await telegramSetup(t, { checkout: false });
+    await autolandOn(x);
+    await assert.rejects(x.cli(["land", x.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "accepted");
+    await x.cli(["autoland", "n4", "--off"]);
+    const r = await (route === "terminal" ? x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true }) : x.cli(["apply", "L1"])).catch((e) => e);
+    assert.match(r.message, /^the owner turned auto-land off \(the grant g_[a-z2-7]{16} is revoked\) before the move, so the landing L1 ended; nothing was moved\./, route);
+    assert.equal(moves(x.s.repo), 0, route);
+    assert.equal(refOf(x.s.repo, "main"), x.c.T, route);
+    assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["rejected", "grant"], route);
+  }
+});
+
+test("the notices owed count before an auto-landing: 49 queued plus one owed after a stopped run already reach the limit", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  // L1, approved by the grant, ends rejected when it is applied after an --off (the library call:
+  // no command queued its notice, as when a run stops right after the record). A new grant follows.
+  await x.request();
+  await x.cli(["autoland", "n4", "--off"]);
+  await autolandOn(x);
+  await assert.rejects(teamApply(x.s.home, "L1", { homedir: x.s.homedir }), /revoked/);
+  assert.equal(readTombstone(x.s.home, "n4", "L1").state, "rejected");
+  const gs = readGrantState(x.s.home, "n4");
+  assert.equal(gs.notices.length, 0);
+  for (let i = 1; i <= 49; i++) gs.notices.push({ digest: crypto.createHash("sha256").update(String(i)).digest("hex"), id: `L${100 + i}`, team: "n4", target: "main", state: "landed", left_s: null });
+  writeGrantState(x.s.home, "n4", gs);
+  const out = await x.cli(["land", x.member, "--request-approval"]);
+  assert.ok(out.includes("Not auto-landed under the owner's grant: too many auto-land notices are pending (50); check the owner's Telegram. The owner decides it."), out.join("\n"));
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  const after = readGrantState(x.s.home, "n4");
+  assert.equal(after.notices.length, 50);
+  assert.ok(after.notices.some((n) => n.id === "L1" && n.state === "rejected"));
+});
+
+test("an action an auto-land grant approved is shown as such by team approve, and a terminal approve lands it by the grant", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  const r = await x.request();
+  assert.equal(r.auto.grant.startsWith("g_"), true);
+  assert.deepEqual(readState(x.s.home, "n4").actions.map((a) => [a.state, a.route]), [["approved", "grant"]]);
+  const view = await x.cli(["approve", "L1"], { tty: true, deps: { ask: async () => assert.fail("no prompt") } });
+  assert.equal(view.at(-1), "L1 is approved by your auto-land grant. The lead lands it (hoptell team apply L1); nothing more is needed here.");
+  const out = await x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true });
+  assert.match(out.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["finished", "grant"]);
+  assert.deepEqual(grantRow(x, onlyGrant(x)).slots, ["L1"]);
+});
+
+test("team autoland from the real command line: --off, --for and --count are known options; a missing value is refused", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-autoland-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const run = (...args) => spawnSync(process.execPath, [BIN, "team", ...args], { env: { ...process.env, HOPTELL_HOME: home, HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-pass-040", HOPTELL_TEAM_MEMBER: "" }, encoding: "utf8" });
+  const off = run("autoland", "n4", "--off");
+  assert.equal(off.status, 1, off.stderr);
+  assert.match(off.stderr, /team n4 has no state/);
+  assert.doesNotMatch(off.stderr, /unknown option/);
+  const on = run("autoland", "n4", "--target", "main", "--for", "2h", "--count", "3");
+  assert.doesNotMatch(on.stderr, /unknown option/);
+  for (const flag of ["--for", "--count"]) {
+    const r = run("autoland", "n4", "--target", "main", flag);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, new RegExp(`${flag} needs a value`));
+  }
 });

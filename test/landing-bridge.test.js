@@ -8,8 +8,9 @@ import crypto from "node:crypto";
 import * as sig from "../lib/ownersig.js";
 import { canonicalize } from "../lib/jcs.js";
 import { Crash } from "../lib/ownerchannel.js";
-import { APPLY_WINDOW_MS, BRIDGE_STATUS, bridgeTakesLandings, checkReceipt, decisionText, landingRequest, landingStatusText, manifestProblem, parseDecision, parseLandingRequest, parseLandingStatus, patchBytes } from "../lib/landings.js";
-import { BOB, ME, OWNER_CHAT, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, textProblems, tmpHome, until } from "./owner-helpers.js";
+import { APPLY_WINDOW_MS, BRIDGE_STATUS, autolandStatusText, bridgeTakesLandings, checkReceipt, decisionText, landingRequest, landingStatusText, manifestProblem, parseAutolandStatus, parseDecision, parseLandingRequest, parseLandingStatus, parseRevoke, patchBytes, revokeText } from "../lib/landings.js";
+import { noticeText, parseGrant } from "../lib/grants.js";
+import { BOB, ME, OWNER_CHAT, OWNER_USER, REALM, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, pinOf, textProblems, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
 const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
@@ -137,11 +138,12 @@ test("the receipt check: signature, pin, recipient, digest and the apply window,
 
 async function setup(t, opts = {}) {
   const { url, tokens } = await ownerRelay(t);
+  const { unpaired = false, ...rest } = opts;
   const home = tmpHome(t);
-  paired(home);
+  if (!unpaired) paired(home);
   const tg = fakeTelegram();
   const key = newKey();
-  const b = bridgeOn(t, { home, telegram: tg.client(), url, token: tokens.me, key, ...opts });
+  const b = bridgeOn(t, { home, telegram: tg.client(), url, token: tokens.me, key, ...rest });
   await until(() => b.bridge.leading(), 4000, "leadership");
   const lead = await agent(t, url, tokens.me, "me-lead");
   const cli = await agent(t, url, tokens.me, "me-cli-1");
@@ -349,4 +351,410 @@ test("a checkout in a separate folder is named on the card; commit ids inside br
     assert.doesNotMatch(x, /deadbeef/, x);
     assert.deepEqual(textProblems(x), [], x);
   }
+});
+
+// ---- auto-land (design 8 addendum, option 6; L3b-2a) ----------------------------------------------
+
+test("auto-land shapes: the recipient's generation, the request's reasons, the Mac's report", () => {
+  const m = sampleManifest();
+  const g = { ...m, recipient: { ...m.recipient, generation: 3 } };
+  assert.equal(manifestProblem(g), null);
+  assert.equal(manifestProblem({ ...m, recipient: { ...m.recipient, generation: -1 } }), "recipient");
+  assert.equal(parseLandingRequest(landingRequest(g)).auto, null);
+  assert.deepEqual(parseLandingRequest(landingRequest(g, { why: ["tests_failed", "changes"] })).auto, ["tests_failed", "changes"]);
+  assert.throws(() => landingRequest(g, { why: ["because"] }), /malformed/);
+  assert.match(parseLandingRequest(canonicalize({ auto: { why: [] }, hoptell_owner_landing: 1, manifest: g })).problem, /auto-land/);
+  const r = { ref: "g_abcdefghijklmnop", state: "refused", why: "stale", team: "web", targets: ["main"], left_s: null, teams: [] };
+  assert.deepEqual(parseAutolandStatus(autolandStatusText(r)), r);
+  const off = { ref: "v_abcdefghijklmnop", state: "off", why: null, team: null, targets: [], left_s: null, teams: ["n4", "n5"] };
+  assert.deepEqual(parseAutolandStatus(autolandStatusText(off)), off);
+  assert.throws(() => autolandStatusText({ ...off, ref: "g_abcdefghijklmnop" }), /not an auto-land report/);
+  assert.throws(() => autolandStatusText({ ...r, teams: ["n4"] }), /not an auto-land report/);
+  assert.deepEqual(parseRevoke(revokeText({ id: "v_abcdefghijklmnop", issuedAt: 5 })), { id: "v_abcdefghijklmnop", issued_at: 5 });
+  assert.equal(parseRevoke('{"hoptell_landing_revoke":1,"id":"g_abcdefghijklmnop","issued_at":5}'), null);
+  assert.throws(() => autolandStatusText({ ...r, why: "because" }), /not an auto-land report/);
+  assert.equal(parseAutolandStatus(JSON.stringify({ hoptell_owner_autoland_status: 1, ...r }, null, 1)), null, "only the canonical text");
+  assert.deepEqual(JSON.parse(BRIDGE_STATUS).caps, ["landing", "autoland"]);
+});
+
+test("Land this and auto-land: one tap, the decision and then a signed grant for the team; the Mac's report and the auto-land notices are posted once each", async (t) => {
+  const s = await setup(t);
+  const base = sampleManifest();
+  const m = { ...base, recipient: { ...base.recipient, generation: 2 } };
+  const q = (await s.cli.client.send("me-owner", landingRequest(m, { why: ["changes"] }), 900, undefined, { toMember: ME })).message_id;
+  await until(() => s.tg.landingCards().length === 1, 4000, "landing card");
+  const card = s.tg.landingCards()[0];
+  assert.match(card.params.text, /\nWhy it wasn't auto-landed: a reviewer asked for changes\.\n\n/);
+  const rows = card.params.reply_markup.inline_keyboard;
+  assert.deepEqual(rows.map((r) => r.map((b) => b.text)), [["Land L7", "Reject"], ["Land this and auto-land web for 2 h"], ["Show diff"]]);
+  const before = Date.now();
+  s.tg.press(card, 0, { data: rows[1][0].callback_data });
+  await until(() => s.lead.got.filter((x) => x.from === "me-owner").length === 2, 4000, "two messages");
+  const [d, g] = s.lead.got.filter((x) => x.from === "me-owner").map(verifyAt(s.key, "me-lead"));
+  assert.equal(d.ok && g.ok, true);
+  assert.equal(d.env.kind, "landing_decision");
+  assert.equal(parseDecision(d.env.text).decision, "land");
+  assert.equal(g.env.kind, "landing_grant");
+  assert.equal(g.env.q, q);
+  const scope = parseGrant(g.env.text);
+  assert.ok(scope, "a valid grant");
+  assert.deepEqual({ ...scope, id: "x", issued_at: 0, not_before: 0, expires_at: 0 }, { hoptell_landing_grant: 1, id: "x", team: "web", run: m.run, generation: 2, enrolment: m.enrolment, recipient: { lead: "me-lead", member: ME }, targets: ["main"], issued_at: 0, not_before: 0, expires_at: 0, max_count: null, op: "land", origin: digestOf(m) });
+  assert.ok(scope.issued_at >= before && scope.not_before === scope.issued_at && scope.expires_at === scope.issued_at + 2 * 60 * 60_000);
+  assert.equal(g.env.ts, scope.issued_at, "signed at the tap");
+  await until(() => acks(s.tg).includes("✅ Sent: land, and auto-land for 2 h."), 4000, "ack");
+  await until(() => edits(s.tg).some((x) => x.endsWith("You chose: Land, and auto-land web for 2 h. lead carries it out now and reports back here.")), 4000, "card closed");
+  // The Mac's report: one line, answering the card; a repeat under another reference shows nothing.
+  const report = autolandStatusText({ ref: scope.id, state: "on", why: null, team: "web", targets: ["main"], left_s: 7200 });
+  await s.cli.client.send("me-owner", report, 600, undefined, { toMember: ME });
+  await s.cli.client.send("me-owner", report, 600, undefined, { toMember: ME });
+  await until(() => s.tg.texts().includes("🤖 Auto-land on: team web, main, 2 h."), 4000, "the report");
+  const refused = autolandStatusText({ ref: "g_abcdefghijklmnop", state: "refused", why: "stale", team: "web", targets: ["main"], left_s: null });
+  await s.cli.client.send("me-owner", refused, 600, undefined, { toMember: ME });
+  await until(() => s.tg.texts().some((x) => x.startsWith("⚠️ Auto-land for team web not turned on")), 4000, "a refusal");
+  assert.ok(s.tg.texts().includes("⚠️ Auto-land for team web not turned on: it was given before auto-land was last turned off; give it again from a newer card or in a terminal."));
+  // The notices of auto-landings: a new message each, once per action and state.
+  const n = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: 4800 };
+  await s.cli.client.send("me-owner", noticeText(n), 600, undefined, { toMember: ME });
+  await s.cli.client.send("me-owner", noticeText(n), 600, undefined, { toMember: ME });
+  await s.cli.client.send("me-owner", noticeText({ ...n, state: "blocked", left_s: null }), 600, undefined, { toMember: ME });
+  await until(() => s.tg.texts().some((x) => x.startsWith("⚠️ L9")), 4000, "the blocked notice");
+  await sleep(200);
+  const texts = s.tg.texts();
+  assert.equal(texts.filter((x) => x === "🤖 Auto-land on: team web, main, 2 h.").length, 1);
+  assert.equal(texts.filter((x) => x === "🤖 L9 landed on main under your auto-land for team web (1 h 20 min left).").length, 1);
+  assert.ok(texts.includes("⚠️ L9 (auto-land, team web) is blocked; check its state on the Mac."));
+  for (const x of [...texts, ...edits(s.tg), ...acks(s.tg).filter(Boolean)]) assert.deepEqual(textProblems(x), [], x);
+  assert.equal(s.bridge.state().outbox.length, 0);
+});
+
+test("no auto-land button for a lead that does not name its generation, and Land alone sends no grant", async (t) => {
+  const s = await setup(t);
+  await s.request(sampleManifest());
+  await until(() => s.tg.landingCards().length === 1, 4000, "landing card");
+  const card = s.tg.landingCards()[0];
+  assert.equal(card.params.text.includes("auto-land"), false);
+  assert.equal(card.params.reply_markup.inline_keyboard.flat().some((b) => b.callback_data.endsWith(":a")), false);
+  s.tg.press(card, 0, { data: card.params.reply_markup.inline_keyboard[0][0].callback_data.replace(/:l$/, ":a") });
+  await until(() => acks(s.tg).length === 1, 4000, "ack");
+  await sleep(200);
+  assert.equal(s.lead.got.filter((x) => x.from === "me-owner").length, 0, "nothing sent for a forged auto-land tap");
+});
+
+test("auto-land reports and notices that arrive while unpaired are held, once each, and posted after pairing", async (t) => {
+  const s = await setup(t, { unpaired: true });
+  const send = (text) => s.cli.client.send("me-owner", text, 600, undefined, { toMember: ME });
+  const n = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: 4800 };
+  const report = autolandStatusText({ ref: "g_abcdefghijklmnop", state: "on", why: null, team: "web", targets: ["main"], left_s: 7200 });
+  await send(noticeText(n));
+  await send(noticeText(n));
+  await send(report);
+  await until(() => (s.bridge.state().autoland_pending ?? []).length === 2 && s.bridge.state().drops.autoland_again === 1, 4000, "held once each");
+  assert.equal(s.tg.sent.filter((x) => x.method === "sendMessage").length, 0, "nothing posted unpaired");
+  paired(s.home);
+  // The next message the bridge handles finds the pairing; a repeat of a held line adds nothing.
+  await send(noticeText(n));
+  await until(() => s.tg.texts().includes("🤖 Auto-land on: team web, main, 2 h."), 4000, "posted after pairing");
+  await sleep(200);
+  const texts = s.tg.texts();
+  assert.deepEqual(texts, ["🤖 L9 landed on main under your auto-land for team web (1 h 20 min left).", "🤖 Auto-land on: team web, main, 2 h."]);
+  assert.deepEqual(s.bridge.state().autoland_pending, []);
+  assert.equal(s.bridge.state().outbox.length, 0);
+});
+
+test("an auto-land line Telegram refuses (the owner blocked the bot) stays held and is posted on a later try, a direct post and a held one alike", async (t) => {
+  let clock = Date.now();
+  const s = await setup(t, { unpaired: true, now: () => clock });
+  const send = (text) => s.cli.client.send("me-owner", text, 600, undefined, { toMember: ME });
+  const n = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: null };
+  const report = autolandStatusText({ ref: "g_abcdefghijklmnop", state: "on", why: null, team: "web", targets: ["main"], left_s: 7200 });
+  // Held while unpaired; then paired, with the bot blocked: both tries refused, both kept.
+  await send(noticeText(n));
+  await until(() => (s.bridge.state().autoland_pending ?? []).length === 1, 4000, "held");
+  paired(s.home);
+  s.tg.failWhen = (method, p) => (method === "sendMessage" && p.text.startsWith("🤖") ? 403 : 0);
+  await send(report); // a direct post, and the reconcile posts the held one
+  await until(() => s.tg.attempts.filter((a) => a.params.text?.startsWith("🤖")).length === 2, 4000, "two refused tries");
+  await until(() => s.bridge.state().outbox.length === 0, 4000, "settled");
+  assert.deepEqual(s.bridge.state().autoland_pending.map((h) => h.k), [`notice:${n.digest}:landed`, `autoland:g_abcdefghijklmnop:on:me-cli-1|${ME}`]);
+  assert.equal(s.tg.texts().length, 0);
+  // Unblocked: a message before the retry time tries nothing; one after it posts both, once each.
+  s.tg.failWhen = null;
+  await send(noticeText(n));
+  await sleep(200);
+  assert.equal(s.tg.texts().length, 0, "not before the retry time");
+  clock += 61_000;
+  await send(report);
+  await until(() => s.tg.texts().length === 2, 4000, "both posted");
+  assert.deepEqual(s.tg.texts(), ["🤖 L9 landed on main under your auto-land for team web.", "🤖 Auto-land on: team web, main, 2 h."]);
+  assert.deepEqual(s.bridge.state().autoland_pending, []);
+  await send(report);
+  await sleep(200);
+  assert.equal(s.tg.texts().length, 2, "shown once");
+});
+
+test("held auto-land lines belong to the Telegram account they came under: another account pairing later never sees them; the same account paired again gets them", async (t) => {
+  const report = autolandStatusText({ ref: "g_abcdefghijklmnop", state: "on", why: null, team: "web", targets: ["main"], left_s: 7200 });
+  const n = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: null };
+  const refusedUnder = async (s) => {
+    s.tg.failWhen = (method, p) => (method === "sendMessage" && p.text.startsWith("🤖") ? 403 : 0);
+    await s.cli.client.send("me-owner", report, 600, undefined, { toMember: ME });
+    await until(() => s.tg.attempts.some((a) => a.params.text?.startsWith("🤖")), 4000, "refused");
+    await until(() => s.bridge.state().outbox.length === 0, 4000, "settled");
+    assert.equal(s.bridge.state().autoland_pending.length, 1);
+    s.tg.failWhen = null;
+  };
+  // Account A's line, refused; then account B pairs: B gets its own line, never A's.
+  let clock = Date.now();
+  const s = await setup(t, { now: () => clock });
+  await refusedUnder(s);
+  paired(s.home, { user: 222, chat: 222, id: "p_bbbbbbbbbbbbbbbb" });
+  clock += 61_000;
+  await s.cli.client.send("me-owner", noticeText(n), 600, undefined, { toMember: ME });
+  await until(() => s.tg.texts().length === 1, 4000, "B's own line");
+  await sleep(200);
+  assert.deepEqual(s.tg.calls("sendMessage").map((c) => [c.params.chat_id, c.params.text]), [[222, "🤖 L9 landed on main under your auto-land for team web."]]);
+  // A's line waits for A (nothing moved), never sent to B.
+  assert.deepEqual(s.bridge.state().autoland_pending.map((h) => [h.k, h.owner]), [[`autoland:g_abcdefghijklmnop:on:me-cli-1|${ME}`, OWNER_USER]]);
+  // The same account paired again (a new pairing, a new chat): its held line is shown there.
+  let clock2 = Date.now();
+  const u = await setup(t, { now: () => clock2 });
+  await refusedUnder(u);
+  paired(u.home, { id: "p_cccccccccccccccc", chat: 333 });
+  clock2 += 61_000;
+  await u.cli.client.send("me-owner", noticeText(n), 600, undefined, { toMember: ME });
+  await until(() => u.tg.texts().length === 2, 4000, "both lines");
+  assert.deepEqual(u.tg.calls("sendMessage").map((c) => [c.params.chat_id, c.params.text, c.params.reply_parameters ?? null]), [
+    [333, "🤖 Auto-land on: team web, main, 2 h.", null],
+    [333, "🤖 L9 landed on main under your auto-land for team web.", null],
+  ]);
+  assert.deepEqual(u.bridge.state().autoland_pending, []);
+});
+
+test("a line kept for an earlier account: a copy sent again while another account is paired is taken and not shown; that account paired again sees it once", async (t) => {
+  let clock = Date.now();
+  const s = await setup(t, { now: () => clock });
+  const send = (text) => s.cli.client.send("me-owner", text, 600, undefined, { toMember: ME });
+  const K = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: null };
+  const k = `notice:${K.digest}:landed`;
+  // A's line K, refused by Telegram (403) and held; the Mac does not know the bridge took it.
+  s.tg.failWhen = (method, p) => (method === "sendMessage" && p.text.startsWith("🤖") ? 403 : 0);
+  await send(noticeText(K));
+  await until(() => s.tg.attempts.some((a) => a.params.text?.startsWith("🤖")), 4000, "refused");
+  await until(() => s.bridge.state().outbox.length === 0, 4000, "settled");
+  s.tg.failWhen = null;
+  // Account B pairs: K is kept apart for A.
+  paired(s.home, { user: 222, chat: 222, id: "p_bbbbbbbbbbbbbbbb" });
+  clock += 61_000;
+  const own = { ...K, digest: "f".repeat(64), id: "L10" };
+  await send(noticeText(own));
+  await until(() => s.tg.texts().length === 1, 4000, "B's own line");
+  assert.deepEqual(s.bridge.state().autoland_pending.map((h) => [h.k, h.owner]), [[k, OWNER_USER]]);
+  // The Mac sends K again (a new reference): taken, so the Mac settles it, and nothing reaches B.
+  const ack = await send(noticeText(K));
+  assert.equal(ack.state, "delivered");
+  await until(() => s.bridge.state().drops.autoland_other_owner === 1, 4000, "counted");
+  await sleep(200);
+  assert.deepEqual(s.tg.calls("sendMessage").map((c) => [c.params.chat_id, c.params.text]), [[222, "🤖 L10 landed on main under your auto-land for team web."]]);
+  // A pairs again: K is shown to A, once, and the kept copy is gone.
+  paired(s.home, { id: "p_cccccccccccccccc" });
+  await send(noticeText(own)); // any message: the bridge finds the new pairing
+  await until(() => s.tg.texts().length === 2, 4000, "K for A");
+  await sleep(200);
+  assert.deepEqual(s.tg.calls("sendMessage").map((c) => [c.params.chat_id, c.params.text]).slice(1), [[OWNER_CHAT, "🤖 L9 landed on main under your auto-land for team web."]]);
+  assert.deepEqual(s.bridge.state().autoland_pending, []);
+});
+
+/** Send `texts` to the bridge from several connections (the relay takes 30 messages per 10 s per connection). */
+async function sendMany(t, s, texts) {
+  const per = 25;
+  const clis = [];
+  for (let i = 0; i * per < texts.length; i++) clis.push(await agent(t, s.url, s.tokens.me, `me-bulk-${i + 1}`));
+  await Promise.all(clis.map(async (c, j) => {
+    for (const text of texts.slice(j * per, j * per + per)) await c.client.send("me-owner", text, 600, undefined, { toMember: ME });
+  }));
+}
+const bulkNotice = (i) => noticeText({ digest: i.toString(16).padStart(64, "0"), id: `L${1000 + i}`, team: "web", target: "main", state: "landed", left_s: null });
+
+test("one list of pending auto-land lines: an account that returns while another account's 200 lines wait gets its line without a resend", async (t) => {
+  let clock = Date.now();
+  const s = await setup(t, { tickMs: 200, now: () => clock });
+  const K = { digest: "e".repeat(64), id: "L9", team: "web", target: "main", state: "landed", left_s: null };
+  // A's K, refused (403): pending for A.
+  s.tg.failWhen = (method, p) => (method === "sendMessage" && p.text.startsWith("🤖") ? 403 : 0);
+  await s.cli.client.send("me-owner", noticeText(K), 600, undefined, { toMember: ME });
+  await until(() => s.tg.attempts.some((a) => a.params.text?.startsWith("🤖 L9")), 4000, "refused");
+  // B pairs; its 200 lines are refused too and wait.
+  paired(s.home, { user: 222, chat: 222, id: "p_bbbbbbbbbbbbbbbb" });
+  await sendMany(t, s, Array.from({ length: 200 }, (_, i) => bulkNotice(i + 1)));
+  await until(() => s.bridge.state().autoland_pending.filter((h) => h.owner === 222).length === 200, 15000, "B's 200 pending");
+  assert.equal(s.tg.texts().length, 0);
+  // A returns (a new pairing): the tick finds it, and K is posted to A, nothing of B's.
+  s.tg.failWhen = null;
+  clock += 61_000; // past K's retry time
+  paired(s.home, { id: "p_cccccccccccccccc" });
+  await until(() => s.tg.texts().length === 1, 4000, "K for A");
+  await sleep(300);
+  assert.deepEqual(s.tg.calls("sendMessage").map((c) => [c.params.chat_id, c.params.text]), [[OWNER_CHAT, "🤖 L9 landed on main under your auto-land for team web."]]);
+  assert.equal(s.bridge.state().autoland_pending.length, 200, "B's lines wait for B");
+});
+
+test("more than 200 of one account's pending lines all go out once it pairs, a batch at a time", async (t) => {
+  const s = await setup(t, { unpaired: true, tickMs: 200 });
+  await sendMany(t, s, Array.from({ length: 230 }, (_, i) => bulkNotice(i + 1)));
+  await until(() => (s.bridge.state().autoland_pending ?? []).length === 230, 15000, "230 pending");
+  paired(s.home);
+  await until(() => s.tg.texts().length === 230, 20000, "all 230 posted");
+  assert.equal(new Set(s.tg.texts()).size, 230, "each once");
+  assert.equal(s.tg.texts()[0], "🤖 L1001 landed on main under your auto-land for team web.", "oldest first");
+  assert.deepEqual(s.bridge.state().autoland_pending, []);
+});
+
+// ---- /autoland and /autoland off (L3b-2b) ---------------------------------------------------------
+
+const withGeneration = (m, generation = 2) => ({ ...m, recipient: { ...m.recipient, generation } });
+const offerCards = (tg) => tg.calls("sendMessage").filter((c) => /^🤖 Auto-land for team /.test(c.params.text));
+
+test("/autoland offers the teams of recent requests (lead, team and run), every target asked for, and grants 2 h from a confirmation; Cancel sends nothing", async (t) => {
+  let clock = Date.now();
+  const s = await setup(t, { now: () => clock });
+  s.tg.say("/autoland");
+  await until(() => s.tg.texts().some((x) => x.startsWith("No team asked you")), 4000, "none yet");
+  // Two requests of the same team run (main, then release), and one of a lead without a generation.
+  await s.request(withGeneration(sampleManifest({ id: "L7", now: clock })));
+  const q2 = await s.request(withGeneration(sampleManifest({ id: "L8", target: "release", now: clock }), 3));
+  await s.request(sampleManifest({ id: "L9", lead: "me-other", now: clock }));
+  await until(() => s.tg.landingCards().length === 3, 4000, "three cards");
+  s.tg.say("/autoland");
+  await until(() => offerCards(s.tg).length === 1, 4000, "one offer");
+  const offer = offerCards(s.tg)[0];
+  assert.equal(offer.params.text, "🤖 Auto-land for team web in app?\nBranches: main, release\nFor 2 h, with no limit on the number of landings: the lead lands reviewed and tested work without asking you. The reviewers' verdicts and the lead's test report come from agents.");
+  assert.deepEqual(offer.params.reply_markup.inline_keyboard[0].map((b) => b.text), ["Grant for 2 h", "Cancel"]);
+  // Cancel: nothing sent.
+  s.tg.press(offer, 0, { data: offer.params.reply_markup.inline_keyboard[0][1].callback_data });
+  await until(() => edits(s.tg).includes("Cancelled. Nothing was sent."), 4000, "cancelled");
+  // Again, and Grant: a signed grant for the latest generation, both targets, 2 h, in reply to the latest request.
+  s.tg.say("/autoland");
+  await until(() => offerCards(s.tg).length === 2, 4000, "second offer");
+  const again = offerCards(s.tg)[1];
+  s.tg.press(again, 0);
+  const got = await s.lead.waitFor((x) => x.from === "me-owner" && verifyAt(s.key, "me-lead")(x).env?.kind === "landing_grant");
+  const v = verifyAt(s.key, "me-lead")(got);
+  assert.equal(v.ok, true);
+  assert.equal(v.env.q, q2);
+  const scope = parseGrant(v.env.text);
+  assert.deepEqual([scope.team, scope.targets, scope.generation, scope.origin, scope.max_count, scope.expires_at - scope.issued_at, scope.issued_at], ["web", ["main", "release"], 3, null, null, 2 * 60 * 60_000, clock]);
+  await until(() => edits(s.tg).includes("🤖 Sent: auto-land for team web, 2 h. The Mac confirms it here."), 4000, "sent");
+  // The same button again, or an offer more than 24 h after its request: nothing more is sent.
+  clock += 24 * 3600_000 - 5 * 60_000;
+  s.tg.say("/autoland");
+  await until(() => offerCards(s.tg).length === 3, 4000, "third offer");
+  clock += 6 * 60_000; // the button is still open; its request is now over 24 h old
+  s.tg.press(offerCards(s.tg)[2], 0);
+  await until(() => acks(s.tg).includes("This team's last request is more than 24 hours old; nothing was sent. Send /autoland again."), 4000, "too old");
+  s.tg.press(again, 0);
+  await sleep(200);
+  assert.equal(s.lead.got.filter((x) => x.from === "me-owner" && verifyAt(s.key, "me-lead")(x).env?.kind === "landing_grant").length, 1);
+  for (const x of [...s.tg.texts(), ...edits(s.tg), ...acks(s.tg).filter(Boolean)]) assert.deepEqual(textProblems(x), [], x);
+});
+
+test("/autoland off: one signed revocation to each lead session seen, revocation pending until each Mac reports off; with none seen, the terminal command", async (t) => {
+  const s = await setup(t);
+  s.tg.say("/autoland off");
+  await until(() => s.tg.texts().includes("No landing request was seen here, so there is nothing to reach; in a terminal: hoptell team autoland <team> --off"), 4000, "none seen");
+  const other = await agent(t, s.url, s.tokens.me, "me-lead-2");
+  await s.request(withGeneration(sampleManifest({ id: "L7" })));
+  await s.request(withGeneration(sampleManifest({ id: "L8", target: "release" })));
+  await s.request(withGeneration(sampleManifest({ id: "L9", lead: "me-lead-2" })));
+  await until(() => s.tg.landingCards().length === 3, 4000, "three cards");
+  s.tg.say("/autoland off");
+  await until(() => s.tg.texts().some((x) => x.startsWith("⏳ Revocation pending")), 4000, "pending");
+  assert.ok(s.tg.texts().includes("⏳ Revocation pending: auto-land turns off on each Mac that asked you to land something (2 lead sessions) once it confirms here. A Mac that is offline sees it only once it is back."));
+  const revokes = (a, name) => a.got.filter((x) => x.from === "me-owner").map(verifyAt(s.key, name)).filter((v) => v.ok && v.env.kind === "landing_revoke");
+  await until(() => revokes(s.lead, "me-lead").length === 1 && revokes(other, "me-lead-2").length === 1, 4000, "one revocation each");
+  const r = parseRevoke(revokes(s.lead, "me-lead")[0].env.text);
+  assert.ok(r, "a valid revocation");
+  // Each Mac's report: shown once each, also when both report the same revocation; a report from a
+  // session the revocation was not sent to is not shown.
+  const off = (teams) => autolandStatusText({ ref: r.id, state: "off", why: null, team: null, targets: [], left_s: null, teams });
+  await s.cli.client.send("me-owner", off(["n9"]), 600, undefined, { toMember: ME });
+  for (let i = 0; i < 2; i++) {
+    await s.lead.client.send("me-owner", off(["n4", "n5"]), 600, undefined, { toMember: ME });
+    await other.client.send("me-owner", off(["n6"]), 600, undefined, { toMember: ME });
+  }
+  const offLines = () => s.tg.texts().filter((x) => x.startsWith("✅ Auto-land is off"));
+  await until(() => offLines().length === 2, 4000, "off from each Mac");
+  await sleep(300);
+  assert.deepEqual(offLines().sort(), ["✅ Auto-land is off for every team on the Mac of lead (n4, n5).", "✅ Auto-land is off for every team on the Mac of lead-2 (n6)."]);
+  for (const x of s.tg.texts()) assert.deepEqual(textProblems(x), [], x);
+});
+
+test("/autoland off past the bound of tracked revocations: a live one is never dropped (its reports are shown later), and the one over the bound is sent and says its confirmations are not shown", async (t) => {
+  const s = await setup(t, { autolandOffsMax: 2 });
+  await s.request(withGeneration(sampleManifest({ id: "L7" })));
+  await until(() => s.tg.landingCards().length === 1, 4000, "card");
+  const revokes = () => s.lead.got.filter((x) => x.from === "me-owner").map(verifyAt(s.key, "me-lead")).filter((v) => v.ok && v.env.kind === "landing_revoke").map((v) => parseRevoke(v.env.text).id);
+  for (let i = 1; i <= 3; i++) {
+    s.tg.say("/autoland off");
+    await until(() => revokes().length === i, 4000, `revocation ${i}`);
+  }
+  const pendings = () => s.tg.texts().filter((x) => x.startsWith("⏳ Revocation pending"));
+  await until(() => pendings().length === 3, 4000, "three replies");
+  assert.deepEqual(pendings().map((x) => x.includes("\nToo many recent /autoland off here: the Macs' confirmations of this one will not be shown; it is sent all the same.")), [false, false, true]);
+  assert.deepEqual(Object.keys(s.bridge.state().autoland_offs), revokes().slice(0, 2));
+  // The first one's report, after two more: shown once; the untracked one's report is not shown.
+  const [first, , third] = revokes();
+  const off = (ref, teams) => autolandStatusText({ ref, state: "off", why: null, team: null, targets: [], left_s: null, teams });
+  await s.lead.client.send("me-owner", off(third, ["n7"]), 600, undefined, { toMember: ME });
+  await s.lead.client.send("me-owner", off(first, ["n4"]), 600, undefined, { toMember: ME });
+  await s.lead.client.send("me-owner", off(first, ["n4"]), 600, undefined, { toMember: ME });
+  await until(() => s.tg.texts().includes("✅ Auto-land is off for every team on the Mac of lead (n4)."), 4000, "first's report");
+  await sleep(300);
+  assert.deepEqual(s.tg.texts().filter((x) => x.startsWith("✅ Auto-land is off")), ["✅ Auto-land is off for every team on the Mac of lead (n4)."]);
+  for (const x of s.tg.texts()) assert.deepEqual(textProblems(x), [], x);
+});
+
+test("an /autoland confirmation signs only what it showed: a request that arrives while it is open refreshes it and asks for a new tap", async (t) => {
+  const s = await setup(t);
+  await s.request(withGeneration(sampleManifest({ id: "L7" })));
+  await until(() => s.tg.landingCards().length === 1, 4000, "card");
+  s.tg.say("/autoland");
+  await until(() => offerCards(s.tg).length === 1, 4000, "offer");
+  const offer = offerCards(s.tg)[0];
+  assert.match(offer.params.text, /\nBranches: main\n/);
+  // Meanwhile: another target, and a newer generation.
+  await s.request(withGeneration(sampleManifest({ id: "L8", target: "release" }), 3));
+  await until(() => s.tg.landingCards().length === 2, 4000, "second card");
+  s.tg.press(offer, 0);
+  await until(() => acks(s.tg).includes("This team changed since this was shown; check the new offer and tap again."), 4000, "changed");
+  const refreshed = s.tg.calls("editMessageText").find((c) => c.params.message_id === offer.message_id && c.params.reply_markup);
+  assert.match(refreshed.params.text, /\nBranches: main, release\n/);
+  await sleep(200);
+  const grants = () => s.lead.got.filter((x) => x.from === "me-owner").map(verifyAt(s.key, "me-lead")).filter((v) => v.ok && v.env.kind === "landing_grant");
+  assert.equal(grants().length, 0, "nothing signed for what was not shown");
+  s.tg.press(offer, 0, { data: refreshed.params.reply_markup.inline_keyboard[0][0].callback_data });
+  await until(() => grants().length === 1, 4000, "the grant");
+  const scope = parseGrant(grants()[0].env.text);
+  assert.deepEqual([scope.targets, scope.generation], [["main", "release"], 3]);
+});
+
+test("/autoland off reaches a lead given a grant here even after 64 newer requests pushed it out of the recent list, and says it may not reach every Mac", async (t) => {
+  const s = await setup(t);
+  await s.request(withGeneration(sampleManifest({ id: "L7" })));
+  await until(() => s.tg.landingCards().length === 1, 4000, "card");
+  const card = s.tg.landingCards()[0];
+  s.tg.press(card, 0, { data: card.params.reply_markup.inline_keyboard[1][0].callback_data }); // Land this and auto-land
+  await until(() => acks(s.tg).includes("✅ Sent: land, and auto-land for 2 h."), 4000, "granted");
+  // 64 newer requests of other lead sessions (from several connections: the relay's rate per connection).
+  const texts = Array.from({ length: 64 }, (_, i) => landingRequest(withGeneration(sampleManifest({ id: `L${100 + i}`, lead: `me-x${i}` }))));
+  const clis = [];
+  for (let i = 0; i < 3; i++) clis.push(await agent(t, s.url, s.tokens.me, `me-req-${i}`));
+  await Promise.all(clis.map(async (c, j) => {
+    for (const text of texts.slice(j * 22, j * 22 + 22)) await c.client.send("me-owner", text, 900, undefined, { toMember: ME });
+  }));
+  await until(() => Object.keys(s.bridge.state().autoland_seen).length === 64 && !Object.keys(s.bridge.state().autoland_seen).some((k) => k.startsWith("me-lead|")), 15000, "pushed out");
+  s.tg.say("/autoland off");
+  const revokes = () => s.lead.got.filter((x) => x.from === "me-owner").map(verifyAt(s.key, "me-lead")).filter((v) => v.ok && v.env.kind === "landing_revoke");
+  // The command is answered after the 64 cards before it are posted (Telegram's pace per chat).
+  await until(() => revokes().length === 1, 60000, "the grant's lead is reached");
+  await until(() => s.tg.texts().some((x) => x.startsWith("⏳ Revocation pending") && x.endsWith("\nThis may not reach every Mac you gave auto-land to: in a terminal there, hoptell team autoland <team> --off")), 10000, "pending, may not reach every Mac");
 });

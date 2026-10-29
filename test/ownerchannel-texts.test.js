@@ -8,7 +8,7 @@ import "./neutral-host.js"; // first: before any module reads the computer's nam
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { HOSTNAME } from "../lib/config.js";
-import { IDENTITY, IDENTITY_LIMITS, TEXTS, UNDELIVERED_REASONS, ago } from "../lib/ownertexts.js";
+import { AUTOLAND_REFUSED_WHY, IDENTITY, IDENTITY_LIMITS, NOT_AUTO_WHY, TEXTS, UNDELIVERED_REASONS, ago } from "../lib/ownertexts.js";
 import { OWNER_CHAT, OWNER_USER, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, textProblems as problems, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
@@ -64,6 +64,18 @@ const call = (key, f) => {
     landingCancelled: ["L7", SAMPLE.who],
     landingDiffName: ["L7"],
     landingOutcome: ["L7", "blocked", "main"],
+    landAutoButton: ["n4"],
+    landingNotAuto: ["the tests failed, and a reviewer asked for changes"],
+    landingChoseLandAuto: ["L7", SAMPLE.who, "n11: Validate the settings", "n4"],
+    autolandOn: ["n4", "main", "2 h"],
+    autolandRefused: ["n4", AUTOLAND_REFUSED_WHY.stale],
+    autolandUnsent: [TEXTS.encryptionRequired],
+    autolandNotice: ["L9", "n4", "main", "landed", "1 h 20 min"],
+    autolandOff: ["lead", "n4, n5"],
+    autolandOffPending: [2],
+    autolandOffUnsent: [TEXTS.serverRefused],
+    autolandOffer: ["n4", "app", "main, release"],
+    autolandGrantSent: ["n4"],
   }[key] ?? [SAMPLE.who];
   return f(...args);
 };
@@ -83,6 +95,12 @@ test("the texts table: every bot text passes the scan, with sample values", () =
     assert.deepEqual(problems(text), [], `${k}: ${text}`);
   }
   for (const [k, f] of Object.entries(UNDELIVERED_REASONS)) assert.deepEqual(problems(f(SAMPLE.who)), [], k);
+  for (const [k, v] of [...Object.entries(NOT_AUTO_WHY), ...Object.entries(AUTOLAND_REFUSED_WHY)]) assert.deepEqual(problems(v), [], k);
+  for (const st of ["landed", "blocked", "rejected", "expired"]) assert.deepEqual(problems(TEXTS.autolandNotice("L9", "n4", "main", st, null)), [], st);
+  assert.ok(TEXTS.landAutoButton("a".repeat(32)).length <= 64, "the auto-land button stays short");
+  for (const x of [TEXTS.autolandOff("lead", ""), TEXTS.autolandOffPending(1)]) assert.deepEqual(problems(x), [], x);
+  assert.equal(TEXTS.autolandOffUnsent(TEXTS.serverRefused), "⚠️ Auto-land could not be turned off on one Mac: the hoptell server refused it. In a terminal there: hoptell team autoland <team> --off");
+  assert.equal(TEXTS.autolandUnsent(TEXTS.serverRefused), "⚠️ Auto-land was not turned on: the hoptell server refused it.");
   for (const [k, v] of Object.entries(IDENTITY)) {
     assert.deepEqual(problems(v), [], k);
     assert.ok(v.length <= IDENTITY_LIMITS[k], `${k}: ${v.length} > ${IDENTITY_LIMITS[k]}`);
@@ -95,8 +113,8 @@ test("the texts table: every bot text passes the scan, with sample values", () =
 
 // Static button labels must stay short enough for a phone; the alert texts fit Telegram's 200.
 const BUTTON_MAX = 32;
-const BUTTONS = ["cancelButton", "moreButton", "searchButton", "messageButton", "favButton", "unfavButton", "renameButton", "hideButton", "unhideButton", "sendButton", "sendRememberButton", "backButton", "nextButton", "appButton", "undoButton"];
-const ALERTS = ["earlierSetup", "peopleFull", "notSaved", "listOld", "undoChanged", "tapAgain", "buttonExpired", "shownTooOften", "noLongerOpen", "statusExpired", "statusCancelled", "statusUndelivered", "alreadyAnswered", "sentAck", "encryptionRequired", "encryptionPaused", "needsUpdate", "serverRefused", "serverUnreachable", "textOnly"];
+const BUTTONS = ["cancelButton", "moreButton", "searchButton", "messageButton", "favButton", "unfavButton", "renameButton", "hideButton", "unhideButton", "sendButton", "sendRememberButton", "backButton", "nextButton", "appButton", "undoButton", "autolandGrantButton"];
+const ALERTS = ["autolandOfferGone", "autolandOfferChanged", "earlierSetup", "peopleFull", "notSaved", "listOld", "undoChanged", "tapAgain", "buttonExpired", "shownTooOften", "noLongerOpen", "statusExpired", "statusCancelled", "statusUndelivered", "alreadyAnswered", "sentAck", "encryptionRequired", "encryptionPaused", "needsUpdate", "serverRefused", "serverUnreachable", "textOnly"];
 
 test("the texts table: button labels are short, alert texts fit 200 characters, placeholders 64", () => {
   for (const k of BUTTONS) assert.ok(TEXTS[k].length <= BUTTON_MAX, `${k}: ${TEXTS[k]}`);

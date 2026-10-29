@@ -108,6 +108,7 @@ export const GROUPS = {
       "lib/filetools.js",
       "lib/fingerprint.js",
       "lib/gitsafe.js",
+      "lib/grants.js",
       "lib/host.js",
       "lib/hosted.js",
       "lib/hostedcli.js",

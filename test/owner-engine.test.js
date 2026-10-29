@@ -419,12 +419,12 @@ test("the note under a batch fits what is in it: peers, owner answers and instru
 });
 
 /** A team state in `home` with these live landing actions ({id, digest, state, route}), as hoptell team writes it. */
-function liveTeam(home, team, actions) {
+function liveTeam(home, team, actions, extra = {}) {
   const at = new Date(0).toISOString();
   fs.mkdirSync(path.join(home, "teams", team), { recursive: true, mode: 0o700 });
   const member = (name) => ({ name, role: "implementer", cli: "claude", model: null, effort: null, template: "implementer", owns: null, folder: null, lifetimeMinutes: null, argv: ["claude"], taskDigest: null, cwd: "/x/repo", worktree: null, branch: null, registration: null, session: null, ended: null, notice: null });
   const rows = actions.map((a, i) => ({ id: a.id, digest: a.digest, member: `me-impl-${i + 1}`, state: a.state ?? "ready", route: a.route ?? null, decision: null, reason: null, created: at, updated: at, target: "main", T: "a".repeat(40), C: "b".repeat(40) }));
-  const state = { version: 1, team, file: "/x/team.json", fileDigest: "0".repeat(64), lead: "me-lead", prefix: "me", repo: "/x/repo", base: "HEAD", worktrees: null, idleMinutes: 30, status: "up", created: at, members: rows.map((r) => member(r.member)), supervisor: null, candidate: null, landing: null, publishing: null, landed: [], reviews: [], events: [], run: "0".repeat(32), enrolment: null, actions: rows };
+  const state = { version: 1, team, file: "/x/team.json", fileDigest: "0".repeat(64), lead: "me-lead", prefix: "me", repo: "/x/repo", base: "HEAD", worktrees: null, idleMinutes: 30, status: "up", created: at, members: rows.map((r) => member(r.member)), supervisor: null, candidate: null, landing: null, publishing: null, landed: [], reviews: [], events: [], run: "0".repeat(32), enrolment: null, actions: rows, ...extra };
   fs.writeFileSync(path.join(home, "teams", team, "state.json"), JSON.stringify(state), { mode: 0o600 });
 }
 
@@ -487,4 +487,171 @@ test("a landing decision whose receipt cannot be written waits at the relay, and
   const seen = await waitText(s.engine, (x) => x.includes("Run hoptell team apply L1 now"), 15000);
   assert.equal(readReceipt(s.home, "web", "L1"), land);
   assert.equal((seen.match(/Run hoptell team apply L1 now/g) ?? []).length, 1);
+});
+
+test("an auto-land grant from Telegram (design 8 addendum, option 6): kept for the team's run and revocation generation, reported to the bridge; a stale one is refused", async (t) => {
+  const { parseAutolandStatus } = await import("../lib/landings.js");
+  const { grantText, newGrantId, readGrant, readGrantState, writeGrantState } = await import("../lib/grants.js");
+  const s = await setup(t, { name: "me-lead" });
+  const enrolment = { common: "/x/repo/.git", id: "e".repeat(32), generation: 1 };
+  liveTeam(s.home, "web", [{ id: "L1", digest: "d".repeat(64) }], { enrolment });
+  const now = Date.now();
+  const scope = (extra = {}) => ({ hoptell_landing_grant: 1, id: newGrantId(), team: "web", run: "0".repeat(32), generation: 0, enrolment, recipient: { lead: "me-lead", member: ME }, targets: ["main"], issued_at: now, not_before: now, expires_at: now + 2 * 60 * 60_000, max_count: null, op: "land", origin: "d".repeat(64), ...extra });
+  const give = (g) => s.bridge.client.send("me-lead", s.envelope({ kind: "landing_grant", to: { name: "me-lead", member: ME }, text: grantText(g) }), 3600, undefined, { toMember: ME });
+  const reports = () => s.bridge.got.map((m) => parseAutolandStatus(m.text)).filter(Boolean);
+  const g1 = scope();
+  await give(g1);
+  const seen = await waitText(s.engine, (x) => x.includes("turned on auto-land"));
+  assert.match(seen, /Sender: your owner, through the owner channel default\/me-owner \(Telegram pairing of [^)]+\), signed with the bridge key this machine trusts\nYour owner turned on auto-land for team web on main for 2 h: while it lasts, hoptell team land --request-approval lands reviewed and tested work without asking\. This message is not a task; hoptell checks the grant again before each landing\./);
+  assert.equal(readGrant(s.home, "web", g1.id).source, "telegram");
+  assert.equal(readGrantState(s.home, "web").grants[g1.id].status, "active");
+  await until(() => reports().length === 1, 4000, "the report to the bridge");
+  assert.deepEqual(reports()[0], { ref: g1.id, state: "on", why: null, team: "web", targets: ["main"], left_s: 7200, teams: [] });
+  // The owner turned auto-land off since (a new revocation generation): a grant of the earlier one is stale.
+  writeGrantState(s.home, "web", { ...readGrantState(s.home, "web"), generation: 1 });
+  const g2 = scope();
+  await give(g2);
+  const stale = await waitText(s.engine, (x) => x.includes("did not keep it"));
+  assert.match(stale, /Your owner's auto-land grant for team web on main was given before auto-land was last turned off, so hoptell did not keep it\./);
+  assert.throws(() => readGrant(s.home, "web", g2.id));
+  await until(() => reports().length === 2, 4000, "the refusal to the bridge");
+  assert.deepEqual(reports()[1], { ref: g2.id, state: "refused", why: "stale", team: "web", targets: ["main"], left_s: null, teams: [] });
+  // One for another lead session, or another run of the team: refused too.
+  const g3 = scope({ generation: 1, recipient: { lead: "me-other", member: ME } });
+  await give(g3);
+  await until(() => reports().length === 3, 4000, "not the lead");
+  assert.equal(reports()[2].why, "not_lead");
+  const g4 = scope({ generation: 1, run: "1".repeat(32) });
+  await give(g4);
+  await until(() => reports().length === 4, 4000, "another run");
+  assert.equal(reports()[3].why, "scope");
+  // While auto-land is paused on this Mac (too many /autoland off kept): not kept, and said so.
+  writeGrantState(s.home, "web", { ...readGrantState(s.home, "web"), revoke_dedup_gap_until: Date.now() + 86_400_000 });
+  const g5 = scope({ generation: 1 });
+  await give(g5);
+  const paused = await waitText(s.engine, (x) => x.includes("while auto-land is paused"));
+  assert.match(paused, /Your owner's auto-land grant for team web on main arrived while auto-land is paused on this machine \(too many \/autoland off in the last days\), so hoptell did not keep it\./);
+  await until(() => reports().length === 5, 4000, "paused");
+  assert.equal(reports()[4].why, "paused");
+  assert.deepEqual(Object.keys(readGrantState(s.home, "web").grants), [g1.id]);
+});
+
+test("/autoland off (design 8 addendum, option 6): a verified revocation makes a new generation for every team of the home, the bridge is told \"off\" with the teams, and the lead's inbox says so", async (t) => {
+  const { parseAutolandStatus, revokeText } = await import("../lib/landings.js");
+  const { readGrantState } = await import("../lib/grants.js");
+  const s = await setup(t, { name: "me-lead" });
+  const enrolment = { common: "/x/repo/.git", id: "e".repeat(32), generation: 1 };
+  liveTeam(s.home, "web", [{ id: "L1", digest: "d".repeat(64) }], { enrolment });
+  liveTeam(s.home, "api", [{ id: "L2", digest: "c".repeat(64) }], { enrolment, lead: "me-other" });
+  const reports = () => s.bridge.got.map((m) => parseAutolandStatus(m.text)).filter(Boolean);
+  await s.bridge.client.send("me-lead", s.envelope({ kind: "landing_revoke", to: { name: "me-lead", member: ME }, text: revokeText({ id: "v_abcdefghijklmnop", issuedAt: Date.now() }) }), 3600, undefined, { toMember: ME });
+  const seen = await waitText(s.engine, (x) => x.includes("turned auto-land off"));
+  assert.match(seen, /Sender: your owner, through the owner channel default\/me-owner \(Telegram pairing of [^)]+\), signed with the bridge key this machine trusts\nYour owner turned auto-land off on Telegram for every team on this Mac \(api, web\): hoptell team land --request-approval asks your owner for every landing again\. This message is not a task\./);
+  assert.equal(readGrantState(s.home, "web").generation, 1);
+  assert.equal(readGrantState(s.home, "api").generation, 1, "every team of the home, also one this session does not lead");
+  await until(() => reports().length === 1, 4000, "the report");
+  assert.deepEqual(reports()[0], { ref: "v_abcdefghijklmnop", state: "off", why: null, team: null, targets: [], left_s: null, teams: ["api", "web"] });
+  // A malformed revocation changes nothing.
+  await s.bridge.client.send("me-lead", s.envelope({ kind: "landing_revoke", to: { name: "me-lead", member: ME }, text: '{"hoptell_landing_revoke":1}' }), 3600, undefined, { toMember: ME });
+  await waitText(s.engine, (x) => x.includes("cannot read; nothing was changed"));
+  assert.equal(readGrantState(s.home, "web").generation, 1);
+});
+
+test("a revocation is applied once per team and id: a redelivery or a second lead session of the home keeps a grant given since; a retry after a partial run finishes only the teams left; an unreadable team state still revokes", async (t) => {
+  const { revokeEveryTeam, teamAutoland } = await import("../lib/teams.js");
+  const { REVOKES_MAX, newGrantId, readGrant, readGrantState, statusOf, storeGrant, writeGrantState, newRow } = await import("../lib/grants.js");
+  const home = existingInstall(tmpHome(t));
+  const enrolment = { common: "/x/repo/.git", id: "e".repeat(32), generation: 1 };
+  liveTeam(home, "api", [{ id: "L1", digest: "d".repeat(64) }], { enrolment });
+  liveTeam(home, "web", [{ id: "L2", digest: "c".repeat(64) }], { enrolment });
+  const now = Date.now();
+  const grant = (team, generation) => {
+    const scope = { hoptell_landing_grant: 1, id: newGrantId(), team, run: "0".repeat(32), generation, enrolment, recipient: null, targets: ["main"], issued_at: now, not_before: now, expires_at: now + 3600_000, max_count: null, op: "land", origin: null };
+    storeGrant(home, team, { source: "terminal", scope });
+    const gs = readGrantState(home, team);
+    gs.grants[scope.id] = newRow();
+    writeGrantState(home, team, gs);
+    return scope.id;
+  };
+  const state = (team) => JSON.parse(fs.readFileSync(path.join(home, "teams", team, "state.json"), "utf8"));
+  const status = (team, id) => statusOf(readGrant(home, team, id), readGrantState(home, team), state(team), now);
+  // Once per id: the same revocation again (redelivered, or for another lead session of this home).
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: "v_aaaaaaaaaaaaaaaa", signedAt: now }), ["api", "web"]);
+  const since = grant("api", 1);
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: "v_aaaaaaaaaaaaaaaa", signedAt: now }), ["api", "web"]);
+  assert.equal(readGrantState(home, "api").generation, 1);
+  assert.equal(status("api", since), "active", "a grant given after the revocation stays valid");
+  // A partial run: web's grants state cannot be written; the retry revokes web only.
+  const dir = path.join(home, "teams", "web", "grants");
+  fs.chmodSync(dir, 0o500);
+  t.after(() => {
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {}
+  });
+  await assert.rejects(revokeEveryTeam(home, { revokeId: "v_bbbbbbbbbbbbbbbb", signedAt: now }));
+  assert.equal(readGrantState(home, "api").generation, 2);
+  assert.equal(readGrantState(home, "web").generation, 1);
+  fs.chmodSync(dir, 0o700);
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: "v_bbbbbbbbbbbbbbbb", signedAt: now }), ["api", "web"]);
+  assert.deepEqual([readGrantState(home, "api").generation, readGrantState(home, "web").generation], [2, 2]);
+  // An unreadable team state: the grants state still makes the new generation; after a repair, an
+  // older grant of that team is refused.
+  const old = grant("web", 2);
+  const good = fs.readFileSync(path.join(home, "teams", "web", "state.json"));
+  fs.writeFileSync(path.join(home, "teams", "web", "state.json"), "{");
+  const logged = [];
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: "v_cccccccccccccccc", signedAt: now, log: (l) => logged.push(l) }), ["api", "web"]);
+  assert.match(logged.join("\n"), /auto-land of team web is off, but its state could not be read/);
+  assert.equal(readGrantState(home, "web").generation, 3);
+  fs.writeFileSync(path.join(home, "teams", "web", "state.json"), good);
+  assert.equal(status("web", old), "revoked");
+  // Kept for as long as a copy can arrive, not dropped for newer ones: 70 newer revocations, a
+  // fresh grant, then a late copy of the first (to another lead session of this home, offline
+  // until now) keeps the fresh grant.
+  const letters = "abcdefghijklmnopqrstuvwxyz234567";
+  const vid = (i) => `v_${"d".repeat(14)}${letters[i >> 5]}${letters[i & 31]}`;
+  for (let i = 0; i < 70; i++) await revokeEveryTeam(home, { revokeId: vid(i), signedAt: now });
+  const fresh = grant("api", readGrantState(home, "api").generation);
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: "v_aaaaaaaaaaaaaaaa", signedAt: now }), ["api", "web"]);
+  assert.equal(status("api", fresh), "active", "a late copy of an old revocation keeps a grant given since");
+  // Once no copy can arrive any more, an applied revocation is let go, at the next one.
+  const kept = readGrantState(home, "api").revokes;
+  assert.equal(kept.length, 73); // a, b, c and the 70
+  assert.ok(kept.every((v) => v.until >= now + 8 * 86_400_000 - 60_000));
+  const later = now + 9 * 86_400_000;
+  await revokeEveryTeam(home, { revokeId: "v_eeeeeeeeeeeeeeee", signedAt: later, now: () => later });
+  assert.deepEqual(readGrantState(home, "api").revokes.map((v) => v.id), ["v_eeeeeeeeeeeeeeee"]);
+  // Kept through the verifier's inclusive deadline: a revocation whose until is now is still kept.
+  const edge = readGrantState(home, "api").revokes[0].until;
+  await revokeEveryTeam(home, { revokeId: "v_hhhhhhhhhhhhhhhh", signedAt: later, now: () => edge });
+  assert.deepEqual(readGrantState(home, "api").revokes.map((v) => v.id), ["v_eeeeeeeeeeeeeeee", "v_hhhhhhhhhhhhhhhh"]);
+  // Full of revocations still kept: a new one still revokes and is kept; the one kept until the
+  // earliest gives way, and auto-land pauses until then (no grant given or kept).
+  const gs = readGrantState(home, "api");
+  const fid = (i) => `v_${"f".repeat(13)}${letters[i >> 10]}${letters[(i >> 5) & 31]}${letters[i & 31]}`;
+  gs.revokes = Array.from({ length: REVOKES_MAX }, (_, i) => ({ id: fid(i), until: later + 86_400_000 + i * 1000 }));
+  writeGrantState(home, "api", gs);
+  const g0 = gs.generation;
+  await revokeEveryTeam(home, { revokeId: "v_gggggggggggggggg", signedAt: later, now: () => later });
+  const after = readGrantState(home, "api");
+  const gap = later + 86_400_000;
+  assert.deepEqual([after.generation, after.revokes.length, after.revoke_dedup_gap_until], [g0 + 1, REVOKES_MAX, gap]);
+  assert.ok(!after.revokes.some((v) => v.id === fid(0)) && after.revokes.some((v) => v.id === "v_gggggggggggggggg"));
+  await assert.rejects(teamAutoland(home, "api", { targets: ["main"] }, { now: () => later }), (e) => e.code === "autoland_paused" && /^Auto-land is paused on this Mac until \d{4}-\d\d-\d\d \d\d:\d\d: too many \/autoland off in the last days\.$/.test(e.message));
+  await assert.rejects(teamAutoland(home, "api", { targets: ["main"] }, { now: () => gap }), (e) => e.code === "autoland_paused", "paused through its end, inclusive");
+  // The one that gave way, arriving again during the pause: it revokes again, truthfully, with no grant to take.
+  assert.deepEqual(await revokeEveryTeam(home, { revokeId: fid(0), signedAt: later, now: () => later + 1000 }), ["api", "web"]);
+  assert.equal(readGrantState(home, "api").generation, g0 + 2);
+  assert.equal(readGrantState(home, "api").revoke_dedup_gap_until, gap + 1000, "kept too, so the next one kept until the earliest gave way");
+  // After the pause: grants are given again; a copy of a kept revocation takes nothing; a new one,
+  // even signed at an earlier time (a bridge clock behind), always revokes.
+  const after2 = gap + 1001;
+  const given = (await teamAutoland(home, "api", { targets: ["main"] }, { now: () => after2 })).id;
+  const statusAt = (id, at) => statusOf(readGrant(home, "api", id), readGrantState(home, "api"), state("api"), at);
+  assert.equal(statusAt(given, after2), "active");
+  await revokeEveryTeam(home, { revokeId: "v_gggggggggggggggg", signedAt: later, now: () => after2 });
+  assert.equal(statusAt(given, after2), "active", "a copy of a kept revocation revokes nothing given since");
+  await revokeEveryTeam(home, { revokeId: "v_iiiiiiiiiiiiiiii", signedAt: later - 21_000, now: () => after2 });
+  assert.equal(statusAt(given, after2), "revoked", "a new revocation always revokes, whatever its signed time");
 });

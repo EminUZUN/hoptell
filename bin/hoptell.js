@@ -1206,7 +1206,8 @@ try {
     case "worktree": {
       // Implementer worktrees (design 8, topic 2).
       const { worktreeCommand } = await import("../lib/worktrees.js");
-      await worktreeCommand({ args, home: home(), cwd: process.cwd(), fail, out: (l) => console.log(l) });
+      const { inActiveTeam } = await import("../lib/teams.js");
+      await worktreeCommand({ args, home: home(), cwd: process.cwd(), fail, out: (l) => console.log(l), inTeam: (team, member) => inActiveTeam(home(), team, member) });
       break;
     }
     case "team": {
@@ -1236,12 +1237,13 @@ try {
       };
       // The owner's bridge for a landing request or its outcome (design 8 addendum, option 3): a
       // send-only connection under the relay's automatic name, as above; null without an owner
-      // channel, {problem} when the bridge is offline or does not say it takes landing requests.
+      // channel, {problem, why} when the relay lists no statuses (why "relay"), the bridge is
+      // offline ("offline") or does not say it takes landing requests ("bridge").
       const landingChannel = async () => {
         const ownersig = await import("../lib/ownersig.js");
         if (!Object.keys(ownersig.readTrusted(home()).realms).length) return null; // no owner channel: no relay is asked
         await selectRelay(null, null);
-        const { bridgeTakesLandings } = await import("../lib/landings.js");
+        const { bridgeCaps, bridgeTakesLandings } = await import("../lib/landings.js");
         const c = await connect("send", undefined, 5000, { autoName: true });
         try {
           ownersig.armOwnerBackstop(home(), c);
@@ -1250,15 +1252,19 @@ try {
             c.close();
             return null;
           }
+          if (!c.caps?.includes("status")) {
+            c.close();
+            return { problem: "the relay lists no statuses", why: "relay" };
+          }
           const peers = await Promise.race([c.list({ status: true }), new Promise((r) => setTimeout(() => r(null), 5000).unref())]);
           const p = peers?.find((x) => x.name === bridge && x.online);
           if (!p || !bridgeTakesLandings(p.status)) {
             c.close();
-            return { problem: p ? "the bridge does not take landing requests" : "the bridge is not online" };
+            return p ? { problem: "the bridge does not take landing requests", why: "bridge" } : { problem: "the bridge is not online", why: "offline" };
           }
           const policy = (await contactsOf()).currentPolicy();
           const guard = ownersig.ownerSendGuard({ home: home(), client: c, to: bridge, policy: () => policy });
-          return { realm: c.realm.id, member: c.member.id, send: (text, ttl) => c.send(bridge, text, ttl, undefined, { toMember: guard.toMember }), close: () => c.close() };
+          return { realm: c.realm.id, member: c.member.id, caps: bridgeCaps(p.status), send: (text, ttl) => c.send(bridge, text, ttl, undefined, { toMember: guard.toMember }), close: () => c.close() };
         } catch (e) {
           c.close();
           return { problem: e.message };
