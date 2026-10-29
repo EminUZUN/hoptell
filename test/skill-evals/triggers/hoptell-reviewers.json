@@ -1,6 +1,7 @@
 [
   {"query": "can you get a second opinion from codex on lib/config.js? i rewrote the env loading and want another agent to look before i merge", "should_trigger": true},
   {"query": "start 2 codex reviewers for this repo so they can go over my branch", "should_trigger": true},
+  {"query": "add an agy reviewer on gemini-4-argon-high next to the codex one", "should_trigger": true},
   {"query": "Have another agent review src/parser.ts — ideally a Codex session over hoptell, not you.", "should_trigger": true},
   {"query": "send CHANGELOG.md to @reviewer and ask them to check the wording", "should_trigger": true},
   {"query": "the reviewers answered, collect the review verdicts and tell me what they found", "should_trigger": true},

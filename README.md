@@ -1122,7 +1122,7 @@ that use them:
 
 | Command | Skill | What it does |
 | --- | --- | --- |
-| `/hoptell:reviewers [count] [codex\|claude]` | `hoptell-reviewers` | start reviewers: Codex read-only, Claude Code in plan mode |
+| `/hoptell:reviewers [count] [codex\|claude\|agy] [model] [effort]` | `hoptell-reviewers` | start reviewers: Codex read-only, Claude Code or agy in plan mode |
 | `/hoptell:review <file> [name or @reviewer]` | `hoptell-reviewers` | send a snapshot and collect the verdicts |
 | `/hoptell:ask-owner <question>` | `hoptell-owner-channel` | ask you over the owner channel |
 | `/hoptell:peers` | `hoptell-safe-ops` | list peers and explain name problems |
@@ -1135,11 +1135,14 @@ permissions. This is not `spawn_agent`: no profile, gate or limit applies. Start
 only when you want them.
 
 **Start them interactive, in tmux.** A one-shot `codex exec` run cannot be woken by later
-messages. Use `hoptell tmux` with the `reviewer` role:
+messages. Use `hoptell tmux` with the `reviewer` role, and the agent command that
+`hoptell agents flags <codex|claude|agy> --role reviewer` prints (see **Model and effort**
+below). With the shipped presets that is:
 
 ```sh
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer -- agy --mode plan --sandbox --dangerously-skip-permissions -i "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 ```
 
 The quoted prompt is your instruction to the reviewer, so review requests from your session
@@ -1148,11 +1151,46 @@ them; a reviewer started without such a prompt asks you whether it may review.
 
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
 Plan mode suits a source review: Claude Code's usual tool permissions still apply, and it is not
-an OS sandbox. Do not add a hoptell channel flag; `hoptell tmux` supplies tmux delivery. Set
+an OS sandbox. agy takes its launch prompt with `-i`. In plan mode it reads and plans, and
+`--dangerously-skip-permissions` stops it from asking about each tool. Plan mode is agy's own rule,
+and in hoptell's test (agy 1.4.8) `--sandbox` did not keep writes in the folder or block the
+network, so an agy reviewer is limited by policy, like Claude Code in plan mode. hoptell does not
+offer agy for edits. Do not add a hoptell channel flag; `hoptell tmux` supplies tmux delivery. Set
 `HOPTELL_PUSH=tmux` for the command: unsetting it can load a conflicting value from your settings
 file. With a member token, names must be `<member>` or start with `<member>-`; other names are
 refused with close code 4002. When an agent runs these commands from inside tmux, it unsets
 `TMUX` and `TMUX_PANE` first, so your tmux client does not switch to the new session.
+
+**Model and effort.**
+`hoptell agents flags <codex|claude|agy> --role reviewer [--model <model>] [--effort <effort>]`
+prints the agent command and flags to put after `--` (the role's safety flags from your presets,
+then the model and effort as that CLI takes them), and its warnings on standard error. Use it for
+every launch, also without a model or effort: without a model, the CLI's own settings choose
+one.
+
+```sh
+$ hoptell agents flags codex --role reviewer --model gpt-6.1-sol --effort xhigh
+codex -s read-only -a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"'
+$ hoptell agents flags agy --role reviewer --model gemini-4-argon-high
+agy --mode plan --sandbox --dangerously-skip-permissions --model gemini-4-argon-high
+```
+
+With these flags, Codex and Claude Code reviewers get effort `high` unless you name another.
+agy takes its effort in the model id, so give the complete id (`gemini-4-argon-high`); hoptell
+refuses an agy effort without one and never passes `--effort` to agy. Models and efforts are checked against
+the lists the CLIs cache for your account (Codex's `models_cache.json`, Claude Code's model
+catalog when it holds one account) and, for Codex, the list built into the binary. These lists
+are advice: a model or effort they lack gets a warning with the list's age, and the CLI decides.
+hoptell does not read agy's model list (`agy models` needs your login); run it yourself.
+
+`hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]` shows what each
+installed CLI offers, what hoptell's own tests verified about its sandbox and permission modes,
+and what changed since the last record; `hoptell doctor` mentions a CLI that changed. It reads
+each CLI's `--help` (and Codex's feature and bundled model lists) with an empty home and working
+folder, so no configuration of yours loads, and never starts a model. The presets live in
+`presets/roles.json` of the package; your own `<hoptell home>/presets/roles.json` overrides them
+per CLI and role (`flags`, `effort`, `model`, `source`, `checked`). What you name on the command
+line wins over both.
 
 **Keep them visible.** Open one split of your terminal per reviewer, and attach each one with
 `tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
@@ -1567,6 +1605,8 @@ hoptell doctor [--relay-check] [--fix] # checks settings, relay, login, inbox an
 hoptell agents profiles              # agent profiles and their approval state (see "Spawning agents")
 hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
+hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   # what each agent CLI offers and what changed
+hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>]   # flags for hoptell tmux ... --
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
 hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
 hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it

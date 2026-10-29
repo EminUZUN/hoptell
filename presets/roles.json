@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "presets": {
+    "codex": {
+      "reviewer": {
+        "flags": ["-s", "read-only", "-a", "never"],
+        "effort": "high",
+        "source": "https://learn.chatgpt.com/codex/learn/best-practices",
+        "checked": "2026-10-27"
+      },
+      "implementer": {
+        "flags": ["-s", "workspace-write", "-a", "never"],
+        "source": "https://learn.chatgpt.com/codex/learn/best-practices",
+        "checked": "2026-10-27"
+      },
+      "lead": {
+        "flags": ["-s", "workspace-write", "-a", "on-request"],
+        "source": "https://learn.chatgpt.com/codex/learn/best-practices",
+        "checked": "2026-10-27"
+      }
+    },
+    "claude": {
+      "reviewer": {
+        "flags": ["--permission-mode", "plan"],
+        "effort": "high",
+        "source": "https://code.claude.com/docs/en/best-practices",
+        "checked": "2026-10-27"
+      },
+      "implementer": {
+        "flags": ["--permission-mode", "acceptEdits"],
+        "source": "https://code.claude.com/docs/en/best-practices",
+        "checked": "2026-10-27"
+      },
+      "lead": {
+        "flags": ["--permission-mode", "manual"],
+        "source": "https://code.claude.com/docs/en/best-practices",
+        "checked": "2026-10-27"
+      }
+    },
+    "agy": {
+      "reviewer": {
+        "flags": ["--mode", "plan", "--sandbox", "--dangerously-skip-permissions"],
+        "source": "https://antigravity.google/docs/cli/best-practices",
+        "checked": "2026-10-27"
+      }
+    }
+  }
+}

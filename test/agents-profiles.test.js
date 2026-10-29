@@ -52,6 +52,10 @@ test("profiles: the schema file and the checker agree on fields, caps and refusa
     [{ cliOptions: { model: "gpt 5" } }, /cliOptions.model/],
     [{ cliOptions: { flags: "--yolo" } }, /unknown option "flags"/],
     [{ cliOptions: { effort: "huge" } }, /cliOptions.effort must be/],
+    // No listed model offers "minimal"; "ultra" passed no gate (design 8, topic 1).
+    [{ cliOptions: { effort: "minimal" } }, /cliOptions.effort must be one of low, medium, high, xhigh, max \(the efforts hoptell's gate records allow for codex\)/],
+    [{ cliOptions: { effort: "ultra" } }, /cliOptions.effort must be one of low, medium, high, xhigh, max/],
+    [{ cli: "claude", cliOptions: { effort: "minimal" } }, /gate records allow for claude/],
     [{ cli: "gemini", cliOptions: { effort: "high" } }, /only for codex and claude/],
     [{ cliOptions: { allowedTools: ["Read"] } }, /only for claude/],
     [{ cli: "claude", cliOptions: { allowedTools: ["--dangerously-skip-permissions"] } }, /allowedTools must list/],

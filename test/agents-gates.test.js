@@ -214,7 +214,7 @@ test("gates: the argument variants a profile can make differ from the gated shap
   const shape = gateShape(ro, "headless");
   assert.ok(GATES.codex.headless.modes.plain.passed.shapes.includes(shape));
   const plain = canonicalArgs("codex", "headless");
-  for (const cliOptions of [{ model: "gpt-x" }, { effort: "low" }, { effort: "max" }, { model: "o9", effort: "minimal" }]) {
+  for (const cliOptions of [{ model: "gpt-x" }, { effort: "low" }, { effort: "max" }, { model: "o9", effort: "xhigh" }]) {
     assert.equal(gateShape({ ...ro, cliOptions }, "headless"), shape, JSON.stringify(cliOptions));
     // The whole difference to the gated arguments is the slots themselves.
     const { plan } = buildPlan({ profile: { ...ro, cliOptions }, mode: "headless", run: "r_0000000000000000", home: "<home>", cwd: "<cwd>", name: "<name>", command: "<command>", hoptell: { node: "<node>", bin: "<bin>" }, paths: { result: "<result>", env: "<env>", relays: "<relays>", mcp: "<mcp>" }, resultTo: "<result-to>", lifetimeMinutes: 30 });

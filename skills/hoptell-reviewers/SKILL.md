@@ -6,7 +6,7 @@ user-invocable: false
 
 # Reviewer agents over hoptell
 
-Reviewer agents are ordinary interactive agent sessions (Codex, Claude Code, ...) that join the
+Reviewer agents are ordinary interactive agent sessions (Codex, Claude Code, agy, ...) that join the
 relay with the role `reviewer`. This session sends them files to review and collects their
 answers through hoptell.
 
@@ -33,9 +33,22 @@ Start each reviewer as an interactive session through `hoptell tmux` so it remai
 review requests and follow-up messages. A completed one-shot `codex exec` run cannot be woken by
 a later notice.
 
+First ask hoptell for each reviewer's agent command, every time, also when the user names no
+model or effort: it applies the user's presets and checks the installed CLI.
+
 ```sh
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+hoptell agents flags codex --role reviewer
+hoptell agents flags claude --role reviewer
+hoptell agents flags agy --role reviewer
+```
+
+Put the first line of its output after `--`, then the launch prompt. With hoptell's shipped
+presets this gives:
+
+```sh
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer -- agy --mode plan --sandbox --dangerously-skip-permissions -i "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 ```
 
 - The quoted prompt at the end is the user's instruction to the reviewer: it makes review
@@ -48,6 +61,12 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles
 - Start Claude Code in plan mode for a source review. Its usual tool permissions still apply.
   Do not switch to an editing mode unless the user asks for edits. Do not add a hoptell channel
   flag: `hoptell tmux` supplies tmux delivery.
+- Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt after `-i`
+  (it then stays interactive). Plan mode keeps agy to reading and planning without a prompt per
+  tool. Plan mode is agy's own rule and `--sandbox` does not confine writes or the network, so an
+  agy reviewer is limited by policy, like Claude Code in plan mode, not by an OS sandbox. Never
+  start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
+  registration, which the user sets up once (see hoptell's README).
 - Run the command from the project folder. The reviewer starts there.
 - `env -u TMUX -u TMUX_PANE` matters when this session runs inside tmux: otherwise the launcher
   switches the user's tmux client to the new session.
@@ -59,6 +78,28 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles
   command again: the second run fails because the session already exists.
 - For cleanup later in a long task, note the tmux session id after creation:
   `tmux display-message -p -t '=hoptell-<name>' '#{session_id}'`.
+
+**Model and effort.** When the user names a model or effort, add them to the same command:
+
+```sh
+hoptell agents flags codex --role reviewer --model gpt-6.1-sol --effort xhigh
+hoptell agents flags agy --role reviewer --model gemini-4-argon-high
+```
+
+- The first line of output is the agent command with its flags, for example
+  `codex -s read-only -a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"'`. Without a
+  model, the CLI's own settings choose it; reviewers get effort `high` (Codex, Claude Code) from
+  the preset unless the user names another.
+- Warnings follow on standard error: a model or effort the CLI's cached list lacks, an effort
+  left to the CLI's settings, how far the reviewer is contained, a CLI that changed since the
+  last record. They do not stop the launch; tell the user, and the CLI decides.
+- agy takes its effort in the model id (`gemini-4-argon-high`): pass the complete id as the model
+  and no effort. hoptell refuses an agy effort without one, and never passes `--effort` to agy.
+  hoptell does not read agy's model list; the user can run `agy models`.
+- If the command refuses, tell the user why and start nothing. If it is not available (an older
+  hoptell), use the launch lines shown above, with Codex `-m <model>` and
+  `-c model_reasoning_effort="<effort>"`, Claude Code `--model <model>` and `--effort <effort>`.
+- `hoptell agents capabilities` lists what each installed CLI offers and what changed.
 
 **Keep them visible.** Let the user watch each reviewer in a split of their own terminal. Each
 split runs `tmux attach -t '=hoptell-<name>'`. The injector wakes the reviewer whether or not a

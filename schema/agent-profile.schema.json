@@ -41,7 +41,7 @@
       "additionalProperties": false,
       "properties": {
         "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$" },
-        "effort": { "enum": ["minimal", "low", "medium", "high", "xhigh", "max"], "description": "codex and claude only." },
+        "effort": { "enum": ["low", "medium", "high", "xhigh", "max"], "description": "codex and claude only; passed to the CLI unchanged (the efforts hoptell's gate records allow)." },
         "allowedTools": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}(\\([^()\\u0000-\\u001f]{1,200}\\))?$" }, "description": "claude only." },
         "disallowedTools": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}(\\([^()\\u0000-\\u001f]{1,200}\\))?$" }, "description": "claude only." }
       }
