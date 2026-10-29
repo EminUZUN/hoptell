@@ -472,7 +472,10 @@ experimental: `hoptell mcp-hosted --experimental`.
 
 **Names.** Each agent has a peer name: letters, digits, `_` and `-`. Set it with
 `HOPTELL_NAME`, or leave it unset and the relay assigns one: `<member>-<host>-<n>` with a
-member token, `<host>-<n>` with the shared token. `list_peers` shows the name in use.
+member token, `<host>-<n>` with the shared token. `list_peers` shows the name in use. A
+session without `HOPTELL_NAME` takes a new automatic name whenever its hoptell MCP server
+restarts (for example after `/mcp`), so give a team lead, or any long-running session that
+others message, a fixed `HOPTELL_NAME`.
 
 A session holds its name with a lease. While it is online, another connection cannot take
 the name: a second agent session with the same name waits until the name is free, and
@@ -1195,6 +1198,39 @@ line wins over both.
 **Keep them visible.** Open one split of your terminal per reviewer, and attach each one with
 `tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
 The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you.
+
+**Sessions that wait.** The injector also looks at its pane every 15 seconds. When the agent
+shows a prompt that needs you (a folder trust question, an approval, a sign-in, an update) or its
+screen has not changed for 10 minutes while it works (`HOPTELL_STALL_MINUTES`), `hoptell team
+status` shows it, for example `waiting for you: Codex folder trust (P3, 2 min)`, with the attach
+command. A team member's lead gets one inbox message about it, and your Telegram owner channel
+gets a short note that names the session but never shows its screen: at most one per session and
+kind every 5 minutes, and 20 an hour in all. The injector sends these through a connection of its
+own, named after your member with `-c` and a random suffix. Nothing is answered for you.
+
+**Codex's folder trust from Telegram.** One prompt can be answered from the owner channel: the
+folder trust question of Codex 0.165.0 right after `hoptell tmux` started it, in the folder it was
+started for (with only `-s`, `-a`, `-m`, `--full-auto` or
+`--dangerously-bypass-approvals-and-sandbox` on its command line). Instead of the note you get a
+card with a button for each option whose keys were checked live on that Codex version, worded as
+on the screen, for at most 10 minutes; on 0.165.0 that is Trust folder and Quit. Test mode is only
+for an option not checked live yet: `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` shows and presses
+those too, and its card says it is in test mode. Your tap
+is signed by the bridge and goes only to that session's injector; it presses only the option you
+chose, and only in that session's own terminal, while the dialog it watched since the start is
+still on the screen, nobody typed or scrolled in that terminal since the card was made, and the
+tap is at most 2 minutes old. Trust is "1" (which only selects it), a fresh look that shows the
+same dialog with Trust selected, then Enter; anything else on that look and Enter is not sent.
+Quit is "2". The first answer wins, and an answer is never tried twice: the card then says
+whether hoptell pressed it, pressed nothing, or may have pressed part of it (look at the terminal
+then). If no result comes back from the Mac within 3 minutes of your tap, the card says "No
+result came back from the Mac. Look at its terminal on the Mac."; a result that arrives later
+still replaces that. A team member's lead is told too, when it can be reached. Anything else (an
+approval, a sign-in, Claude Code's own trust question) stays a note.
+hoptell sees the screen in snapshots, so if Codex was already past its startup prompt before
+hoptell's first look and later shows text that looks the same, a tap could type a stray "1" and
+Enter, or "2", into the session; and between its last look and the key, hoptell does not see the
+screen at all. Showing the buttons authorizes nothing: only your tap sends keys.
 
 **The review.** Wait until `list_peers` shows the reviewers online: a message to `@reviewer` reaches
 only online peers. Then follow the steps in [Replies and file reviews](#replies-and-file-reviews):
@@ -2221,6 +2257,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_ELICITATION` | peers | `read_inbox`: `read_inbox` may ask you about held messages in the client's dialog (allow-once or later); off otherwise |
 | `HOPTELL_OWNER_CHANNEL` | peers | `off` hides `ask_owner` and turns off owner-channel verification; default `on` |
 | `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440) |
+| `HOPTELL_STALL_MINUTES` | peers | how long a `hoptell tmux` session's screen stays the same while it works before it is reported as waiting (default 10, 1–1440) |
 | `HOPTELL_HOST`, `HOPTELL_PORT` | relay | listen address (required) and port (default 7777) |
 | `HOPTELL_MEMBERS` | relay | members file with per-member tokens |
 | `HOPTELL_STATE_DIR` | relay | state directory with the realm id (default `~/.local/state/hoptell-relay`) |

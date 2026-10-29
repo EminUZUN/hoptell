@@ -1295,10 +1295,63 @@ try {
       });
       break;
     }
+    case "prompt-wait": {
+      // The agent's tmux window after the agent exited (lib/tmux.js agentCommand): a short wait
+      // while its prompt answer is carried out or its result is not reported yet.
+      const { reportSettled } = await import("../lib/promptexec.js");
+      if (args[0]) await reportSettled(home(), checkName(args[0]));
+      break;
+    }
     case "inject": {
       const { inject } = await import("../lib/tmux.js");
       await contactsOf(); // classify the home first, as every command that creates state does
-      await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice() });
+      const { readSettings } = await import("../lib/settings.js");
+      const st = readSettings({ env: process.env, homedir: os.homedir(), pid: process.pid, hostname: HOSTNAME });
+      for (const w of st.warnings.filter((x) => x.startsWith("HOPTELL_STALL_MINUTES"))) console.log(w);
+      // Where a waiting session is told (design 9, B): its lead (team members only) and the owner's
+      // bridge, through a control connection of the injector's own (lib/control.js).
+      let surface = {};
+      let control = null;
+      if (st.relay && st.relay.protocol === 2 && args[0]) {
+        const { createControl } = await import("../lib/control.js");
+        const { waitSurface } = await import("../lib/tmux.js");
+        const { RelayClient } = await import("../lib/client.js");
+        const { commitWelcome, profileKey } = await import("../lib/profiles.js");
+        const profile = profileKey(st.relay.url, st.relay.profile);
+        const signIn = st.relay.auth === "login" ? await signInSource() : null;
+        const client = ({ name, mode, reconnect, roles = [], waitWhenReplaced = true }) =>
+          new RelayClient({ url: st.relay.url, token: signIn ? null : st.relay.token, signIn, name, mode, reconnect, roles, waitWhenReplaced, require2: true, onWelcome: (w) => (w.realm ? commitWelcome(home(), profile, { realm: w.realm.id, member: w.member }) : undefined) });
+        const policy = (await contactsOf()).currentPolicy;
+        // The owner's answers to a prompt card come to the control connection (lib/promptexec.js),
+        // with the receiving connection's {name, member, realm}; a result not reported yet goes
+        // out again when it connects again.
+        let answers = null;
+        const onMessage = (m, confirm, me) => (answers ? answers.onMessage(m, confirm, me) : confirm());
+        control = createControl({ home: home(), name: args[0], client, policy: () => policy(), onMessage, onReady: () => answers?.flush({ force: true }), log: (l) => console.log(new Date().toISOString(), l) });
+        let team = null;
+        if (st.teamMember?.team) {
+          const { readState } = await import("../lib/teams.js");
+          try {
+            const s = readState(home(), st.teamMember.team);
+            if (s?.members.some((m) => m.name === args[0])) team = { team: s.team, lead: s.lead };
+          } catch {}
+        }
+        // Codex's startup folder trust on the owner's Telegram (design 9, C): only while the
+        // launch's gate is armed (lib/startgate.js), as a card from the control connection.
+        const { cardPublisher } = await import("../lib/promptflow.js");
+        const { promptAnswers, resultReport } = await import("../lib/promptexec.js");
+        const log = (l) => console.log(new Date().toISOString(), l);
+        surface = (gate, { ops, hold }) => {
+          answers = promptAnswers(home(), args[0], { gate, ops, hold, report: resultReport(args[0], { control, team }), log });
+          const cards = cardPublisher(home(), args[0], { control, gate, team: team?.team ?? null, profile: st.relay.profile ?? null, log });
+          return { ...waitSurface(home(), args[0], { control, team, folder: path.basename(process.cwd()), cards }), tick: () => answers.flush(), drain: () => answers.flush({ force: true }) };
+        };
+      }
+      try {
+        await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice(), stallMinutes: st.stallMinutes, surface });
+      } finally {
+        control?.close(); // also a connect still in progress
+      }
       break;
     }
     case "list": {
@@ -1308,7 +1361,8 @@ try {
       const { formatPeers } = await import("../lib/client.js");
       // Grants can hide peers, so this says what is visible, not what exists.
       const none = sel && sel.relays.relays.length > 1 ? `No peers are visible on relay "${sel.entry.alias}".` : "No peers are visible on this relay.";
-      console.log(peers.length ? formatPeers(peers).join("\n") : none);
+      const rows = formatPeers(peers);
+      console.log(rows.length ? rows.join("\n") : none);
       c.close();
       break;
     }

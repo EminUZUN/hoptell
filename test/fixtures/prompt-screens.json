@@ -1,0 +1,138 @@
+{
+ "source": "Live captures of codex-cli 0.165.0 and Claude Code 2.1.312 (macOS, tmux), 2026-10-29: the startup folder-trust prompt of each, nothing answered and nothing saved to the trust config. Codex run directly in tmux (w80, w120, w200) and through hoptell tmux (option 2 is Quit there, Back to Agent Command Center otherwise). Rows: capture-pane -p; cursor: cursor_x, cursor_y; size: the pane size. Temporary paths are replaced with same-length placeholders.",
+ "screens": [
+  {
+   "name": "claude-trust-w120",
+   "cli": "claude",
+   "version": "2.1.312",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustprobe2",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-hoptelltmux-w200",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "hoptell tmux",
+   "size": "80x24",
+   "cursor": {
+    "x": 1,
+    "y": 20
+   },
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "  xxxxxxxxxxxxxxxxxxxxxx/trustprobe2",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your",
+    "  permission settings. Folder settings can run code automatically, even",
+    "  without a model request. Continue only if you trust these files. Your trust",
+    "  decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Quit",
+    "",
+    "  enter continue · esc quit"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-w120",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 36
+   },
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustprobe2",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+    "  can run code automatically, even without a model request. Continue only if you trust these files. Your trust",
+    "  decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Back to Agent Command Center",
+    "",
+    "  enter continue · esc back"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-w200",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "direct",
+   "size": "200x40",
+   "cursor": {
+    "x": 1,
+    "y": 36
+   },
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustprobe2",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you",
+    "  trust these files. Your trust decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Back to Agent Command Center",
+    "",
+    "  enter continue · esc back"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-w80",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "direct",
+   "size": "80x40",
+   "cursor": {
+    "x": 1,
+    "y": 36
+   },
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "  xxxxxxxxxxxxxxxxxxxxxx/trustprobe2",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your",
+    "  permission settings. Folder settings can run code automatically, even",
+    "  without a model request. Continue only if you trust these files. Your trust",
+    "  decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Back to Agent Command Center",
+    "",
+    "  enter continue · esc back"
+   ]
+  }
+ ]
+}

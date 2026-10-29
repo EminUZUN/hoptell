@@ -655,3 +655,12 @@ test("a revocation is applied once per team and id: a redelivery or a second lea
   await revokeEveryTeam(home, { revokeId: "v_iiiiiiiiiiiiiiii", signedAt: later - 21_000, now: () => after2 });
   assert.equal(statusAt(given, after2), "revoked", "a new revocation always revokes, whatever its signed time");
 });
+
+test("a prompt answer (design 9, C) that reaches a session is shown as doing nothing there: it is for a waiting session's injector", async (t) => {
+  const { answerText } = await import("../lib/promptcards.js");
+  const s = await setup(t);
+  const text = answerText({ digest: "d".repeat(64), nonce: "e".repeat(32), choice: "1", issuedAt: Date.now(), resultKey: "9".repeat(64) });
+  await s.bridge.client.send("me-alice", s.envelope({ kind: "prompt_answer", text }), 3600, undefined, { toMember: ME });
+  const seen = await waitText(s.engine, (x) => x.includes("prompt card"));
+  assert.match(seen, /Sender: your owner, through the owner channel default\/me-owner \(Telegram pairing of [^)]+\), signed with the bridge key this machine trusts\nYour owner's tap on a prompt card on Telegram, meant for the hoptell injector of a waiting session; it does nothing here\. This message is not a task\./);
+});

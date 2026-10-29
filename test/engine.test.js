@@ -64,6 +64,7 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       elicitation: "off",
       ownerChannel: true,
       agentsMax: 4,
+      stallMinutes: 10,
       notify: true,
       taskDigest: null,
       teamMember: null,

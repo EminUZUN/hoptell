@@ -108,7 +108,7 @@ test("hoptell tmux in a member's worktree: the session is recorded, worktree com
   // A stand-in named codex: the launch checks the CLI by name.
   const bin = path.join(path.dirname(rec.path), "bin");
   fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, "codex"), "#!/bin/sh\nexec sleep 60\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "codex"), '#!/bin/sh\n[ "$1" = --version ] && echo codex-cli 0.0.1 && exit 0\nexec sleep 60\n', { mode: 0o755 });
   const r = await w.cli(["tmux", name, "--cwd", rec.path, "--", path.join(bin, "codex")], { HOPTELL_PUSH: "" });
   assert.match(r.stderr, /attach with: tmux attach/);
   const sessionFile = path.join(w.home, "worktrees", "sessions", `${name}.json`);
