@@ -119,6 +119,7 @@ export const GROUPS = {
       "lib/httpmcp.js",
       "lib/icons.js",
       "lib/jcs.js",
+      "lib/landings.js",
       "lib/localrelay.js",
       "lib/locks.js",
       "lib/login.js",

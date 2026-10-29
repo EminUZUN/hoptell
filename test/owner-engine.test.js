@@ -16,14 +16,14 @@ import { existingInstall, sleep } from "./helpers.js";
 
 const textOf = (r) => r.content[0].text;
 
-async function setup(t, { env = {}, trust = true, name = "me-alice", seenMax = undefined, bound = true, beforeStart = null } = {}) {
+async function setup(t, { env = {}, trust = true, name = "me-alice", seenMax = undefined, bound = true, beforeStart = null, engineOptions = {} } = {}) {
   const { url, tokens, relay } = await ownerRelay(t);
   const home = existingInstall(tmpHome(t));
   const key = newKey();
   if (trust) sig.trustPin(home, sig.formatPin({ realm: REALM, name: "me-owner", pub: key.pub }));
   const settings = readSettings({ env: { HOPTELL_RELAY: url, HOPTELL_TOKEN: tokens.me, HOPTELL_NAME: name, HOPTELL_HOME: home, HOPTELL_PUSH: "listener", HOPTELL_RECEIPTS: "on", HOPTELL_NOTIFY: "off", ...env }, homedir: "/nonexistent-home", pid: process.pid, hostname: "testhost" });
   const start = () => {
-    const e = createEngine(settings, { findHost: () => null, keepAlive: true, ...(seenMax ? { ownerSeenMax: seenMax } : {}) });
+    const e = createEngine(settings, { findHost: () => null, keepAlive: true, ...(seenMax ? { ownerSeenMax: seenMax } : {}), ...engineOptions });
     t.after(() => e.stop());
     beforeStart?.(e);
     e.start();
@@ -416,4 +416,75 @@ test("the note under a batch fits what is in it: peers, owner answers and instru
   for (const note of [batchNote([owner("answer")]), batchNote([owner("answer"), peer])]) assert.equal(note.includes(OWNER_NOTICE), false, "the per-message notice stays countable");
   // A stored "verified" result that this machine did not check (an older record): a peer message.
   assert.equal(batchNote([stored("answer"), stored("status")]), NOT_YOUR_USER);
+});
+
+/** A team state in `home` with these live landing actions ({id, digest, state, route}), as hoptell team writes it. */
+function liveTeam(home, team, actions) {
+  const at = new Date(0).toISOString();
+  fs.mkdirSync(path.join(home, "teams", team), { recursive: true, mode: 0o700 });
+  const member = (name) => ({ name, role: "implementer", cli: "claude", model: null, effort: null, template: "implementer", owns: null, folder: null, lifetimeMinutes: null, argv: ["claude"], taskDigest: null, cwd: "/x/repo", worktree: null, branch: null, registration: null, session: null, ended: null, notice: null });
+  const rows = actions.map((a, i) => ({ id: a.id, digest: a.digest, member: `me-impl-${i + 1}`, state: a.state ?? "ready", route: a.route ?? null, decision: null, reason: null, created: at, updated: at, target: "main", T: "a".repeat(40), C: "b".repeat(40) }));
+  const state = { version: 1, team, file: "/x/team.json", fileDigest: "0".repeat(64), lead: "me-lead", prefix: "me", repo: "/x/repo", base: "HEAD", worktrees: null, idleMinutes: 30, status: "up", created: at, members: rows.map((r) => member(r.member)), supervisor: null, candidate: null, landing: null, publishing: null, landed: [], reviews: [], events: [], run: "0".repeat(32), enrolment: null, actions: rows };
+  fs.writeFileSync(path.join(home, "teams", team, "state.json"), JSON.stringify(state), { mode: 0o600 });
+}
+
+test("a landing decision (design 8 addendum, option 3): kept as the action's receipt before the inbox line that asks for hoptell team apply", async (t) => {
+  const { createManifest, decisionText, readReceipt } = await import("../lib/landings.js");
+  const s = await setup(t, { name: "me-lead" });
+  const expires = Date.now() + 15 * 60_000;
+  const made = createManifest(s.home, "web", "L1", { realm: REALM, recipient: { realm: REALM, member: ME, lead: "me-lead" }, expires_at: new Date(expires).toISOString() });
+  const other = createManifest(s.home, "web", "L2", { realm: REALM, recipient: { realm: REALM, member: ME, lead: "me-other" }, expires_at: new Date(expires).toISOString() });
+  const typed = createManifest(s.home, "web", "L3", { realm: REALM, recipient: { realm: REALM, member: ME, lead: "me-lead" }, expires_at: new Date(expires).toISOString() });
+  liveTeam(s.home, "web", [{ id: "L1", digest: made.digest }, { id: "L2", digest: other.digest }, { id: "L3", digest: typed.digest, state: "approved", route: "terminal" }]);
+  const decide = (decision, id = "L1", digest = made.digest) => s.envelope({ kind: "landing_decision", to: { name: "me-lead", member: ME }, text: decisionText({ id, digest, decision, decidedAt: Date.now(), expiresAt: expires }) });
+  const land = decide("land");
+  await s.bridge.client.send("me-lead", land, 3600, undefined, { toMember: ME });
+  const seen = await waitText(s.engine, (x) => x.includes("Run hoptell team apply L1 now"));
+  assert.equal(readReceipt(s.home, "web", "L1"), land, "the original bytes, kept before the line was shown");
+  assert.match(seen, /Sender: your owner, through the owner channel default\/me-owner \(Telegram pairing of [^)]+\), signed with the bridge key this machine trusts\nYour owner decided on Telegram to land L1\. Run hoptell team apply L1 now: the decision can be applied for 15 minutes, and hoptell checks it again before anything moves\. This message approves nothing by itself; only hoptell team apply carries out the decision\./);
+  // A second decision for the same action is not kept (the first wins); one for an unknown action neither.
+  await s.bridge.client.send("me-lead", decide("reject"), 3600, undefined, { toMember: ME });
+  const later = await waitText(s.engine, (x) => x.includes("came after an earlier one"));
+  assert.match(later, /Your owner's decision on Telegram for L1 \(reject\) came after an earlier one, which hoptell keeps; this one is not used\. hoptell team apply L1 carries out the earlier decision \(land\)\./);
+  assert.doesNotMatch(later, /Run hoptell team apply/);
+  assert.equal(readReceipt(s.home, "web", "L1"), land);
+  // A decision for an action of this home that was not requested for this session: nothing kept, no instruction.
+  await s.bridge.client.send("me-lead", decide("land", "L2", other.digest), 3600, undefined, { toMember: ME });
+  const stray = await waitText(s.engine, (x) => x.includes("not for a landing this session requested"));
+  assert.match(stray, /This decision for L2 is not for a landing this session requested, so hoptell kept nothing; hoptell team apply does not use it\./);
+  assert.equal(readReceipt(s.home, "web", "L2"), null);
+  // One for an action the owner already approved in a terminal: that decision stands; nothing kept.
+  await s.bridge.client.send("me-lead", decide("reject", "L3", typed.digest), 3600, undefined, { toMember: ME });
+  const typedLater = await waitText(s.engine, (x) => x.includes("already approved in a terminal"));
+  assert.match(typedLater, /Your owner's decision on Telegram for L3 \(reject\) came after L3 was already approved in a terminal, which stands; this one is not used, and hoptell team apply does not carry it out\./);
+  assert.equal(readReceipt(s.home, "web", "L3"), null);
+  // An unverified copy (another session of the same member) is shown as such and keeps nothing.
+  await s.mallory.client.send("me-lead", decide("land", "L1"), 3600, undefined, { toMember: ME });
+  const forged = await waitText(s.engine, (x) => x.includes("could not be verified"));
+  assert.doesNotMatch(forged, /Run hoptell team apply/);
+  assert.equal(readReceipt(s.home, "web", "L1"), land);
+});
+
+test("a landing decision whose receipt cannot be written waits at the relay, and is kept and shown once it can be", async (t) => {
+  const { createManifest, decisionText, landingPaths, readReceipt } = await import("../lib/landings.js");
+  const s = await setup(t, { name: "me-lead", engineOptions: { storageRetryMs: 0 } });
+  const expires = Date.now() + 15 * 60_000;
+  const made = createManifest(s.home, "web", "L1", { realm: REALM, recipient: { realm: REALM, member: ME, lead: "me-lead" }, expires_at: new Date(expires).toISOString() });
+  liveTeam(s.home, "web", [{ id: "L1", digest: made.digest }]);
+  const folder = landingPaths(s.home, "web", "L1").action;
+  fs.chmodSync(folder, 0o500); // the receipt cannot be created
+  t.after(() => {
+    try {
+      fs.chmodSync(folder, 0o700);
+    } catch {}
+  });
+  const land = s.envelope({ kind: "landing_decision", to: { name: "me-lead", member: ME }, text: decisionText({ id: "L1", digest: made.digest, decision: "land", decidedAt: Date.now(), expiresAt: expires }) });
+  await s.bridge.client.send("me-lead", land, 3600, undefined, { toMember: ME });
+  await sleep(400);
+  assert.equal(textOf(await s.engine.call("read_inbox")), "Inbox empty.", "not stored, not confirmed");
+  assert.equal(readReceipt(s.home, "web", "L1"), null);
+  fs.chmodSync(folder, 0o700);
+  const seen = await waitText(s.engine, (x) => x.includes("Run hoptell team apply L1 now"), 15000);
+  assert.equal(readReceipt(s.home, "web", "L1"), land);
+  assert.equal((seen.match(/Run hoptell team apply L1 now/g) ?? []).length, 1);
 });

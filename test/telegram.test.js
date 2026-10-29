@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { API_ORIGIN, PHOTO_MAX, TelegramError, botIdOf, createTelegram, isBotToken, isJpeg, redact } from "../lib/telegram.js";
+import { API_ORIGIN, DOCUMENT_MAX, PHOTO_MAX, TelegramError, botIdOf, createTelegram, isBotToken, isJpeg, redact } from "../lib/telegram.js";
 
 // Generated per run, so no token value is written in the source.
 const TOKEN = `${1_000_000 + crypto.randomInt(1e6)}:${crypto.randomBytes(26).toString("base64url")}`;
@@ -144,4 +144,27 @@ test("the profile photo: one multipart upload of a JPG (at most 2 MB) to the fix
   // A refusal is redacted like any call.
   const bad = createTelegram(TOKEN, { fetchImpl: async () => json({ ok: false, error_code: 400, description: `PHOTO_INVALID_DIMENSIONS bot${TOKEN}` }, 400) });
   await assert.rejects(bad.setMyProfilePhoto({ jpeg }), (e) => e instanceof TelegramError && e.status === 400 && !e.message.includes(TOKEN.split(":")[1]) && /setMyProfilePhoto refused/.test(e.message));
+});
+
+test("a document (a landing's patch): one multipart upload as text/plain, its fields beside it, content-type detection off; refused before any call when too large", async () => {
+  const calls = [];
+  const tg = createTelegram(TOKEN, { fetchImpl: async (url, init) => (calls.push({ url, init }), json({ ok: true, result: { message_id: 9 } })) });
+  const bytes = Buffer.from("diff --git a/x b/x\n-1\n+2\n");
+  assert.deepEqual(await tg.sendDocument({ chat_id: 42, document: { name: "L7.patch", bytes }, reply_parameters: { message_id: 5, allow_sending_without_reply: true }, disable_notification: true }), { message_id: 9 });
+  const c = calls[0];
+  assert.equal(new URL(c.url).origin, "https://api.telegram.org");
+  assert.equal(new URL(c.url).pathname.split("/").at(-1), "sendDocument");
+  assert.equal(c.init.redirect, "error");
+  assert.ok(c.init.body instanceof FormData);
+  assert.equal(c.init.body.get("chat_id"), "42");
+  assert.deepEqual(JSON.parse(c.init.body.get("reply_parameters")), { message_id: 5, allow_sending_without_reply: true });
+  assert.equal(c.init.body.get("disable_notification"), "true");
+  assert.equal(c.init.body.get("disable_content_type_detection"), "true");
+  const part = c.init.body.get("document");
+  assert.equal(part.type, "text/plain");
+  assert.equal(part.name, "L7.patch");
+  assert.deepEqual(Buffer.from(await part.arrayBuffer()), bytes);
+  await assert.rejects(tg.sendDocument({ chat_id: 42, document: { name: "big.patch", bytes: Buffer.alloc(DOCUMENT_MAX + 1) } }), /too large/);
+  await assert.rejects(tg.sendDocument({ chat_id: 42 }), /needs a document/);
+  assert.equal(calls.length, 1);
 });

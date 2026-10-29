@@ -83,10 +83,39 @@ nothing is published; with an older bridge `/team` is an unknown command.
 - Landing, the candidate: `hoptell team land <member> --target <branch> -m <message>` makes one
   commit signed with your SSH key, with the member's reviewed tree on the target's current
   commit, and verifies it; `--approve <T> <C>` moves the target from `T` to exactly that commit
-  by compare-and-swap, never by a merge. A target checked out in a worktree is not moved: hoptell
-  prints the fast-forward to run there, and `--confirm <T> <C>` records it. All steps run only in
+  by compare-and-swap. A target checked out in exactly one clean worktree is fast-forwarded there
+  by hoptell (`git merge --ff-only` with its hardened git, checked before and after); a dirty,
+  busy or ambiguous checkout stops the landing before anything moves and says what to fix.
+  `--confirm <T> <C>` records a landing you made or checked yourself. All steps run only in
   your terminal. Landing never follows a symbolic ref, and it acts only on the worktree its team
   registered.
+- Landing that the lead prepares: `team land <member> --target <branch> -m <message> --prepare`
+  stops the member and makes the signed candidate without a terminal; `team evidence <member>
+  --candidate <C> --tests pass|fail --command <command> --report <file>` records the lead's tests
+  of exactly that commit; `team land <member> --request-approval` freezes the evidence (subject,
+  diffstat, patch, test report, verdicts, each with its digest) in a landing action once its
+  review request is answered, and prints its id. You decide it in one visit: `hoptell team approve
+  L<n>` shows the evidence (`--show-diff` the patch; one too large to keep inline is marked so and
+  never cut) and lands it when you type `land`. The signature is provenance, not your decision;
+  the test result and the verdicts are the agents' claims. New evidence, a later verdict or a new
+  request supersedes an undecided request, and an expired one says what to do. The manual route
+  (`--target` and `--approve` in your terminal) stays.
+- Landing from Telegram: with an up-to-date bridge, `--request-approval` also sends the request
+  to your owner channel as one message (the patch kept inline up to 64 KiB, the whole record up
+  to 90,000 bytes). The bridge checks every digest itself and shows a card with Land, Reject and
+  Show diff (the frozen patch as a `.patch` file; a larger one is "too large to show here; review
+  it on the Mac"). Your tap is a signed decision for the lead's session only; the lead runs
+  `hoptell team apply L<n>`, which verifies it again against the pin your Mac trusts and lands it
+  or ends it as rejected. A tap counts only before the request expires, `apply` works for 15
+  minutes after the tap, the first decision wins, and the card shows how it ended. An older or
+  offline bridge gets "landing approval needs a bridge update; use hoptell team approve in a
+  terminal". This needs the bridge from this release.
+- Landing actions: every approval is one action with an id (`L1`, ...), a manifest written once,
+  and a state recorded with the landing's journal; ended actions keep a record through `team
+  down`. A decision expires after 15 minutes until it starts; once the target may have moved,
+  hoptell never moves it again under that action, and an unknown outcome stays blocked until
+  `--confirm`, or until you give it up with `--abandon <id>`, which moves and removes nothing. `team up` records the repository's enrolment for them; a team started with an
+  older hoptell lands nothing new until it is started again.
 - Landing, the journal: hoptell journals the candidate before it publishes its branch, and a
   landing before the target moves, and records the landing before it deletes the candidate
   branch or the worktree. An interrupted landing is finished by running the same command again.

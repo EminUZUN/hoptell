@@ -4,13 +4,17 @@
 // CLIs only; processes are stopped by their exact pids.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
 import { BIN } from "../lib/config.js";
-import { NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamCommand, teamDown, teamLandApprove, teamLandCandidate, teamLandDiscard, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { MANIFEST_FIT, NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { APPLY_WINDOW_MS, decisionText, newActionId, parseLandingRequest, parseLandingStatus, readTombstone, teamOfAction } from "../lib/landings.js";
+import * as ownersig from "../lib/ownersig.js";
+import { canonicalize } from "../lib/jcs.js";
 import { addWorktree, commitWorktree, landApprove, landCandidate, readWorktreeRecord, registrationOf, removeWorktree, worktreeCommand, worktreePaths } from "../lib/worktrees.js";
 import { findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -312,29 +316,43 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   assert.match((await owner(["land", impl.name, "--approve", T, T])).failed, /no candidate .* is recorded/);
   assert.match((await owner(["land", impl.name, "--approve", T.slice(0, 12), C])).failed, /full target and candidate commit ids/);
   assert.equal(git(s.repo, "rev-parse", "main"), T, "nothing landed");
-  // main is checked out in the repository: hoptell does not move it, it says what to run there.
-  const manual = await owner(["land", impl.name, "--approve", T, C]);
-  assert.equal(manual.failed, null, manual.failed);
-  assert.match(manual.out, /main is checked out in \S+repo, so hoptell does not move it/);
-  assert.ok(manual.out.includes(`\n  test "$(git symbolic-ref HEAD)" = refs/heads/main && test "$(git rev-parse HEAD)" = ${T} && git merge --ff-only ${C}\nthen record it: hoptell team land dana-n1-impl-1 --confirm ${T} ${C}`), manual.out);
-  assert.ok(!manual.out.includes("#"), "nothing a shell might not take as a comment");
+  // team up enrolled the repository: its common git folder, an id and generation 1; a run id.
+  const st0 = readState(w.home, "n1");
+  assert.equal(st0.enrolment.common, fs.realpathSync(path.join(s.repo, ".git")));
+  assert.equal(st0.enrolment.generation, 1);
+  assert.match(st0.run, /^[0-9a-f]{32}$/);
+  // main is checked out in the repository. A dirty checkout blocks the landing before any move,
+  // with what is dirty; it ends that action, prints no line to paste, and moves nothing.
+  const tracked = path.join(s.repo, "lib", "x.js");
+  const clean = fs.readFileSync(tracked);
+  fs.writeFileSync(tracked, "mine\n");
+  const dirty = await owner(["land", impl.name, "--approve", T, C]);
+  assert.match(dirty.failed, new RegExp(`main is checked out in \\S+repo, and it has 1 uncommitted change: lib/x\\.js\\. Nothing was moved\\. Fix that, then run the same hoptell team land dana-n1-impl-1 --approve ${T} ${C} again; hoptell then moves it itself`));
+  assert.ok(!dirty.failed.includes("git merge"), "no line to paste before a move");
   assert.equal(git(s.repo, "rev-parse", "main"), T, "nothing moved");
+  const L1 = readTombstone(w.home, "n1", "L1");
+  assert.equal(L1.state, "blocked");
+  assert.equal(L1.route, "terminal");
+  assert.deepEqual(readState(w.home, "n1").actions, [], "a block before the move ends the action");
   assert.equal(readState(w.home, "n1").candidate.C, C, "the candidate stays");
-  // --confirm before the owner's fast-forward: nothing is recorded.
-  assert.match((await owner(["land", impl.name, "--confirm", T, C])).failed, /main is still at .*; run git merge --ff-only/);
+  fs.writeFileSync(tracked, clean);
+  // --confirm before anything moved: nothing is recorded.
+  assert.match((await owner(["land", impl.name, "--confirm", T, C])).failed, /main is at \w+, not at \w+; .*nothing was recorded\. Move main to \w+ first/);
   assert.match((await cli("land", impl.name, "--confirm", T, C)).stderr, /landing is the owner's step: run hoptell team land --confirm in a terminal/);
-  // The printed line, pasted into a shell: with a wrong check nothing merges; as printed, it merges.
-  const line = manual.out.split("\n").find((l) => l.startsWith("  test ")).trim();
-  const paste = (text) => spawnSync("sh", ["-c", text], { cwd: s.repo, env: gitEnv, encoding: "utf8" });
-  assert.notEqual(paste(line.replace(`= ${T} `, `= ${C} `)).status, 0);
-  assert.equal(git(s.repo, "rev-parse", "main"), T, "a failed check merges nothing");
-  assert.equal(paste(line).status, 0);
-  const landed = await owner(["land", impl.name, "--confirm", T, C]);
+  // Clean again: the next decision is a new action, and hoptell fast-forwards the checkout itself.
+  const landed = await owner(["land", impl.name, "--approve", T, C]);
   assert.equal(landed.failed, null, landed.failed);
-  assert.match(landed.out, new RegExp(`Confirmed ${C} on main \\(was ${T}\\)`));
+  assert.match(landed.out, new RegExp(`Landed ${C} on main \\(was ${T}\\), landing L2\\.`));
   assert.match(landed.out, /worktree removed; branch team\/n1\/dana-n1-impl-1 deleted/);
+  assert.doesNotMatch(landed.out, /warning/);
   assert.equal(git(s.repo, "rev-parse", "main"), C);
+  assert.equal(git(s.repo, "status", "--porcelain", "--untracked-files=no"), "", "the checkout moved with its branch");
+  assert.equal(fs.readFileSync(tracked, "utf8"), "export const x = 2;\n");
   assert.equal(readState(w.home, "n1").landing, null, "the journal is cleared");
+  assert.deepEqual(readState(w.home, "n1").actions, []);
+  assert.equal(readTombstone(w.home, "n1", "L2").state, "finished");
+  const m2 = JSON.parse(fs.readFileSync(path.join(w.home, "teams", "n1", "landings", "L2", "manifest.json"), "utf8"));
+  assert.deepEqual([m2.T, m2.C, m2.H, m2.target, m2.mode.kind, m2.mode.worktree, m2.run, m2.realm, m2.evidence], [T, C, commit.commit, "main", "checkout", fs.realpathSync(s.repo), st0.run, null, null]);
   assert.equal(spawnSync("git", ["rev-parse", "--verify", "-q", "team/n1/land"], { cwd: s.repo, env: gitEnv }).status, 1, "the candidate branch is gone");
   assert.equal(spawnSync("git", ["rev-parse", "--verify", "-q", "team/n1/dana-n1-impl-1"], { cwd: s.repo, env: gitEnv }).status, 1);
   assert.ok(!fs.existsSync(impl.worktree));
@@ -433,9 +451,9 @@ test("landing refuses: no signing settings, a target that moved from the base, a
   git(v.repo, "branch", "dev", vrec.base);
   git(v.repo, "worktree", "add", "-q", path.join(v.root, "devwt"), "dev");
   const dev = await landCandidate(v.home, "dana-impl-1", { target: "dev", message: "Land", landRef: "refs/heads/team/n2/land", bound: reg(v.home) }, { homedir: v.homedir });
-  const manual = await landApprove(v.home, "dana-impl-1", { T: dev.T, C: dev.C, candidate: { target: "dev", T: dev.T, C: dev.C, H: dev.H }, landRef: "refs/heads/team/n2/land", bound: reg(v.home) }, { homedir: v.homedir });
-  assert.equal(manual.manual.at, fs.realpathSync(path.join(v.root, "devwt")));
-  assert.equal(git(v.repo, "rev-parse", "dev"), vrec.base, "a checked-out target is never moved by hoptell");
+  // (landApprove finishes landings journaled before landing actions: it never moves a checkout.)
+  await refusal(() => landApprove(v.home, "dana-impl-1", { T: dev.T, C: dev.C, candidate: { target: "dev", T: dev.T, C: dev.C, H: dev.H }, landRef: "refs/heads/team/n2/land", journaled: "intent", bound: reg(v.home) }, { homedir: v.homedir }), "land_blocked", new RegExp(`dev is checked out in ${fs.realpathSync(path.join(v.root, "devwt"))}; nothing was moved`));
+  assert.equal(git(v.repo, "rev-parse", "dev"), vrec.base, "a checked-out target is never moved by the old path");
 });
 
 test("worktree remove after a landing: the branch goes only when its head landed and the landed commit is in the target", async (t) => {
@@ -743,6 +761,9 @@ test("team up stopped while making worktrees: nothing started, status and down c
   assert.ok(git(s.repo, "rev-parse", "team/n3/dana-n3-b"), "the branch hoptell did not make stays");
 });
 
+/** The fields team up records for landing actions: a run id and the repository's enrolment. */
+const enrolled = (rec) => ({ run: "0".repeat(32), enrolment: { common: rec.common, id: "1".repeat(32), generation: 1 }, actions: [] });
+
 /** A signed repository with one team member whose commit has a candidate on main (not checked out). */
 async function landingSetup(t, team = "n4", { candidate = true } = {}) {
   const s = repoSetup(t, { signing: true });
@@ -751,7 +772,7 @@ async function landingSetup(t, team = "n4", { candidate = true } = {}) {
   const rec = await addWorktree(s.home, { repo: s.repo, member, team, cli: "codex" });
   fs.writeFileSync(path.join(rec.path, "lib", "x.js"), "2\n");
   await commitWorktree(s.home, member, { message: "m" });
-  writeTeam(s.home, stateOf(team, [memberRow(member, "implementer", null, { cli: "codex", template: "implementer", worktree: rec.path, branch: rec.branch, registration: registrationOf(rec), cwd: rec.path })], { repo: s.repo }));
+  writeTeam(s.home, stateOf(team, [memberRow(member, "implementer", null, { cli: "codex", template: "implementer", worktree: rec.path, branch: rec.branch, registration: registrationOf(rec), cwd: rec.path })], { repo: s.repo, ...enrolled(rec) }));
   git(s.repo, "checkout", "-q", "-b", "dev"); // main is not checked out anywhere
   const c = candidate ? await teamLandCandidate(s.home, member, { target: "main", message: "Land", homedir: s.homedir }) : null;
   return { s, rec, c, member, landRef: `refs/heads/team/${team}/land` };
@@ -796,10 +817,12 @@ test("landing keeps its evidence until the landing is recorded: a failed write o
       fs.writeFileSync(teamPaths(home, st.team).state, JSON.stringify(st), { mode: 0o600 });
     };
   };
+  // The writes of a landing: ready (1), approved (2), accepted with the journal (3), moving (4),
+  // landed (5), finished (6).
   // 1. The journal of the intent cannot be written: nothing moves.
   {
     const { s, rec, c, member, landRef } = await landingSetup(t);
-    await assert.rejects(teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(1) }), /ENOSPC/);
+    await assert.rejects(teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(3) }), /ENOSPC/);
     assert.equal(refOf(s.repo, "main"), c.T);
     assert.equal(refOf(s.repo, landRef), c.C);
     assert.ok(fs.existsSync(rec.path));
@@ -808,12 +831,13 @@ test("landing keeps its evidence until the landing is recorded: a failed write o
   // stay, the journal says what moved, and the same command finishes it.
   {
     const { s, rec, c, member, landRef } = await landingSetup(t);
-    await refusal(() => teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(2) }), "not_recorded", /main is at .*, but the landing could not be recorded \(ENOSPC.*\); the candidate branch and the worktree are kept/);
+    await refusal(() => teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(5) }), "not_recorded", /main is at .*, but the landing could not be recorded \(ENOSPC.*\); the candidate branch and the worktree are kept/);
     assert.equal(refOf(s.repo, "main"), c.C);
     assert.equal(refOf(s.repo, landRef), c.C);
     assert.ok(fs.existsSync(rec.path));
     const j = readState(s.home, "n4").landing;
-    assert.deepEqual([j.phase, j.member, j.H, j.T, j.C, j.target, j.repo], ["intent", member, c.H, c.T, c.C, "main", s.repo]);
+    assert.deepEqual([j.phase, j.member, j.H, j.T, j.C, j.target, j.repo, j.action], ["intent", member, c.H, c.T, c.C, "main", s.repo, "L1"]);
+    assert.equal(readState(s.home, "n4").actions[0].state, "moving");
     // Another landing waits for this one; a discard too.
     await refusal(() => teamLandApprove(s.home, member, { T: c.T, C: "f".repeat(40), homedir: s.homedir }), "landing_pending");
     await refusal(() => teamCommand({ args: ["land", member, "--discard"], home: s.home, homedir: s.homedir, env: {}, out: () => {}, warn: () => {}, fail: (m) => { throw Object.assign(new Error(m), { code: "landing_pending" }); } }), "landing_pending", /the landing of .* did not finish/);
@@ -856,11 +880,14 @@ test("landing keeps its evidence until the landing is recorded: a failed write o
   // 5. The last write (clearing the journal) fails after the evidence went: the rerun clears it.
   {
     const { s, rec, c, member } = await landingSetup(t);
-    await assert.rejects(teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(3) }), /ENOSPC/);
+    await assert.rejects(teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir }, { save: failing(6) }), /ENOSPC/);
     assert.ok(!fs.existsSync(rec.path));
     assert.equal(readState(s.home, "n4").landing.phase, "landed");
+    assert.equal(readTombstone(s.home, "n4", "L1").state, "finished", "the tombstone came first");
     const r = await teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir });
-    assert.ok(r.removed.already);
+    // The rerun reports the cleanup that happened, from the final record, not a guess.
+    assert.deepEqual([r.id, r.removed.branchState, r.removed.path], ["L1", "deleted", rec.path]);
+    assert.deepEqual(readTombstone(s.home, "n4", "L1").result, r.removed);
     assert.equal(readState(s.home, "n4").landing, null);
     assert.equal(readState(s.home, "n4").landed.length, 1);
   }
@@ -869,7 +896,7 @@ test("landing keeps its evidence until the landing is recorded: a failed write o
 test("--confirm records only a target that is exactly at the verified candidate", async (t) => {
   const { s, rec, c, member } = await landingSetup(t);
   const confirm = () => teamLandApprove(s.home, member, { T: c.T, C: c.C, homedir: s.homedir, confirm: true });
-  await refusal(confirm, "not_landed", /main is still at /);
+  await refusal(confirm, "not_landed", /main is at \w+, not at \w+; nothing was recorded\. Move main to \w+ first/);
   const other = git(s.repo, "commit-tree", "-p", c.T, "-m", "other", git(s.repo, "rev-parse", `${c.T}^{tree}`));
   git(s.repo, "update-ref", "refs/heads/main", other, c.T);
   await refusal(confirm, "not_landed", new RegExp(`main is at ${other.slice(0, 12)}, not at ${c.C.slice(0, 12)}; nothing was recorded`));
@@ -879,6 +906,494 @@ test("--confirm records only a target that is exactly at the verified candidate"
   assert.equal(r.C, c.C);
   assert.ok(!fs.existsSync(rec.path));
   assert.equal(readState(s.home, "n4").landed.length, 1);
+});
+
+/** landingSetup with main checked out in the repository (landing mode checkout). */
+async function checkoutSetup(t) {
+  const x = await landingSetup(t);
+  git(x.s.repo, "checkout", "-q", "main");
+  return { ...x, file: path.join(x.s.repo, "lib", "x.js"), approve: (deps = {}, more = {}) => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, ...more }, deps) };
+}
+const MIN = 60_000;
+
+test("a checked-out target (option 1): two checkouts refuse; a dirty checkout or an operation in progress blocks before the move; a clean one is fast-forwarded by hoptell", async (t) => {
+  const x = await checkoutSetup(t);
+  const clean = fs.readFileSync(x.file, "utf8");
+  // Two worktrees on main: refused before any action is made.
+  const second = path.join(x.s.root, "second");
+  git(x.s.repo, "worktree", "add", "-q", "--force", second, "main");
+  await refusal(() => x.approve(), "land_blocked", /main is checked out in 2 worktrees \(.*repo, .*second\); hoptell moves a checked-out target only when exactly one worktree has it\. Nothing was moved\./);
+  assert.deepEqual(readState(x.s.home, "n4").actions, []);
+  git(x.s.repo, "worktree", "remove", second);
+  // A merge in progress: the action ends blocked (its tombstone says why), nothing moves.
+  const mergeHead = path.join(x.s.repo, ".git", "MERGE_HEAD");
+  fs.writeFileSync(mergeHead, `${x.c.T}\n`);
+  await refusal(() => x.approve(), "land_blocked", /main is checked out in .*repo, and a merge is in progress there\. Nothing was moved\. Fix that, then run the same hoptell team land dana-n4-impl-1 --approve \w+ \w+ again; hoptell then moves it itself/);
+  fs.rmSync(mergeHead);
+  // A staged change.
+  fs.writeFileSync(x.file, "staged\n");
+  git(x.s.repo, "add", "lib/x.js");
+  await refusal(() => x.approve(), "land_blocked", /and it has 1 uncommitted change: lib\/x\.js/);
+  git(x.s.repo, "reset", "-q", "--hard");
+  assert.deepEqual([readTombstone(x.s.home, "n4", "L1").state, readTombstone(x.s.home, "n4", "L2").state], ["blocked", "blocked"]);
+  assert.match(readTombstone(x.s.home, "n4", "L1").reason, /a merge is in progress/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.equal(fs.readFileSync(x.file, "utf8"), clean);
+  // Clean: hoptell fast-forwards the checkout itself, under a new action.
+  const r = await x.approve();
+  assert.equal(r.id, "L3");
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  assert.equal(git(x.s.repo, "symbolic-ref", "HEAD"), "refs/heads/main");
+  assert.equal(git(x.s.repo, "status", "--porcelain", "--untracked-files=no"), "");
+  assert.equal(fs.readFileSync(x.file, "utf8"), execFileSync("git", ["show", `${x.c.C}:lib/x.js`], { cwd: x.s.repo, env: gitEnv, encoding: "utf8" }), "the checkout's files moved too");
+  const st = readState(x.s.home, "n4");
+  assert.deepEqual([st.actions, st.landing, st.candidate, st.landed.length], [[], null, null, 1]);
+  assert.equal(readTombstone(x.s.home, "n4", "L3").state, "finished");
+});
+
+test("from moving on nothing moves again: crashes before and after the move, a merge stopped half-way, \"Already up to date\"; --confirm reconciles", async (t) => {
+  const crash = () => {
+    throw new Error("crash");
+  };
+  // A crash after `moving` was written, before the merge ran: the rerun never merges. main is still
+  // at T and the checkout is clean, so the outcome is unknown and the paste-safe line is printed.
+  {
+    const x = await checkoutSetup(t);
+    await assert.rejects(x.approve({ afterMoving: crash }), /crash/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "moving");
+    const g = faultyGit(x.s.root);
+    g.set([{ match: "merge --ff-only", nth: 1, action: "exit128" }]); // a merge would fail the test
+    let message;
+    await refusal(
+      async () => {
+        try {
+          await x.approve({ git: g.git });
+        } catch (e) {
+          message = e.message;
+          throw e;
+        }
+      },
+      "land_unknown",
+      /^an earlier run stopped while it moved the target, and main is at \w+, not at \w+\. Whether main moved is unknown, so the landing L1 is blocked: hoptell does not move it again and resets nothing\.\nmain is still at \w+ and .*repo is clean\. Check what happened there first; to land it by hand, run the line below in that folder/,
+    );
+    assert.equal(refOf(x.s.repo, "main"), x.c.T, "no second move");
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "blocked");
+    assert.equal(readState(x.s.home, "n4").landing.phase, "intent", "the journal stays");
+    assert.ok(!message.includes("#"));
+    // The printed line, pasted into a shell: with a wrong check nothing merges; as printed, it merges.
+    const line = message.split("\n").find((l) => l.startsWith("  test ")).trim();
+    assert.equal(line, `test "$(git symbolic-ref HEAD)" = refs/heads/main && test "$(git rev-parse HEAD)" = ${x.c.T} && git merge --ff-only ${x.c.C}`);
+    assert.ok(message.endsWith(`then record it: hoptell team land ${x.member} --confirm ${x.c.T} ${x.c.C}`));
+    const paste = (text) => spawnSync("sh", ["-c", text], { cwd: x.s.repo, env: gitEnv, encoding: "utf8" });
+    assert.notEqual(paste(line.replace(`= ${x.c.T} `, `= ${x.c.C} `)).status, 0);
+    assert.equal(refOf(x.s.repo, "main"), x.c.T, "a failed check merges nothing");
+    // --approve leaves a blocked action alone; --confirm before the merge records nothing.
+    await refusal(() => x.approve(), "land_blocked", /the landing L1 is blocked/);
+    await refusal(() => x.approve({}, { confirm: true }), "not_landed", /main is at \w+, not at \w+; nothing was recorded/);
+    assert.equal(paste(line).status, 0);
+    const r = await x.approve({}, { confirm: true });
+    assert.equal(r.id, "L1", "the same action");
+    const st = readState(x.s.home, "n4");
+    assert.deepEqual([st.actions, st.landing, st.landed.length], [[], null, 1]);
+    assert.equal(readTombstone(x.s.home, "n4", "L1").state, "finished");
+  }
+  // A crash after the merge, before the record: the rerun reads the result (no merge) and finishes.
+  {
+    const x = await checkoutSetup(t);
+    await assert.rejects(x.approve({ afterMove: crash }), /crash/);
+    assert.equal(refOf(x.s.repo, "main"), x.c.C);
+    const g = faultyGit(x.s.root);
+    g.set([{ match: "merge --ff-only", nth: 1, action: "exit128" }]);
+    const r = await x.approve({ git: g.git });
+    assert.equal(r.id, "L1");
+    assert.equal(readState(x.s.home, "n4").landed.length, 1);
+  }
+  // A merge that changed the checkout and was stopped before its ref update: unknown, blocked,
+  // nothing reset, no line to paste (the checkout is dirty); only --confirm can end it.
+  {
+    const x = await checkoutSetup(t);
+    const g = faultyGit(x.s.root);
+    g.set([{ match: "merge --ff-only", nth: 1, action: "dirtyKill" }]);
+    await refusal(() => x.approve({ git: g.git }), "land_unknown", /^git merge --ff-only ended with stopped by a signal, and main is at \w+, not at \w+; in .*repo, it has 1 uncommitted change: lib\/x\.js\. Whether main moved is unknown, so the landing L1 is blocked: hoptell does not move it again and resets nothing\. Check .*repo; once main is at \w+ and that checkout is on it and clean, record it with hoptell team land dana-n4-impl-1 --confirm \w+ \w+$/);
+    assert.equal(fs.readFileSync(x.file, "utf8"), "half\n", "nothing reset");
+    assert.equal(refOf(x.s.repo, "main"), x.c.T);
+    const st = readState(x.s.home, "n4");
+    assert.deepEqual([st.actions[0].state, st.landing.phase], ["blocked", "intent"]);
+    g.set([]);
+    await refusal(() => x.approve({ git: g.git }), "land_blocked");
+    await refusal(() => x.approve({ git: g.git }, { confirm: true }), "not_landed");
+    assert.equal(refOf(x.s.repo, "main"), x.c.T, "never a second move");
+  }
+  // "Already up to date" is not a landing, even with status 0.
+  {
+    const x = await checkoutSetup(t);
+    const g = faultyGit(x.s.root);
+    g.set([{ match: "merge --ff-only", nth: 1, action: "uptodate0" }]);
+    await refusal(() => x.approve({ git: g.git }), "land_unknown", /^git merge --ff-only said "Already up to date", and main is at \w+, not at \w+\. Whether main moved is unknown/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "blocked");
+  }
+  // A branch-only target (mode ref): a crash after `moving`, before the update: never a second move.
+  {
+    const x = await landingSetup(t);
+    await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMoving: crash }), /crash/);
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_unknown", /^an earlier run stopped while it moved the target, and main is at \w+, not at \w+\. Whether main moved is unknown, so the landing L1 is blocked.* Check main; once main is at \w+, record it with/);
+    assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  }
+});
+
+test("expiry is checked only on the way to accepted: a decision that never started expires, an accepted or moving landing finishes late", async (t) => {
+  const enospc = (n) => {
+    let calls = 0;
+    return (home, st) => {
+      if (++calls === n) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      fs.writeFileSync(teamPaths(home, st.team).state, JSON.stringify(st), { mode: 0o600 });
+    };
+  };
+  const later = () => Date.now() + 16 * MIN;
+  // Approved, then the acceptance could not be written: 16 minutes later that decision has
+  // expired; the new decision is a new action.
+  {
+    const x = await checkoutSetup(t);
+    await assert.rejects(x.approve({ save: enospc(3) }), /ENOSPC/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "approved");
+    assert.equal(refOf(x.s.repo, "main"), x.c.T);
+    const r = await x.approve({ now: later });
+    assert.equal(r.id, "L2");
+    assert.equal(readTombstone(x.s.home, "n4", "L1").state, "expired");
+    assert.equal(readState(x.s.home, "n4").landed.length, 1);
+  }
+  // Accepted (moving could not be written): nothing expires any more; the same action lands.
+  {
+    const x = await checkoutSetup(t);
+    await assert.rejects(x.approve({ save: enospc(4) }), /ENOSPC/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "accepted");
+    const r = await x.approve({ now: later });
+    assert.equal(r.id, "L1");
+    assert.equal(readState(x.s.home, "n4").landed.length, 1);
+    assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  }
+  // Moved, then a restart after expiry: recording and cleanup still finish, without a move.
+  {
+    const x = await checkoutSetup(t);
+    await assert.rejects(x.approve({ afterMove: () => { throw new Error("crash"); } }), /crash/);
+    const r = await x.approve({ now: later });
+    assert.equal(r.id, "L1");
+    assert.equal(readTombstone(x.s.home, "n4", "L1").state, "finished");
+  }
+});
+
+test("the action record: a create-only canonical manifest bound by its digest, ids never reused across teams, tombstones through down and up, teams from before actions", async (t) => {
+  const x = await landingSetup(t);
+  const crash = () => {
+    throw new Error("crash");
+  };
+  await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMoving: crash }), /crash/);
+  const file = path.join(x.s.home, "teams", "n4", "landings", "L1", "manifest.json");
+  const bytes = fs.readFileSync(file, "utf8");
+  const m = JSON.parse(bytes);
+  assert.equal(bytes, canonicalize(m), "canonical JSON (JCS)");
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(readState(x.s.home, "n4").actions[0].digest, crypto.createHash("sha256").update(bytes).digest("hex"));
+  assert.deepEqual(Object.keys(m).sort(), ["C", "H", "T", "cleanup", "created_at", "enrolment", "evidence", "expires_at", "id", "member", "mode", "nonce", "parent", "realm", "recipient", "run", "target", "team", "version"]);
+  assert.deepEqual([m.version, m.id, m.mode, m.parent, m.cleanup.candidate, m.recipient], [1, "L1", { kind: "ref" }, x.c.T, "team/n4/land", null]);
+  assert.equal(Date.parse(m.expires_at) - Date.parse(m.created_at), 15 * MIN);
+  // A changed manifest is not acted on.
+  fs.chmodSync(file, 0o600);
+  fs.writeFileSync(file, bytes.replace(x.c.C, x.c.T));
+  await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "action_changed", /the manifest of the landing L1 changed since it was made/);
+  fs.writeFileSync(file, bytes);
+  await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_unknown");
+  // Ids: the home's counter; a folder that exists in another team is never reused, even when
+  // the counter was lost; an id in two teams is refused.
+  fs.mkdirSync(path.join(x.s.home, "teams", "n7", "landings", "L2"), { recursive: true });
+  fs.rmSync(path.join(x.s.home, "teams", "landings.seq"));
+  assert.equal(await newActionId(x.s.home), "L3");
+  assert.equal(await newActionId(x.s.home), "L4");
+  assert.equal(teamOfAction(x.s.home, "L1"), "n4");
+  fs.mkdirSync(path.join(x.s.home, "teams", "n7", "landings", "L1"), { recursive: true });
+  assert.throws(() => teamOfAction(x.s.home, "L1"), /the landing L1 exists in several teams \(n4, n7\)/);
+  assert.throws(() => teamOfAction(x.s.home, "L9"), /no landing L9/);
+  // A state with only some of the action fields is refused.
+  const st = readState(x.s.home, "n4");
+  delete st.run;
+  assert.equal(stateProblem(st, "n4"), "field run");
+
+  // A team started before landing actions: --approve refuses with what to do, --discard works,
+  // and down and up then enrol it.
+  const y = await landingSetup(t, "n5");
+  const legacy = readState(y.s.home, "n5");
+  for (const k of ["run", "enrolment", "actions"]) delete legacy[k];
+  writeTeam(y.s.home, legacy);
+  await refusal(() => teamLandApprove(y.s.home, y.member, { T: y.c.T, C: y.c.C, homedir: y.s.homedir }), "legacy_team", /team n5 was started before landing actions .*: discard the candidate \(hoptell team land dana-n5-impl-1 --discard\), run hoptell team down n5 and hoptell team up again, then build the candidate again/);
+  assert.equal(refOf(y.s.repo, "main"), y.c.T);
+  await teamLandDiscard(y.s.home, y.member);
+  assert.equal(readState(y.s.home, "n5").candidate, null);
+  // ...and a journal it had pending still finishes as before.
+  const v = await landingSetup(t, "n8");
+  const old = readState(v.s.home, "n8");
+  for (const k of ["run", "enrolment", "actions"]) delete old[k];
+  old.landing = { member: v.member, H: v.c.H, C: v.c.C, T: v.c.T, target: "main", at: new Date().toISOString(), repo: v.s.repo, phase: "intent" };
+  writeTeam(v.s.home, old);
+  git(v.s.repo, "update-ref", "refs/heads/main", v.c.C, v.c.T);
+  await teamLandApprove(v.s.home, v.member, { T: v.c.T, C: v.c.C, homedir: v.s.homedir });
+  assert.deepEqual([readState(v.s.home, "n8").landing, readState(v.s.home, "n8").landed.length], [null, 1]);
+
+  // Tombstones outlive team down and up: the landings folder stays, the new state has no actions.
+  const z = await landingSetup(t, "n6");
+  await teamLandApprove(z.s.home, z.member, { T: z.c.T, C: z.c.C, homedir: z.s.homedir });
+  assert.equal((await teamDown(z.s.home, "n6", {}, { endSession: () => false, sleep: async () => {}, wait: 0 })).down, true);
+  const f = fakeClis(z.s.root);
+  fs.mkdirSync(path.join(z.s.root, "tasks"), { recursive: true });
+  fs.writeFileSync(path.join(z.s.root, "tasks", "impl.md"), "x\n");
+  const teamFile = path.join(z.s.root, "n6.json");
+  fs.writeFileSync(teamFile, JSON.stringify(teamDoc({ team: "n6", repo: z.s.repo, members: [memberOf({ name: "dana-n6-rev-1", role: "reviewer", cli: "claude", task: "tasks/impl.md", owns: undefined })] })));
+  const session = sleepers(t);
+  const launch = async () => {
+    const y = session(Date.now());
+    return { session: "hoptell-x", sessionId: y.id, pane: y.pane, pid: y.pid };
+  };
+  await teamUp(teamFile, { home: z.s.home, homedir: z.s.homedir, env: { PATH: f.PATH }, yes: true }, { out: () => {}, warn: () => {}, launch, startSupervisor: async () => null });
+  const up = readState(z.s.home, "n6");
+  assert.deepEqual(up.actions, []);
+  assert.deepEqual([up.enrolment.id, up.enrolment.generation], ["1".repeat(32), 2], "the same enrolment, started again");
+  assert.equal(readTombstone(z.s.home, "n6", "L1").state, "finished", "kept through down and up");
+});
+
+test("a checkout of the target must be a worktree of the enrolled repository: a folder replaced by another clone gets no git, before the move and in recovery", async (t) => {
+  const crash = () => {
+    throw new Error("crash");
+  };
+  for (const when of ["before", "recovery"]) {
+    const x = await landingSetup(t);
+    // main checked out in a linked worktree of the repository.
+    const wt = path.join(x.s.root, "mainwt");
+    git(x.s.repo, "worktree", "add", "-q", wt, "main");
+    const replace = () => {
+      // The folder is replaced by another clone on main at the same T, with the same commits.
+      fs.rmSync(wt, { recursive: true, force: true });
+      execFileSync("git", ["clone", "-q", "-b", "main", x.s.repo, wt], { env: gitEnv });
+      execFileSync("git", ["fetch", "-q", x.s.repo, x.c.C], { cwd: wt, env: gitEnv });
+    };
+    if (when === "before") {
+      replace();
+      await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_blocked", /main is checked out in .*mainwt, but .*mainwt is not a worktree of .*\.git \(its \.git is another repository\); hoptell runs no git there\. Nothing was moved/);
+    } else {
+      await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMoving: crash }), /crash/);
+      replace();
+      await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_unknown", /is not a worktree of .*; hoptell runs no git there/);
+      await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true }), "not_landed", /is not a worktree of/);
+    }
+    assert.equal(refOf(x.s.repo, "main"), x.c.T, when);
+    assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: wt, env: gitEnv, encoding: "utf8" }).trim(), x.c.T, "the clone was not merged");
+  }
+});
+
+test("a branch-only landing finishes only over a checkout that is at C and clean: one that appeared at T, or two, keep it blocked", async (t) => {
+  // A checkout of main appears (at T) between the checks and the compare-and-swap: the ref moves,
+  // but the landing is blocked, with its evidence, and nothing else moves.
+  {
+    const x = await landingSetup(t);
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { beforeMove: () => git(x.s.repo, "checkout", "-q", "main") }), "land_unknown", /^git update-ref moved main to \w+, but a checkout of it appeared meanwhile, and in .*repo, it has 1 uncommitted change: lib\/x\.js\. main is at \w+, but the landing L1 is blocked: hoptell moves nothing more and resets nothing\. Bring the checkout in .*repo to \w+ \(git read-tree -m -u \w+ \w+ there keeps your own changes\), then record it with hoptell team land dana-n4-impl-1 --confirm/);
+    assert.equal(refOf(x.s.repo, "main"), x.c.C);
+    assert.equal(refOf(x.s.repo, x.landRef), x.c.C, "the candidate stays");
+    assert.ok(fs.existsSync(x.rec.path), "the worktree stays");
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "blocked");
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true }), "not_landed");
+    git(x.s.repo, "read-tree", "-m", "-u", x.c.T, x.c.C);
+    const r = await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true });
+    assert.equal(r.id, "L1");
+    assert.equal(readState(x.s.home, "n4").landed.length, 1);
+  }
+  // The same appearance, then a crash before the record: the rerun moves nothing and does not finish.
+  {
+    const x = await landingSetup(t);
+    const crash = () => {
+      throw new Error("crash");
+    };
+    await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { beforeMove: () => git(x.s.repo, "checkout", "-q", "main"), afterMove: crash }), /crash/);
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_unknown", /^an earlier run stopped while it moved the target, and in .*repo, .*\. main is at \w+, but the landing L1 is blocked/);
+    assert.equal(readState(x.s.home, "n4").landed.length, 0);
+    assert.ok(fs.existsSync(x.rec.path));
+    // Two checkouts: still blocked, and --confirm refuses too.
+    git(x.s.repo, "read-tree", "-m", "-u", x.c.T, x.c.C);
+    const second = path.join(x.s.root, "second");
+    git(x.s.repo, "worktree", "add", "-q", "--force", second, "main");
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true }), "not_landed", /main is checked out in 2 worktrees/);
+    git(x.s.repo, "worktree", "remove", second);
+    await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true });
+  }
+  // A checkout that appears already at C and clean: the landing finishes and says so.
+  {
+    const x = await landingSetup(t);
+    const r = await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMove: () => git(x.s.repo, "checkout", "-q", "main") });
+    assert.equal(r.observed, fs.realpathSync(x.s.repo));
+    assert.equal(readState(x.s.home, "n4").landed.length, 1);
+  }
+});
+
+test("untracked files in the checkout: one the landing does not add is kept; one where it adds a file, untracked or ignored, blocks before the move", async (t) => {
+  for (const kind of ["kept", "untracked", "ignored"]) {
+    const x = await landingSetup(t, "n4", { candidate: false });
+    fs.writeFileSync(path.join(x.rec.path, "lib", "new.js"), "new\n");
+    await commitWorktree(x.s.home, x.member, { message: "adds lib/new.js" });
+    const c = await teamLandCandidate(x.s.home, x.member, { target: "main", message: "Land", homedir: x.s.homedir });
+    git(x.s.repo, "checkout", "-q", "main");
+    const mine = path.join(x.s.repo, kind === "kept" ? "notes.txt" : path.join("lib", "new.js"));
+    fs.writeFileSync(mine, "mine\n");
+    if (kind === "ignored") fs.appendFileSync(path.join(x.s.repo, ".git", "info", "exclude"), "lib/new.js\n");
+    const approve = () => teamLandApprove(x.s.home, x.member, { T: c.T, C: c.C, homedir: x.s.homedir });
+    if (kind === "kept") {
+      await approve();
+      assert.equal(refOf(x.s.repo, "main"), c.C);
+    } else {
+      await refusal(approve, "land_blocked", /main is checked out in .*repo, and lib\/new\.js exists there untracked or ignored, where the landing adds lib\/new\.js\. Nothing was moved/);
+      assert.equal(refOf(x.s.repo, "main"), c.T);
+    }
+    assert.equal(fs.readFileSync(mine, "utf8"), "mine\n", `${kind}: never deleted or stashed`);
+  }
+});
+
+test("final records are checked strictly: a malformed one, or one of another action, changes nothing", async (t) => {
+  for (const bad of ["{}", "other"]) {
+    const x = await landingSetup(t);
+    const crash = () => {
+      throw new Error("crash");
+    };
+    await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMoving: crash }), /crash/);
+    const final = path.join(x.s.home, "teams", "n4", "landings", "L1", "final.json");
+    const before = readState(x.s.home, "n4");
+    const a = before.actions[0];
+    const rec = { version: 1, id: "L1", digest: "e".repeat(64), member: a.member, state: "finished", route: "terminal", decision: null, reason: null, observed: null, intent: { target: "main", T: x.c.T, H: x.c.H, C: x.c.C, mode: { kind: "ref" } }, result: null, at: new Date().toISOString() };
+    fs.writeFileSync(final, bad === "{}" ? "{}" : JSON.stringify(rec), { mode: 0o600 });
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "action_changed", bad === "{}" ? /is not a valid final record of a landing \(not the fields/ : /the final record of the landing L1 does not match that action/);
+    assert.deepEqual(readState(x.s.home, "n4"), before, "nothing changed");
+  }
+});
+
+test("--abandon ends a landing with an unknown outcome for good: an abandoned record first, nothing moved or removed, and a replay of the old action never runs", async (t) => {
+  const x = await checkoutSetup(t);
+  await assert.rejects(x.approve({ afterMoving: () => { throw new Error("crash"); } }), /crash/);
+  // Only an action whose outcome is unknown; never one that has not started or has landed.
+  await refusal(() => teamLandAbandon(x.s.home, x.member, "L9"), "no_action");
+  const stale = readState(x.s.home, "n4");
+  const asked = [];
+  const lines = [];
+  const cli = (answer) =>
+    teamCommand({ args: ["land", x.member, "--abandon", "L1"], home: x.s.home, homedir: x.s.homedir, env: {}, isTTY: true, out: (l) => lines.push(l), warn: () => {}, fail: (m) => { throw Object.assign(new Error(m), { code: "cli" }); }, deps: { ask: async (q) => (asked.push(q), answer) } });
+  await assert.rejects(teamCommand({ args: ["land", x.member, "--abandon", "L1"], home: x.s.home, homedir: x.s.homedir, env: {}, isTTY: false, out: () => {}, warn: () => {}, fail: (m) => { throw new Error(m); } }), /abandoning a landing is the owner's step/);
+  await assert.rejects(cli("no"), /not confirmed; nothing was changed/);
+  assert.equal(readState(x.s.home, "n4").actions[0].state, "moving");
+  await cli("abandon");
+  assert.match(lines[0], new RegExp(`^The landing L1 \\(${x.c.C} on main at ${x.c.T}\\) has an unknown outcome\\. What hoptell sees now: main is at ${x.c.T} \\(T, where it was\\); checked out in .*repo, on it and clean\\.$`));
+  assert.match(lines[1], /does not infer from this whether or how far the earlier move happened.*hoptell team land --discard then drops the candidate and keeps the worktree/);
+  assert.deepEqual(asked, ["Abandon L1? Type abandon to confirm: ", "Abandon L1? Type abandon to confirm: "]);
+  const tomb = readTombstone(x.s.home, "n4", "L1");
+  assert.equal(tomb.state, "abandoned");
+  assert.match(tomb.reason, /abandoned by the owner while moving; the outcome of the earlier move was not inferred/);
+  assert.match(tomb.observed, /main is at \w+ \(T, where it was\)/);
+  assert.deepEqual(tomb.intent, { target: "main", T: x.c.T, H: x.c.H, C: x.c.C, mode: stale.actions[0] && JSON.parse(fs.readFileSync(path.join(x.s.home, "teams", "n4", "landings", "L1", "manifest.json"), "utf8")).mode });
+  const st = readState(x.s.home, "n4");
+  assert.deepEqual([st.actions, st.landing, st.landed.length, st.candidate.C], [[], null, 0, x.c.C], "no landing recorded; the candidate stays");
+  assert.equal(refOf(x.s.repo, "main"), x.c.T, "nothing moved");
+  assert.equal(refOf(x.s.repo, x.landRef), x.c.C);
+  assert.ok(fs.existsSync(x.rec.path), "the worktree stays");
+  // A replay of the old action (the state from before, written back): its final record ends it
+  // again, and the next decision is a new action.
+  writeTeam(x.s.home, stale);
+  const r = await x.approve();
+  assert.equal(r.id, "L2");
+  assert.equal(readTombstone(x.s.home, "n4", "L1").state, "abandoned");
+  assert.equal(readState(x.s.home, "n4").landed.length, 1);
+});
+
+test("an orphaned manifest (a run stopped right after making it) is reported and never acted on; its id is not reused", async (t) => {
+  const x = await checkoutSetup(t);
+  let calls = 0;
+  const save = (home, st) => {
+    if (++calls === 1) throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    fs.writeFileSync(teamPaths(home, st.team).state, JSON.stringify(st), { mode: 0o600 });
+  };
+  await assert.rejects(x.approve({ save }), /ENOSPC/);
+  assert.ok(fs.existsSync(path.join(x.s.home, "teams", "n4", "landings", "L1", "manifest.json")));
+  assert.deepEqual(readState(x.s.home, "n4").actions, []);
+  assert.deepEqual((await teamStatus(x.s.home, "n4")).orphans, ["L1"]);
+  const lines = [];
+  await teamCommand({ args: ["status", "n4"], home: x.s.home, homedir: x.s.homedir, env: {}, out: (l) => lines.push(l), warn: () => {}, fail: (m) => { throw new Error(m); } });
+  assert.ok(lines.some((l) => /orphaned landing L1: a manifest was made but no decision was recorded \(a run stopped\); nothing acts on it, and the id is not used again/.test(l)), lines.join("\n"));
+  const r = await x.approve();
+  assert.equal(r.id, "L2");
+  assert.equal(fs.existsSync(path.join(x.s.home, "teams", "n4", "landings", "L1", "final.json")), false, "the orphan stays as it was");
+});
+
+test("--abandon is reached through the CLI entry point: the flag and its value pass the option check, and the owner's terminal check answers", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-abandon-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, "empty.env"), "");
+  const env = { ...process.env, HOPTELL_HOME: home, HOPTELL_ENV: path.join(home, "empty.env"), XDG_CONFIG_HOME: path.join(home, "config"), HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-pass-040" };
+  delete env.HOPTELL_NAME;
+  const r = spawnSync(process.execPath, [BIN, "team", "land", "dana-n4-impl-1", "--abandon", "L1"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /abandoning a landing is the owner's step: run hoptell team land --abandon in a terminal/);
+  assert.doesNotMatch(r.stderr, /unknown option/);
+  const help = spawnSync(process.execPath, [BIN, "help", "team"], { env, encoding: "utf8" });
+  assert.match(help.stdout, /--abandon <id>/);
+  assert.match(help.stdout, /hoptell team approve <id> \[--show-diff\]/);
+  // The lead's new flags pass the option check too and reach the command.
+  const run = (...a) => spawnSync(process.execPath, [BIN, "team", ...a], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  for (const a of [["evidence", "dana-n4-impl-1", "--candidate", "a".repeat(40), "--tests", "pass", "--command", "npm test", "--command", "npm run lint", "--report", "r.txt"], ["land", "dana-n4-impl-1", "--request-approval"], ["land", "dana-n4-impl-1", "--target", "main", "-m", "x", "--prepare"]]) {
+    const r2 = run(...a);
+    assert.equal(r2.status, 1, r2.stderr);
+    assert.match(r2.stderr, /dana-n4-impl-1 is in no active team/);
+  }
+  const r3 = run("approve", "L1", "--show-diff");
+  assert.match(r3.stderr, /no landing L1 in this hoptell home/);
+});
+
+test("tracked paths that the candidate replaces are not obstructions: a file that becomes a folder, a folder that becomes a file; a folder holding untracked files still blocks", async (t) => {
+  for (const kind of ["file-to-folder", "folder-to-file", "folder-with-junk"]) {
+    const x = await landingSetup(t, "n4", { candidate: false });
+    fs.rmSync(path.join(x.rec.path, kind === "file-to-folder" ? "README.md" : "lib"), { recursive: true });
+    if (kind === "file-to-folder") {
+      fs.mkdirSync(path.join(x.rec.path, "README.md"));
+      fs.writeFileSync(path.join(x.rec.path, "README.md", "a.txt"), "a\n");
+    } else {
+      fs.writeFileSync(path.join(x.rec.path, "lib"), "now a file\n");
+    }
+    await commitWorktree(x.s.home, x.member, { message: kind });
+    const c = await teamLandCandidate(x.s.home, x.member, { target: "main", message: "Land", homedir: x.s.homedir });
+    git(x.s.repo, "checkout", "-q", "main");
+    if (kind === "folder-with-junk") fs.writeFileSync(path.join(x.s.repo, "lib", "junk.txt"), "mine\n");
+    const approve = () => teamLandApprove(x.s.home, x.member, { T: c.T, C: c.C, homedir: x.s.homedir });
+    if (kind === "folder-with-junk") {
+      await refusal(approve, "land_blocked", /lib\/junk\.txt exists there untracked or ignored, in lib, which the landing replaces by a file\. Nothing was moved/);
+      assert.equal(refOf(x.s.repo, "main"), c.T);
+      assert.equal(fs.readFileSync(path.join(x.s.repo, "lib", "junk.txt"), "utf8"), "mine\n");
+    } else {
+      await approve();
+      assert.equal(refOf(x.s.repo, "main"), c.C, kind);
+      assert.equal(git(x.s.repo, "status", "--porcelain"), "", kind);
+    }
+  }
+});
+
+test("a final record must carry the action's complete intent from its manifest: a changed H or mode changes nothing", async (t) => {
+  for (const change of ["H", "mode"]) {
+    const x = await landingSetup(t);
+    await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { afterMoving: () => { throw new Error("crash"); } }), /crash/);
+    const st = readState(x.s.home, "n4");
+    const a = st.actions[0];
+    const m = JSON.parse(fs.readFileSync(path.join(x.s.home, "teams", "n4", "landings", "L1", "manifest.json"), "utf8"));
+    const intent = { target: m.target, T: m.T, H: change === "H" ? x.c.T : m.H, C: m.C, mode: change === "mode" ? { kind: "checkout", worktree: x.s.repo, gitDir: path.join(x.s.repo, ".git") } : m.mode };
+    const rec = { version: 1, id: "L1", digest: a.digest, member: a.member, state: "finished", route: a.route, decision: a.decision, reason: null, observed: null, intent, result: null, at: new Date().toISOString() };
+    const final = path.join(x.s.home, "teams", "n4", "landings", "L1", "final.json");
+    fs.writeFileSync(final, JSON.stringify(rec), { mode: 0o600 });
+    const before = fs.readFileSync(teamPaths(x.s.home, "n4").state);
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "action_changed", /the final record of the landing L1 does not match that action/);
+    assert.deepEqual(fs.readFileSync(teamPaths(x.s.home, "n4").state), before, `${change}: the state and its journal are byte-identical`);
+    // A second write of a final record with another intent is refused too.
+    await refusal(() => teamLandAbandon(x.s.home, x.member, "L1"), "action_changed");
+    assert.deepEqual(fs.readFileSync(teamPaths(x.s.home, "n4").state), before);
+  }
 });
 
 test("a member belongs to its one active team: a team that is down keeps only its history; two active teams are refused", async (t) => {
@@ -956,9 +1471,10 @@ test("landing recovery: the journal stays after a move that happened, a recorded
   // same command finishes with exactly one landed row.
   {
     const x = await landingSetup(t);
-    await assert.rejects(finish(x, { afterMove: crash }), (e) => e.landOutcome === "moved");
+    await assert.rejects(finish(x, { afterMove: crash }), /crash/);
     assert.equal(refOf(x.s.repo, "main"), x.c.C);
     assert.equal(readState(x.s.home, "n4").landing.phase, "intent");
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "moving");
     await finish(x);
     const st = readState(x.s.home, "n4");
     assert.equal(st.landed.length, 1);
@@ -1029,8 +1545,9 @@ test("a pending landing survives team down and blocks team up until it is finish
       const r = await teamDown(x.s.home, "n4", { keepWorktrees }, { endSession: () => false, sleep: async () => {}, wait: 0 });
       const label = `${phase}, keepWorktrees ${keepWorktrees}`;
       assert.equal(r.down, true, label);
-      assert.equal(r.pending, `a landing is pending: hoptell team land ${x.member} --approve ${x.c.T} ${x.c.C} finishes it`, label);
-      assert.match(r.report.find((y) => y.name === x.member).worktree, /kept \(a landing is pending: hoptell team land .* finishes it\)/, label);
+      const pending = `the landing L1 is ${phase === "intent" ? "moving" : "landed, its cleanup unfinished"}: hoptell team land ${x.member} --approve ${x.c.T} ${x.c.C} finishes it`;
+      assert.equal(r.pending, pending, label);
+      assert.ok(r.report.find((y) => y.name === x.member).worktree.includes(`kept (${pending})`), label);
       assert.ok(fs.existsSync(x.rec.path), label);
       assert.ok(readWorktreeRecord(x.s.home, x.member).rec, label);
       const st = readState(x.s.home, "n4");
@@ -1046,8 +1563,8 @@ test("a pending landing survives team down and blocks team up until it is finish
         fs.writeFileSync(file, JSON.stringify(teamDoc({ team, members: [memberOf({ name: x.member })] })));
         return teamUp(file, { home: x.s.home, homedir: x.s.homedir, env: { PATH: f.PATH }, dryRun: true }, { out: () => {}, warn: () => {} });
       };
-      await refusal(() => up("n4"), "landing_pending", /team n4 still has dana-n4-impl-1's landing: a landing is pending: hoptell team land .* --approve/);
-      await refusal(() => up("n9"), "landing_pending", /dana-n4-impl-1 has a landing in team n4 that is not resolved \(a landing is pending/);
+      await refusal(() => up("n4"), "landing_pending", /team n4 still has dana-n4-impl-1's landing: the landing L1 is .*: hoptell team land .* --approve/);
+      await refusal(() => up("n9"), "landing_pending", /dana-n4-impl-1 has a landing in team n4 that is not resolved \(the landing L1 is/);
       // team land finds the member in the team that is down, and finishes.
       await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir });
       const after = readState(x.s.home, "n4");
@@ -1126,6 +1643,10 @@ if (action === "warn0") { fs.writeSync(2, "warning: ignoring broken ref injected
 if (action === "garbage0") { fs.writeSync(1, "not an answer\\n"); process.exit(0); }
 if (action === "other0") { fs.writeSync(1, "${"1".repeat(40)} refs/heads/other \\n"); process.exit(0); }
 if (action === "quiet0") process.exit(0);
+// A merge that changed the checkout and was stopped before its ref update; one that answers
+// "Already up to date" without doing anything.
+if (action === "dirtyKill") { fs.writeFileSync(require("path").join(process.cwd(), "lib", "x.js"), "half\\n"); process.kill(process.pid, "SIGKILL"); }
+if (action === "uptodate0") { fs.writeSync(1, "Already up to date.\\n"); process.exit(0); }
 const r = spawnSync(${JSON.stringify(findGit())}, process.argv.slice(2), { stdio: "inherit" });
 if (action === "killAfter") process.kill(process.pid, "SIGKILL");
 process.exit(r.status ?? 1);
@@ -1150,7 +1671,7 @@ const failingSave = (n) => {
 };
 const FOR_EACH = "for-each-ref --format=%(objectname) %(refname) %(symref) ";
 
-test("an update or readback that does not answer cleanly is never taken for \"not moved\": the journal stays and the same command finishes", async (t) => {
+test("an update or readback that does not answer cleanly is never taken for \"not moved\": the action is blocked with its journal, and --confirm reconciles it", async (t) => {
   for (const readback of ["exit128", "kill"]) {
     const x = await landingSetup(t);
     const g = faultyGit(x.s.root);
@@ -1158,14 +1679,16 @@ test("an update or readback that does not answer cleanly is never taken for \"no
     g.set([{ match: "update-ref --no-deref -m hoptell team land refs/heads/main", nth: 1, action: "killAfter" }, { match: `${FOR_EACH}refs/heads/main`, nth: 2, action: readback }]);
     await assert.rejects(teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { git: g.git }), (e) => {
       assert.equal(e.code, "land_unknown", e.message);
-      assert.equal(e.landOutcome, "unknown");
-      assert.match(e.message, /git update-ref ended with stopped by a signal, and main could not be read \(git for-each-ref ended with .*\); whether it moved is unknown/);
+      assert.match(e.message, /^git update-ref ended with stopped by a signal, and main could not be read \(git for-each-ref ended with .*\)\. Whether main moved is unknown, so the landing L1 is blocked: hoptell does not move it again and resets nothing\. Check main; once main is at \w+, record it with hoptell team land dana-n4-impl-1 --confirm /);
       return true;
     });
     assert.equal(refOf(x.s.repo, "main"), x.c.C, "the ref was written");
     assert.equal(readState(x.s.home, "n4").landing.phase, "intent", readback);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, "blocked");
     g.set([]);
-    await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { git: g.git });
+    // --approve does not touch a blocked action; the owner's --confirm reconciles it.
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { git: g.git }), "land_blocked", /the landing L1 is blocked \(git update-ref ended with stopped by a signal; .*\); hoptell does not move main again under it/);
+    await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, confirm: true }, { git: g.git });
     const st = readState(x.s.home, "n4");
     assert.equal(st.landed.length, 1);
     assert.equal(st.landing, null);
@@ -1186,9 +1709,9 @@ test("a candidate branch that cannot be read is not absence: a landed journal, a
     await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { git: g.git }), "ref_unreadable", /team\/n4\/land could not be read \(git for-each-ref ended with /);
     assert.equal(readState(x.s.home, "n4").landing.phase, "landed");
     assert.ok(readWorktreeRecord(x.s.home, x.member).rec);
-    // The deletion fails and its readback (the third read: the check, the read before the
-    // deletion, the readback) fails too: refused before the registration goes.
-    g.set([{ match: `update-ref --no-deref -d ${x.landRef}`, nth: 1, action: "exit128" }, { match: `${FOR_EACH}${x.landRef}`, nth: 3, action }]);
+    // The deletion fails and its readback (the second read: a landed action reads the branch only
+    // before the deletion and back after it) fails too: refused before the registration goes.
+    g.set([{ match: `update-ref --no-deref -d ${x.landRef}`, nth: 1, action: "exit128" }, { match: `${FOR_EACH}${x.landRef}`, nth: 2, action }]);
     await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }, { git: g.git }), "ref_unreadable", /git could not delete team\/n4\/land \(status 128: fatal: injected failure\) and it could not be read back/);
     assert.equal(refOf(x.s.repo, x.landRef), x.c.C);
     assert.ok(readWorktreeRecord(x.s.home, x.member).rec, "the registration stays");
@@ -1903,4 +2426,530 @@ test("team up's lead check only warns: online says nothing, offline and a failed
   assert.deepEqual(said, Array(2).fill("warning: could not check whether the lead dana-lead is online at the relay; members reach it only while a session is connected under that name"));
   await leadCheck("dana-lead", { warn }); // no check available: nothing
   assert.equal(said.length, 2);
+});
+
+// ---- the lead prepares, the owner decides (design 8 addendum, option 2) ----------------------------
+
+/**
+ * landingSetup without a candidate, with a reviewer in the team: the lead prepares the candidate
+ * (--prepare), and the helpers record evidence, a review and a request.
+ */
+async function preparedSetup(t, { checkout = true, change = null } = {}) {
+  const x = await landingSetup(t, "n4", { candidate: false });
+  const st = readState(x.s.home, "n4");
+  st.members.push(memberRow("dana-n4-rev-1", "reviewer", null));
+  writeTeam(x.s.home, st);
+  if (change) {
+    change(x.rec.path);
+    await commitWorktree(x.s.home, x.member, { message: "more" });
+  }
+  if (checkout) git(x.s.repo, "checkout", "-q", "main");
+  const report = path.join(x.s.root, "report.txt");
+  fs.writeFileSync(report, "ok 12 tests\n");
+  const c = await teamLandPrepare(x.s.home, x.member, { target: "main", message: "Land the change", homedir: x.s.homedir });
+  const home = x.s.home;
+  const review = async (...verdicts) => {
+    const r = await reviewRequest(home, { team: "n4", base: c.T, head: c.C }, { send: async () => "sent" });
+    for (const v of verdicts) await reviewVerdict(home, { team: "n4", id: r.review.id, reviewer: "dana-n4-rev-1", verdict: v });
+    return r.review.id;
+  };
+  const evidence = (more = {}) => teamEvidence(home, x.member, { C: c.C, tests: "pass", commands: ["npm test"], report, ...more });
+  const request = (deps = {}) => teamLandRequest(home, x.member, deps);
+  const cli = async (args, { tty = false, answer = "land", deps = {}, env = {}, warned = null } = {}) => {
+    const lines = [];
+    try {
+      await teamCommand({ args, home, homedir: x.s.homedir, env, isTTY: tty, out: (l) => lines.push(l), warn: (l) => warned?.push(l), fail: (m) => { throw Object.assign(new Error(m), { code: "cli" }); }, deps: { ask: async () => answer, ...deps } });
+    } catch (e) {
+      e.lines = lines;
+      throw e;
+    }
+    return lines;
+  };
+  return { ...x, c, report, review, evidence, request, cli };
+}
+
+test("the lead prepares, records the tests and asks; the owner decides L<n> in one visit with team approve", async (t) => {
+  const x = await preparedSetup(t);
+  // --prepare stopped the member (never started here) and made the signed candidate.
+  assert.match(git(x.s.repo, "log", "-1", "--format=%G? %s", x.c.C), /^[GU] Land the change$/);
+  assert.equal(x.c.stopped, "not started");
+  // What --request-approval needs: evidence for exactly C, then a review that every reviewer answered.
+  await refusal(() => x.request(), "no_evidence", /no test evidence is recorded for the candidate \w+; record it with hoptell team evidence dana-n4-impl-1 --candidate \w+ --tests pass\|fail --command <command> --report <file>/);
+  await refusal(() => x.evidence({ C: x.c.T }), "not_candidate", /is not dana-n4-impl-1's current candidate/);
+  await refusal(() => x.evidence({ tests: "maybe" }), "bad_tests");
+  await refusal(() => x.evidence({ commands: [] }), "bad_command");
+  fs.writeFileSync(path.join(x.s.root, "bin.txt"), Buffer.from([0x61, 0, 0x62]));
+  await refusal(() => x.evidence({ report: path.join(x.s.root, "bin.txt") }), "bad_report", /is not UTF-8 text/);
+  fs.writeFileSync(path.join(x.s.root, "big.txt"), "x".repeat(64 * 1024 + 1));
+  await refusal(() => x.evidence({ report: path.join(x.s.root, "big.txt") }), "bad_report", /larger than 65536 bytes/);
+  const lines = await x.cli(["evidence", x.member, "--candidate", x.c.C, "--tests", "pass", "--command", "npm test", "--command", "npm run lint", "--report", x.report]);
+  assert.match(lines.at(-1), /^Recorded for dana-n4-impl-1's candidate \w+: tests pass \(2 commands\), report \w{12} \(12 bytes\)\.$/);
+  await refusal(() => x.request(), "no_review", /hoptell review request --team n4 --base \w+ --head \w+/);
+  const r = await reviewRequest(x.s.home, { team: "n4", base: x.c.T, head: x.c.C }, { send: async () => "sent" });
+  await refusal(() => x.request(), "review_incomplete", /the review rv-\w+ of the candidate waits for dana-n4-rev-1/);
+  await reviewVerdict(x.s.home, { team: "n4", id: r.review.id, reviewer: "dana-n4-rev-1", verdict: "approve" });
+  const asked = await x.cli(["land", x.member, "--request-approval"]);
+  assert.match(asked[0], /^Landing L1: \w+ on main \(at \w+\), checked out in .*repo; tests pass, review rv-\w+: dana-n4-rev-1 approve\.$/);
+  assert.match(asked[1], /^The owner decides it in a terminal before .*: hoptell team approve L1$/);
+  const st = readState(x.s.home, "n4");
+  assert.deepEqual(st.actions.map((a) => [a.id, a.state, a.route]), [["L1", "ready", null]]);
+  assert.match((await x.cli(["status", "n4"])).join("\n"), /the landing L1 waits for the owner's decision: hoptell team approve L1 \(in a terminal\)/);
+  // The lead cannot decide it: the evidence is shown, then the owner's step refuses.
+  const shown = await x.cli(["approve", "L1"]).catch((e) => e);
+  assert.match(shown.message, /landing is the owner's step: run hoptell team approve L1 in a terminal/);
+  const view = shown.lines.join("\n");
+  assert.match(view, /^Landing L1 of dana-n4-impl-1 \(team n4\) in .*repo$/m);
+  assert.match(view, /^ {2}target {5}main, checked out in .*repo \(fast-forwarded there\)$/m);
+  assert.match(view, /^ {2}subject {4}Land the change$/m);
+  assert.match(view, /^ {2}tests {6}pass \(the lead's report \w{12}, 12 bytes\): npm test; npm run lint$/m);
+  assert.match(view, /^ {2}patch {6}\d+ bytes: hoptell team approve L1 --show-diff prints it$/m);
+  assert.match(view, /lib\/x\.js \| 2 \+-/);
+  assert.match(view, /The test result and the verdicts come from agents: they are claims, not proof\./);
+  assert.doesNotMatch(view, /You may still land it/);
+  assert.equal(readState(x.s.home, "n4").actions[0].state, "ready", "showing decides nothing");
+  const diff = (await x.cli(["approve", "L1", "--show-diff"])).join("\n");
+  assert.match(diff, /^diff --git a\/lib\/x\.js b\/lib\/x\.js$/m);
+  assert.match(diff, /^\+2$/m);
+  // Not confirmed: nothing moves.
+  await assert.rejects(x.cli(["approve", "L1"], { tty: true, answer: "no" }), /not confirmed; nothing was landed/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  // Typed land: decided and applied in the same command.
+  const landed = await x.cli(["approve", "L1"], { tty: true });
+  assert.match(landed.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  assert.equal(git(x.s.repo, "status", "--porcelain", "--untracked-files=no"), "");
+  const end = readTombstone(x.s.home, "n4", "L1");
+  assert.deepEqual([end.state, end.route], ["finished", "terminal"]);
+  const after = readState(x.s.home, "n4");
+  assert.deepEqual([after.actions, after.candidate, after.evidence, after.landed.length], [[], null, null, 1]);
+  await refusal(() => teamApproveView(x.s.home, "L1"), "action_gone", /the landing L1 already ended \(finished\)/);
+});
+
+test("evidence and requests are for exactly one candidate: new evidence, a later verdict or a new request supersede a decision that did not start; --discard clears the evidence", async (t) => {
+  const x = await preparedSetup(t, { checkout: false });
+  await x.evidence();
+  const rv = await x.review("approve");
+  const one = await x.request();
+  assert.deepEqual([one.id, one.mode.kind], ["L1", "ref"]);
+  // A new request supersedes the earlier one.
+  const two = await x.request();
+  assert.deepEqual([two.id, two.superseded], ["L2", "L1"]);
+  assert.match(readTombstone(x.s.home, "n4", "L1").reason, /a new approval was requested/);
+  // New evidence for the same C supersedes the decision waiting for the owner.
+  const ev = await x.evidence({ tests: "fail" });
+  assert.equal(ev.superseded, "L2");
+  assert.equal(readTombstone(x.s.home, "n4", "L2").state, "superseded");
+  // A later verdict of the review frozen in a request supersedes it.
+  const three = await x.request();
+  assert.equal(three.evidence.tests.result, "fail");
+  await reviewVerdict(x.s.home, { team: "n4", id: rv, reviewer: "dana-n4-rev-1", verdict: "changes" });
+  assert.match(readTombstone(x.s.home, "n4", three.id).reason, /a later verdict \(dana-n4-rev-1 changes\)/);
+  assert.deepEqual(readState(x.s.home, "n4").actions, []);
+  await refusal(() => teamApproveView(x.s.home, three.id), "action_gone", /already ended \(superseded: a later verdict/);
+  // The frozen evidence is what the manifest holds, whatever the report file says now.
+  fs.writeFileSync(x.report, "changed afterwards\n");
+  const four = await x.request();
+  assert.equal(four.evidence.tests.report, "ok 12 tests\n");
+  assert.equal(four.evidence.review.verdicts[0].verdict, "changes");
+  // --discard drops the candidate, its evidence and the waiting decision; a new --prepare starts clean.
+  await teamLandDiscard(x.s.home, x.member);
+  const st = readState(x.s.home, "n4");
+  assert.deepEqual([st.candidate, st.evidence, st.actions], [null, null, []]);
+  await refusal(() => teamEvidence(x.s.home, x.member, { C: x.c.C, tests: "pass", commands: ["npm test"], report: x.report }), "no_candidate", /prepare one with hoptell team land dana-n4-impl-1 --target <branch> -m <message> --prepare/);
+  // The lead prepares again, without a terminal; the text says what the signature is not.
+  const again = await x.cli(["land", x.member, "--target", "main", "-m", "Again", "--prepare"]);
+  assert.equal(again[0], "dana-n4-impl-1: not started.");
+  assert.match(again.join("\n"), /The signature shows the candidate was made with your key; it is not your decision\./);
+  assert.match(again.join("\n"), /then ask the owner: hoptell team land dana-n4-impl-1 --request-approval$/);
+  assert.equal(readState(x.s.home, "n4").evidence, null);
+  // Without --prepare it stays the owner's step on a terminal.
+  await assert.rejects(x.cli(["land", x.member, "--target", "main", "-m", "Again"]), /landing is the owner's step: run hoptell team land in a terminal/);
+  // An id in two teams refuses.
+  fs.mkdirSync(path.join(x.s.home, "teams", "n5", "landings", four.id), { recursive: true });
+  await refusal(() => teamApproveView(x.s.home, four.id), "ambiguous_action", /exists in several teams \(n4, n5\)/);
+});
+
+test("an expired request lands nothing: team approve says what to do, and a new request works (acceptance row 2)", async (t) => {
+  const x = await preparedSetup(t);
+  await x.evidence();
+  await x.review("approve");
+  let now = Date.now();
+  const clock = { now: () => now };
+  const one = await x.request(clock);
+  // Expired before it is shown: ended (its tombstone), with the lead's command, nothing a shell would run as a comment.
+  now += 16 * MIN;
+  await refusal(() => teamApproveView(x.s.home, one.id, clock), "action_expired", new RegExp(`^L1 expired at ${one.expires.replace(/[.]/g, "\\.")}; nothing was moved\\. Ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again$`));
+  assert.equal(readTombstone(x.s.home, "n4", "L1").state, "expired");
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  // Expired between the view and the decision: the same text, nothing moved, no new action made.
+  const two = await x.request(clock);
+  const view = await teamApproveView(x.s.home, two.id, clock);
+  now += 16 * MIN;
+  await refusal(() => teamLandApprove(x.s.home, x.member, { T: view.manifest.T, C: view.manifest.C, homedir: x.s.homedir, actionId: two.id }, clock), "action_expired", /^L2 expired at .*; nothing was moved\. Ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again$/);
+  assert.deepEqual(readState(x.s.home, "n4").actions, []);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.equal(readTombstone(x.s.home, "n4", "L2").state, "expired");
+  // A decision for an action that is gone does not land another one.
+  await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, actionId: "L2" }), "action_gone");
+  // A new request lands.
+  const three = await x.request();
+  const r = await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, actionId: three.id });
+  assert.deepEqual([r.id, refOf(x.s.repo, "main")], ["L3", x.c.C]);
+});
+
+test("an oversize patch stays marked unavailable, a patch full of escapes too; failed tests and \"changes\" are shown apart from hard safety refusals (acceptance row 3)", async (t) => {
+  // Over the inline bound: a 200 KiB file.
+  {
+    const x = await preparedSetup(t, { change: (wt) => fs.writeFileSync(path.join(wt, "big.txt"), `${"0123456789abcdef".repeat(4096)}\n`.repeat(3)) });
+    await x.evidence({ tests: "fail" });
+    await x.review("changes");
+    const r = await x.request();
+    assert.deepEqual([r.evidence.patch.oversize, r.evidence.patch.text, r.evidence.patch.encoding], [true, null, null]);
+    assert.ok(r.evidence.patch.bytes > 64 * 1024);
+    assert.match(r.evidence.patch.digest, /^[0-9a-f]{64}$/);
+    const view = (await x.cli(["approve", r.id]).catch((e) => e)).lines.join("\n");
+    assert.match(view, /^ {2}patch {6}\d+ bytes: too large to show here; review it on the Mac \(hoptell team approve L1 --show-diff says how\)$/m);
+    assert.match(view, /^ {2}tests {6}FAILED /m);
+    assert.match(view, /^Note: the lead's tests failed, and dana-n4-rev-1 asked for changes\. You may still land it\.$/m);
+    const how = (await x.cli(["approve", r.id, "--show-diff"])).join("\n");
+    assert.match(how, /^The patch of L1 \(\d+ bytes\) is too large to keep in its record, so it is not stored inline\. The record: .*landings\/L1\/manifest\.json\. View it with: git -C .*repo diff --no-ext-diff --no-textconv \w+ \w+$/);
+    // A hard safety failure is a refusal, not a note: a dirty checkout blocks before the move. The
+    // decision came by team approve, so the text asks for a new request, never the manual --approve.
+    fs.writeFileSync(path.join(x.s.repo, "lib", "x.js"), "dirty\n");
+    const dirty = await x.cli(["approve", r.id], { tty: true }).catch((e) => e);
+    assert.match(dirty.message, /main is checked out in .*repo, and it has 1 uncommitted change: lib\/x\.js\. Nothing was moved\. Fix that\. Then ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again, and approve the new id; hoptell then moves it itself$/);
+    assert.doesNotMatch(dirty.message, /--approve/);
+    assert.equal(refOf(x.s.repo, "main"), x.c.T);
+    assert.equal(readTombstone(x.s.home, "n4", r.id).state, "blocked");
+    git(x.s.repo, "checkout", "--", "lib/x.js");
+    // Two checkouts of the target, the same way.
+    const again = await x.request();
+    const second = path.join(x.s.root, "second");
+    git(x.s.repo, "worktree", "add", "-q", "--force", second, "main");
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, actionId: again.id }), "land_blocked", /main is checked out in 2 worktrees \(.*\); hoptell moves a checked-out target only when exactly one worktree has it\. Nothing was moved\. Switch all but one to another branch\. Then ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again, and approve the new id$/);
+    git(x.s.repo, "worktree", "remove", second);
+    // The manual route keeps its own command.
+    fs.writeFileSync(path.join(x.s.repo, "lib", "x.js"), "dirty\n");
+    await refusal(() => teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir }), "land_blocked", /Nothing was moved\. Fix that, then run the same hoptell team land dana-n4-impl-1 --approve \w+ \w+ again; hoptell then moves it itself$/);
+    assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  }
+  // Under the inline bound, but its canonical JSON is not: control characters escape six-fold.
+  {
+    const x = await preparedSetup(t, { checkout: false, change: (wt) => fs.writeFileSync(path.join(wt, "ctl.txt"), `${"\u0001".repeat(100)}\n`.repeat(300)) });
+    await x.evidence();
+    await x.review("approve");
+    const r = await x.request();
+    assert.ok(r.evidence.patch.bytes < 64 * 1024, "the raw patch fits the inline bound");
+    assert.deepEqual([r.evidence.patch.oversize, r.evidence.patch.text], [true, null]);
+    const m = fs.readFileSync(path.join(x.s.home, "teams", "n4", "landings", r.id, "manifest.json"));
+    assert.ok(m.length <= MANIFEST_FIT, `the manifest is ${m.length} bytes`);
+    // Landing does not depend on the patch being inline.
+    const done = await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir, actionId: r.id });
+    assert.equal(done.C, x.c.C);
+  }
+});
+
+test("the patch is streamed: one over the inline bound is counted and hashed whole, kept out of the record, and the owner route still lands", async (t) => {
+  const x = await preparedSetup(t, { checkout: false });
+  await x.evidence();
+  await x.review("approve");
+  // A small bound stands in for a patch of any size (one over git's output limit included).
+  const r = await x.request({ inlineMax: 100 });
+  const full = execFileSync("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--binary", "--full-index", x.c.T, x.c.C, "--"], { cwd: x.s.repo, env: gitEnv });
+  assert.ok(full.length > 100);
+  const p = r.evidence.patch;
+  assert.deepEqual([p.oversize, p.text, p.encoding, p.bytes, p.digest], [true, null, null, full.length, crypto.createHash("sha256").update(full).digest("hex")], "the digest and the size are of the complete patch");
+  assert.deepEqual(readState(x.s.home, "n4").actions.map((a) => [a.id, a.state]), [[r.id, "ready"]]);
+  const landed = await x.cli(["approve", r.id], { tty: true });
+  assert.match(landed.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  // At the bound it stays inline, whole.
+  const y = await preparedSetup(t, { checkout: false });
+  await y.evidence();
+  await y.review("approve");
+  const whole = execFileSync("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--binary", "--full-index", y.c.T, y.c.C, "--"], { cwd: y.s.repo, env: gitEnv });
+  const at = await y.request({ inlineMax: whole.length });
+  assert.deepEqual([at.evidence.patch.oversize, at.evidence.patch.text, at.evidence.patch.bytes], [false, whole.toString("utf8"), whole.length]);
+});
+
+// ---- the owner decides on Telegram (design 8 addendum, option 3; L3a) ------------------------------
+
+const REALM_ID = "0123456789abcdef0123456789abcdef";
+const OWN_MEMBER = `m_${"a".repeat(26)}`;
+
+/** A bridge connection as bin/hoptell.js gives it to teamCommand: what was sent, in order. */
+function fakeBridge(sent, { problem = null, failSend = false } = {}) {
+  return async () => (problem ? { problem } : { realm: REALM_ID, member: OWN_MEMBER, send: async (text) => (failSend ? Promise.reject(new Error("relay did not answer in time")) : sent.push(text)), close: () => {} });
+}
+
+/** The bridge's signed decision for `m` (the original bytes the lead's engine keeps). */
+function decisionFor(key, m, { decision = "land", decidedAt = Date.now() } = {}) {
+  const text = decisionText({ id: m.id, digest: crypto.createHash("sha256").update(canonicalize(m)).digest("hex"), decision, decidedAt, expiresAt: Date.parse(m.expires_at) });
+  return ownersig.signEnvelope({ kind: "landing_decision", realm: REALM_ID, from: "dana-owner", to: { name: m.recipient.lead, member: m.recipient.member }, q: crypto.randomUUID(), text, pairing: { id: "p_abcdefghijklmnop", at: 1_700_000_000_000 }, ts: decidedAt, nonce: crypto.randomBytes(32).toString("base64url") }, key);
+}
+/** What the lead's engine does with a verified decision: keep its bytes as the action's receipt. */
+const ingest = (home, bytes, me, opts) => ingestLandingDecision(home, ownersig.parseEnvelope(bytes).env, bytes, me, opts);
+
+async function telegramSetup(t, opts = {}) {
+  const x = await preparedSetup(t, opts);
+  await x.evidence();
+  await x.review("approve");
+  const key = ownersig.newKey();
+  ownersig.trustPin(x.s.home, ownersig.formatPin({ realm: REALM_ID, name: "dana-owner", pub: key.pub }));
+  const lead = readState(x.s.home, "n4").lead;
+  return { ...x, key, lead, me: { name: lead, member: OWN_MEMBER } };
+}
+
+test("a request sent to the owner's Telegram: the lead's session is its recipient; apply verifies the kept decision, lands, and reports back", async (t) => {
+  const x = await telegramSetup(t);
+  const sent = [];
+  const asked = await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
+  assert.match(asked[0], /^Landing L1: /);
+  assert.match(asked[1], /^Sent to the owner's Telegram\. The owner decides it there, or in a terminal \(hoptell team approve L1\), before .*\.$/);
+  assert.equal(asked[2], "When the owner's decision arrives in your inbox, run: hoptell team apply L1");
+  // One message: the manifest as made, with this realm, the own member and the lead's session.
+  assert.equal(sent.length, 1);
+  const req = parseLandingRequest(sent[0]);
+  const a = readState(x.s.home, "n4").actions[0];
+  assert.equal(req.digest, a.digest);
+  assert.deepEqual(req.manifest.recipient, { realm: REALM_ID, member: OWN_MEMBER, lead: x.lead });
+  assert.equal(req.manifest.realm, REALM_ID);
+  // No decision yet.
+  await assert.rejects(x.cli(["apply", "L1"]), /the owner has not decided L1 yet \(it expires at .*\); its decision arrives in this session's inbox/);
+  // A decision kept for another session, or for another digest, is not kept.
+  const other = structuredClone(req.manifest);
+  other.recipient.lead = "dana-elsewhere";
+  assert.match((await ingest(x.s.home, decisionFor(x.key, other), { name: "dana-elsewhere", member: OWN_MEMBER })).problem, /changed since it was made|not requested for this session/);
+  assert.match((await ingest(x.s.home, decisionFor(x.key, req.manifest), { name: "dana-elsewhere", member: OWN_MEMBER })).problem, /not requested for this session/);
+  // The first decision kept wins; the same bytes again are the same.
+  const bytes = decisionFor(x.key, req.manifest);
+  assert.deepEqual(await ingest(x.s.home, bytes, x.me), { id: "L1", team: "n4", decision: "land", result: "stored", kept: "land", by: "telegram" });
+  assert.equal((await ingest(x.s.home, bytes, x.me)).result, "same");
+  assert.deepEqual(((r) => [r.result, r.kept])(await ingest(x.s.home, decisionFor(x.key, req.manifest, { decision: "reject" }), x.me)), ["conflict", "land"]);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T, "keeping a decision moves nothing");
+  // A team member's session cannot apply it.
+  await assert.rejects(x.cli(["apply", "L1"], { env: { HOPTELL_TEAM_MEMBER: "implementer:n4" } }), /carrying out the owner's landing decision is the lead's step/);
+  const out = await x.cli(["apply", "L1"], { deps: { landingChannel: fakeBridge(sent) } });
+  assert.match(out.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.match(out.join("\n"), /^The owner's Telegram card shows it as landed\.$/m);
+  assert.equal(refOf(x.s.repo, "main"), x.c.C);
+  const end = readTombstone(x.s.home, "n4", "L1");
+  assert.deepEqual([end.state, end.route, end.decision], ["finished", "bridge", crypto.createHash("sha256").update(bytes).digest("hex")]);
+  assert.deepEqual(parseLandingStatus(sent.at(-1)), { digest: a.digest, state: "landed", text: "L1 landed on main." });
+  // Again: nothing more happens, and the card hears it again (a retry after "notice pending").
+  const again = await x.cli(["apply", "L1"], { deps: { landingChannel: fakeBridge(sent) } }).catch((e) => e);
+  assert.match(again.message, /the landing L1 already ended \(finished\); nothing was changed/);
+  assert.equal(sent.length, 3);
+});
+
+test("apply of a reject ends the action as rejected; a failed report is only 'notice pending'", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const sent = [];
+  await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
+  const m = parseLandingRequest(sent[0]).manifest;
+  await ingest(x.s.home, decisionFor(x.key, m, { decision: "reject", decidedAt: Date.now() }), x.me);
+  const warned = [];
+  const out = await x.cli(["apply", "L1"], { warned, deps: { landingChannel: fakeBridge(sent, { failSend: true }) } });
+  assert.deepEqual(out, ["The owner rejected L1 on Telegram; it ended as rejected. Nothing was moved."]);
+  assert.match(warned.join("\n"), /^notice pending: the owner's Telegram card was not updated \(relay did not answer in time\); run hoptell team apply L1 again to retry$/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  const end = readTombstone(x.s.home, "n4", "L1");
+  assert.deepEqual([end.state, end.route, end.reason], ["rejected", "bridge", "the owner rejected it on Telegram"]);
+  assert.deepEqual(readState(x.s.home, "n4").actions, []);
+});
+
+test("apply after the window: a decision tapped in time but applied too late ends the action as expired; nothing moves", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const sent = [];
+  await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
+  const m = parseLandingRequest(sent[0]).manifest;
+  // Tapped at minute 14: applied at minute 28 still works, at minute 30 it does not.
+  const tap = Date.parse(m.created_at) + 14 * 60_000;
+  await ingest(x.s.home, decisionFor(x.key, m, { decidedAt: tap }), x.me);
+  const late = await x.cli(["apply", "L1"], { deps: { now: () => tap + APPLY_WINDOW_MS + 1 } }).catch((e) => e);
+  assert.match(late.message, /^the owner's decision for L1 is older than 15 minutes; nothing was moved\. Run hoptell team land dana-n4-impl-1 --request-approval again$/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.equal(readTombstone(x.s.home, "n4", "L1").state, "expired");
+  // Within the window, past the request's own expiry: it lands.
+  const y = await telegramSetup(t, { checkout: false });
+  const sent2 = [];
+  await y.cli(["land", y.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent2) } });
+  const m2 = parseLandingRequest(sent2[0]).manifest;
+  const tap2 = Date.parse(m2.created_at) + 14 * 60_000;
+  await ingest(y.s.home, decisionFor(y.key, m2, { decidedAt: tap2 }), y.me);
+  const ok = await y.cli(["apply", "L1"], { deps: { now: () => tap2 + APPLY_WINDOW_MS - 1000 } });
+  assert.match(ok.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.equal(refOf(y.s.repo, "main"), y.c.C);
+});
+
+test("without a bridge that takes landing requests: the terminal route, with the update hint; a member's session cannot ask", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const warned = [];
+  const out = await x.cli(["land", x.member, "--request-approval"], { warned, deps: { landingChannel: fakeBridge([], { problem: "the bridge does not take landing requests" }) } });
+  assert.deepEqual(warned, ["landing approval needs a bridge update; use hoptell team approve in a terminal"]);
+  assert.match(out.at(-1), /^The owner decides it in a terminal before .*: hoptell team approve L1$/);
+  const st = readState(x.s.home, "n4");
+  assert.deepEqual(st.actions.map((a) => a.state), ["ready"], "the action stays ready");
+  await assert.rejects(x.cli(["apply", "L1"]), /the landing L1 was not sent to the owner's Telegram; the owner decides it in a terminal: hoptell team approve L1/);
+  // No owner channel at all: the terminal route, without the hint.
+  const quiet = [];
+  await x.cli(["land", x.member, "--request-approval"], { warned: quiet, deps: { landingChannel: async () => null } });
+  assert.deepEqual(quiet, []);
+  // A send that fails: the terminal route, and why.
+  const failed = [];
+  const f = await x.cli(["land", x.member, "--request-approval"], { warned: failed, deps: { landingChannel: fakeBridge([], { failSend: true }) } });
+  assert.match(failed[0], /^The request could not be sent to the owner's Telegram \(relay did not answer in time\)\.$/);
+  assert.match(f.at(-1), /^The owner decides it in a terminal before .*: hoptell team approve L3$/);
+  await assert.rejects(x.cli(["land", x.member, "--request-approval"], { env: { HOPTELL_TEAM_MEMBER: "implementer:n4" } }), /asking the owner for a landing is the lead's step/);
+});
+
+/** A request sent to Telegram, with the owner's decision on it already kept by the lead's engine. */
+async function decidedOnTelegram(t, decision, opts = { checkout: false }) {
+  const x = await telegramSetup(t, opts);
+  const sent = [];
+  await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
+  const m = parseLandingRequest(sent[0]).manifest;
+  const bytes = decisionFor(x.key, m, { decision });
+  return { ...x, sent, m, bytes, keep: () => ingest(x.s.home, bytes, x.me) };
+}
+const moves = (repo) => git(repo, "reflog", "show", "refs/heads/main", "--format=%gs").split("\n").filter((l) => l.includes("hoptell team land")).length;
+
+test("one decision per action: a Reject kept from Telegram stops team approve, an open terminal prompt and the manual --approve", async (t) => {
+  // Kept before the owner opens the terminal.
+  const a = await decidedOnTelegram(t, "reject");
+  await a.keep();
+  const shown = await a.cli(["approve", "L1"], { tty: true }).catch((e) => e);
+  assert.match(shown.message, /^the owner rejected L1 on Telegram, so it ended as rejected; nothing was moved\. A different decision needs a new landing: ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again$/);
+  assert.equal(refOf(a.s.repo, "main"), a.c.T);
+  assert.deepEqual(((e) => [e.state, e.route, e.decision])(readTombstone(a.s.home, "n4", "L1")), ["rejected", "bridge", crypto.createHash("sha256").update(a.bytes).digest("hex")]);
+  // Kept while the terminal prompt is open: the typed land finds it under the lock.
+  const b = await decidedOnTelegram(t, "reject");
+  const open = await b.cli(["approve", "L1"], { tty: true, deps: { ask: async () => (await b.keep(), "land") } }).catch((e) => e);
+  assert.match(open.message, /^the owner rejected L1 on Telegram, so it ended as rejected; nothing was moved/);
+  assert.equal(refOf(b.s.repo, "main"), b.c.T);
+  assert.equal(readTombstone(b.s.home, "n4", "L1").state, "rejected");
+  // The manual route on the same action: rejected too; deciding it again is a new action.
+  const c = await decidedOnTelegram(t, "reject");
+  await c.keep();
+  const manual = await c.cli(["land", c.member, "--approve", c.c.T, c.c.C], { tty: true }).catch((e) => e);
+  assert.match(manual.message, /^the owner rejected L1 on Telegram, so it ended as rejected; nothing was moved\. A different decision needs a new landing: run the same command again$/);
+  assert.equal(refOf(c.s.repo, "main"), c.c.T);
+  const again = await c.cli(["land", c.member, "--approve", c.c.T, c.c.C], { tty: true });
+  assert.match(again.join("\n"), /^Landed \w+ on main \(was \w+\), landing L2\.$/m);
+  assert.equal(moves(c.s.repo), 1);
+});
+
+test("one decision per action: a Land kept from Telegram is shown as decided by team approve, and the manual --approve lands it by that route", async (t) => {
+  const x = await decidedOnTelegram(t, "land");
+  await x.keep();
+  const out = await x.cli(["approve", "L1"], { tty: true, deps: { ask: async () => assert.fail("no prompt for a decided landing") } });
+  assert.equal(out.at(-1), "L1 is decided on Telegram: land. The lead applies it (hoptell team apply L1); nothing more is needed here.");
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  const manual = await x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true });
+  assert.match(manual.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["finished", "bridge"]);
+});
+
+test("a Land tapped late but kept in its apply window: viewing it at minute 20 does not expire it and the lead's apply lands it; past the window, viewing ends it as expired", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  const sent = [];
+  await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
+  const m = parseLandingRequest(sent[0]).manifest;
+  const tap = Date.parse(m.created_at) + 14 * 60_000;
+  await ingest(x.s.home, decisionFor(x.key, m, { decidedAt: tap }), x.me);
+  const at20 = { now: () => Date.parse(m.created_at) + 20 * 60_000 };
+  assert.equal((await x.cli(["approve", "L1"], { tty: true, deps: at20 })).at(-1), "L1 is decided on Telegram: land. The lead applies it (hoptell team apply L1); nothing more is needed here.");
+  assert.match((await x.cli(["approve", "L1", "--show-diff"], { deps: at20 })).join("\n"), /^diff --git /m);
+  assert.deepEqual(readState(x.s.home, "n4").actions.map((a) => a.state), ["ready"]);
+  const ok = await x.cli(["apply", "L1"], { deps: at20 });
+  assert.match(ok.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  // Just past the apply window: the view ends it as expired; nothing moves.
+  const y = await telegramSetup(t, { checkout: false });
+  const sent2 = [];
+  await y.cli(["land", y.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent2) } });
+  const m2 = parseLandingRequest(sent2[0]).manifest;
+  const tap2 = Date.parse(m2.created_at) + 14 * 60_000;
+  await ingest(y.s.home, decisionFor(y.key, m2, { decidedAt: tap2 }), y.me);
+  const late = await y.cli(["approve", "L1", "--show-diff"], { deps: { now: () => tap2 + APPLY_WINDOW_MS + 1 } }).catch((e) => e);
+  assert.match(late.message, /^the owner's decision on Telegram to land L1 can no longer be applied \(it is older than 15 minutes, or came after the landing expired\); nothing was moved\. Ask the lead to run hoptell team land dana-n4-impl-1 --request-approval again$/);
+  assert.deepEqual(((e) => [e.state, e.route])(readTombstone(y.s.home, "n4", "L1")), ["expired", "bridge"]);
+  assert.equal(refOf(y.s.repo, "main"), y.c.T);
+});
+
+test("the first decision registered wins: a terminal decision is written down before the repository wait, so a Reject that arrives meanwhile is kept out", async (t) => {
+  const x = await decidedOnTelegram(t, "reject");
+  // The engine takes the team lock to keep a decision: during the terminal's run it is busy (the
+  // relay keeps the message and it is tried again later).
+  let during = null;
+  const out = await x.cli(["approve", "L1"], {
+    tty: true,
+    deps: {
+      ask: async () => "land",
+      // The hook is not awaited: the engine's one try for the lock happens here, while it is held.
+      beforeMove: () => {
+        assert.equal(readState(x.s.home, "n4").actions[0].route, "terminal", "approved by the terminal before the wait");
+        during = ingest(x.s.home, x.bytes, x.me, { waitMs: 20 }).catch((e) => e);
+      },
+    },
+  });
+  assert.equal((await during)?.code, "busy");
+  assert.match(out.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m);
+  // Tried again after the landing: it ended, so the Reject is not kept.
+  assert.deepEqual(await ingest(x.s.home, x.bytes, x.me), { id: "L1", team: "n4", decision: "reject", result: "ended", state: "finished" });
+  assert.equal(fs.existsSync(path.join(x.s.home, "teams", "n4", "landings", "L1", "receipt.json")), false);
+  // A run that stopped after the terminal registered its decision: the Reject is a conflict.
+  const y = await decidedOnTelegram(t, "reject");
+  await assert.rejects(y.cli(["approve", "L1"], { tty: true, deps: { ask: async () => "land", beforeMove: () => { throw new Error("crash"); } } }), /crash/);
+  assert.deepEqual(await ingest(y.s.home, y.bytes, y.me), { id: "L1", team: "n4", decision: "reject", result: "conflict", by: "terminal", kept: "land" });
+  assert.equal(fs.existsSync(path.join(y.s.home, "teams", "n4", "landings", "L1", "receipt.json")), false);
+});
+
+test("a kept receipt that cannot be read or does not verify refuses the terminal decision; only its absence lets it go on", async (t) => {
+  const x = await decidedOnTelegram(t, "land");
+  await x.keep();
+  const file = path.join(x.s.home, "teams", "n4", "landings", "L1", "receipt.json");
+  fs.chmodSync(file, 0o000);
+  t.after(() => fs.rmSync(file, { force: true }));
+  const unreadable = await x.cli(["approve", "L1"], { tty: true, deps: { ask: async () => "land" } }).catch((e) => e);
+  assert.ok(unreadable instanceof Error, "refused");
+  fs.chmodSync(file, 0o600);
+  // Another key's signature: it does not verify.
+  fs.writeFileSync(file, decisionFor(ownersig.newKey(), x.m));
+  const forged = await x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true }).catch((e) => e);
+  assert.match(forged.message, /^the decision kept for L1 does not verify/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.deepEqual(readState(x.s.home, "n4").actions.map((a) => a.state), ["ready"]);
+});
+
+test("team apply resumes after a crash: accepted moves once, moving only reads, landed finishes; the apply window no longer counts", async (t) => {
+  const crash = () => {
+    throw new Error("crash");
+  };
+  for (const [hook, state] of [["beforeMove", "accepted"], ["afterMove", "moving"], ["afterRecord", "landed"]]) {
+    const x = await decidedOnTelegram(t, "land");
+    await x.keep();
+    await assert.rejects(x.cli(["apply", "L1"], { deps: { [hook]: crash } }), /crash/);
+    assert.equal(readState(x.s.home, "n4").actions[0].state, state, hook);
+    const late = Date.parse(x.m.created_at) + 60 * 60_000; // far past the request's expiry and the window
+    const out = await x.cli(["apply", "L1"], { deps: { now: () => late } });
+    assert.match(out.join("\n"), /^Landed \w+ on main \(was \w+\), landing L1\.$/m, hook);
+    assert.equal(refOf(x.s.repo, "main"), x.c.C);
+    assert.equal(moves(x.s.repo), 1, `${hook}: git moved main once`);
+    assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["finished", "bridge"]);
+  }
+});
+
+test("team apply after a crash during the move with an unknown outcome: blocked, never moved again, reported as blocked without a claim", async (t) => {
+  const x = await decidedOnTelegram(t, "land");
+  await x.keep();
+  await assert.rejects(x.cli(["apply", "L1"], { deps: { afterMoving: () => { throw new Error("crash"); } } }), /crash/);
+  assert.equal(readState(x.s.home, "n4").actions[0].state, "moving");
+  const warned = [];
+  const r = await x.cli(["apply", "L1"], { warned, deps: { now: () => Date.parse(x.m.created_at) + 60 * 60_000, landingChannel: fakeBridge(x.sent) } }).catch((e) => e);
+  assert.match(r.message, /Whether main moved is unknown, so the landing L1 is blocked/);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.equal(moves(x.s.repo), 0);
+  assert.deepEqual(parseLandingStatus(x.sent.at(-1)), { digest: readState(x.s.home, "n4").actions[0].digest, state: "blocked", text: "L1 is blocked; check its state on the Mac." });
+  const again = await x.cli(["apply", "L1"]).catch((e) => e);
+  assert.match(again.message, /hoptell team apply does not move it again\. The owner checks it on the Mac \(hoptell team status n4\)$/);
 });

@@ -184,6 +184,66 @@ test("worktree commit refuses paths through a symbolic link and nested repositor
   assert.equal(git(s.repo, "rev-parse", "team/n1/dana-impl-1"), readWorktreeRecord(s.home, "dana-impl-1").rec.base, "nothing was committed");
 });
 
+test("worktree commit takes a type change in one commit: a file replaced by a folder, a folder replaced by a file; a nested repository in a file's place is still refused", async (t) => {
+  const s = setup(t);
+  await add(s);
+  // A file replaced by a folder.
+  fs.rmSync(path.join(s.wt, "README.md"));
+  fs.mkdirSync(path.join(s.wt, "README.md"));
+  fs.writeFileSync(path.join(s.wt, "README.md", "a.txt"), "a\n");
+  const r1 = await commitWorktree(s.home, "dana-impl-1", { message: "file to folder" });
+  assert.deepEqual(r1.files, ["README.md", "README.md/a.txt"]);
+  assert.equal(git(s.repo, "cat-file", "-t", `${r1.commit}:README.md`), "tree");
+  assert.equal(git(s.repo, "show", `${r1.commit}:README.md/a.txt`), "a");
+  assert.equal(git(s.wt, "status", "--porcelain"), "");
+  // A folder replaced by a file.
+  fs.rmSync(path.join(s.wt, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(s.wt, "lib"), "now a file\n");
+  const r2 = await commitWorktree(s.home, "dana-impl-1", { message: "folder to file" });
+  assert.deepEqual(r2.files, ["lib", "lib/x.js"]);
+  assert.equal(git(s.repo, "cat-file", "-t", `${r2.commit}:lib`), "blob");
+  assert.equal(git(s.repo, "show", `${r2.commit}:lib`), "now a file");
+  assert.equal(git(s.wt, "status", "--porcelain"), "");
+  // A nested repository where a tracked file was: refused, nothing committed.
+  fs.rmSync(path.join(s.wt, "lib"));
+  git(s.wt, "init", "-q", "lib");
+  fs.writeFileSync(path.join(s.wt, "lib", "f"), "f\n");
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }), "not_a_file", /nested repository/);
+  assert.equal(git(s.repo, "rev-parse", "team/n1/dana-impl-1"), r2.commit, "nothing was committed");
+});
+
+test("worktree commit refuses a nested repository in a tracked folder's place: a kept file name, a new file, a .git file or a dangling .git link, the old name gone; a plain folder change still commits", async (t) => {
+  const s = setup(t);
+  await add(s);
+  const head = () => [git(s.repo, "rev-parse", "team/n1/dana-impl-1"), readWorktreeRecord(s.home, "dana-impl-1").rec.head];
+  const before = head();
+  const nested = (form) => {
+    fs.rmSync(path.join(s.wt, "lib"), { recursive: true });
+    if (form === "folder" || form === "no old name") git(s.wt, "init", "-q", "lib");
+    else {
+      fs.mkdirSync(path.join(s.wt, "lib"));
+      if (form === "file") fs.writeFileSync(path.join(s.wt, "lib", ".git"), "gitdir: /nowhere\n");
+      else fs.symlinkSync(path.join(s.root, "nowhere"), path.join(s.wt, "lib", ".git")); // dangling
+    }
+    if (form !== "no old name") fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "the nested repository's own\n"); // the tracked name kept
+    fs.writeFileSync(path.join(s.wt, "lib", "f"), "f\n"); // a new file
+  };
+  for (const form of ["folder", "file", "dangling link", "no old name"]) {
+    nested(form);
+    await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }), "not_a_file", /lib\/(x\.js|f) is a folder \(a nested repository/);
+    assert.deepEqual(head(), before, `${form}: nothing was committed`);
+    fs.rmSync(path.join(s.wt, "lib"), { recursive: true });
+    git(s.wt, "checkout", "--", "lib");
+  }
+  // A plain folder below the root: a file there replaced by a folder, and a new nested folder.
+  fs.rmSync(path.join(s.wt, "lib", "x.js"));
+  fs.mkdirSync(path.join(s.wt, "lib", "x.js", "deep"), { recursive: true });
+  fs.writeFileSync(path.join(s.wt, "lib", "x.js", "deep", "a.js"), "a\n");
+  const r = await commitWorktree(s.home, "dana-impl-1", { message: "nested folder change" });
+  assert.deepEqual(r.files, ["lib/x.js", "lib/x.js/deep/a.js"]);
+  assert.equal(git(s.repo, "show", `${r.commit}:lib/x.js/deep/a.js`), "a");
+});
+
 test("worktree: hostile configuration is refused or runs nothing (hooks, filters, textconv, includes, attributes)", async (t) => {
   const s = setup(t);
   const touch = `sh -c 'touch ${s.canary}; cat'`;
@@ -686,8 +746,12 @@ test("process working folders on Linux: an exited group (state Z or X, one threa
   assert.equal(scan().rows, null, "a live task is unknown");
   entry("300", "300 (sh) Z 1\n");
   assert.equal(scan().rows, null, "num_threads that cannot be read is unknown");
+  // Caught while it is reaped (state Z, with no task listed): no thread is
+  // left on its list, so it runs nothing. Only state Z so; X with an empty list stays unknown.
   entry("300", statLine("300", "sh", "Z"), {});
-  assert.equal(scan().rows, null, "an empty task list is unknown");
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100], "state Z with no task listed has exited");
+  entry("300", statLine("300", "sh", "X"), {});
+  assert.equal(scan().rows, null, "state X with an empty task list is unknown");
   entry("300", null);
   assert.deepEqual(scan().rows.map((r) => r.pid), [100], "its stat gone: gone");
   // Any other failure to read the stat or the task list is unknown.
@@ -773,10 +837,23 @@ test("process working folders on Linux: a process caught while it exits is read 
   then = (i) => i === 1 && fs.symlinkSync("/elsewhere", path.join(proc, "300", "cwd"));
   assert.deepEqual(scan().rows.map((r) => r.pid).sort(), [100, 300]);
   then = () => {};
-  // Not a shape of exiting: unknown at once, with no pause.
-  entry("300", statLine("300", "sh", "Z"), {});
+  // A zombie caught while it is reaped (state Z, no task listed, one thread or none): exited,
+  // skipped at once. State X so, or num_threads unreadable: unknown at once, with no pause.
+  for (const threads of [1, 0]) {
+    entry("300", statLine("300", "sh", "Z", { threads }), {});
+    assert.deepEqual(scan().rows.map((r) => r.pid), [100]);
+    assert.deepEqual(pauses, []);
+  }
+  entry("300", statLine("300", "sh", "X"), {});
+  assert.deepEqual(scan(), { rows: null, problem: "process 300 (sh): readlink cwd gave ENOENT; state X, with no task listed" });
+  assert.deepEqual(pauses, []);
+  entry("300", statLine("300", "sh", "Z", { threads: "?" }), {});
   assert.deepEqual(scan(), { rows: null, problem: "process 300 (sh): readlink cwd gave ENOENT; state Z, with no task listed" });
   assert.deepEqual(pauses, []);
+  // Z with no task listed but more than one thread counted: read again, unknown if it stays so.
+  entry("300", statLine("300", "sh", "Z", { threads: 2 }), {});
+  assert.match(scan().problem, /; state Z, with no task listed and num_threads 2$/);
+  assert.deepEqual(pauses, [50, 100, 150, 200, 250]);
   // More processes caught exiting than one scan waits for: unknown at the ninth, without waiting
   // for it; the scan's pauses stay within 8 x 750 ms.
   fs.rmSync(path.join(proc, "300"), { recursive: true });
@@ -1156,4 +1233,33 @@ test("worktree member state through the real scan: a process born during a faile
   fs.writeFileSync(found, `#!/bin/sh\necho p${process.pid}; echo cnode; echo fcwd; echo n/\necho p${born}; echo csleep; echo fcwd; echo n${s.wt}\nexit 0\n`, { mode: 0o755 });
   await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { git, procs: { lsof: found, platform: "darwin" } }), "member_running", new RegExp(`process ${born} \\(sleep\\) runs in its worktree`));
   assert.ok(!fs.existsSync(s.canary), "git ran before the check");
+});
+
+test("controlledGit stream: every chunk of the output, past the runner's output limit; a reader that throws stops git and rejects", async (t) => {
+  const s = setup(t);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-stream-"));
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  const g = controlledGit({ scratch, maxBuffer: 16 });
+  assert.throws(() => g.run(["cat-file", "-p", "HEAD"], s.repo), /Git could not be run/, "run() is capped");
+  const chunks = [];
+  const r = await g.stream(["cat-file", "-p", "HEAD"], s.repo, (b) => chunks.push(Buffer.from(b)));
+  assert.equal(r.status, 0);
+  assert.equal(Buffer.concat(chunks).toString("utf8"), execFileSync("git", ["cat-file", "-p", "HEAD"], { cwd: s.repo, env: gitEnv, encoding: "utf8" }));
+  await assert.rejects(
+    g.stream(["cat-file", "-p", "HEAD"], s.repo, () => {
+      throw new Error("enough");
+    }),
+    /enough/,
+  );
+  // Whatever a reader throws rejects, a falsy value too.
+  for (const v of [null, undefined, false, 0]) {
+    await assert.rejects(
+      g.stream(["cat-file", "-p", "HEAD"], s.repo, () => {
+        throw v;
+      }),
+      (e) => e === v,
+    );
+  }
+  const bad = await g.stream(["cat-file", "-p", "0".repeat(40)], s.repo, () => {});
+  assert.notEqual(bad.status, 0);
 });

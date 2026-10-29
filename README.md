@@ -1469,11 +1469,98 @@ never to other members or to shared-token sessions. It needs a relay with the `s
 (0.4.0); with an older relay, nothing is published and `/team` says that the server needs an
 update.
 
-**Landing.** Only you land: both steps run in your terminal, because the candidate is signed with
-your key and an agent's session never uses it. Stop every implementer of the repository first.
-You make the candidate, the lead runs the tests on it and has the reviewers review `T..C`, and then
-you approve exactly that pair. In this example `main` is not checked out in any worktree (yours is
-on another branch); the case where it is follows below:
+**Landing.** The lead prepares a landing, and only you decide it. The lead may prepare a
+candidate signed with the key you configured for the repository, and only your separate decision
+lets hoptell land it. The signature shows that the candidate was made with your key, not that
+you decided anything: hoptell's own code uses the key only in `team land --target`, but a key
+without a passphrase or a presence check can be used by any process of yours, your agents
+included. Your decision is typed in your terminal, and typing `land` proves that a process typed
+it, not that a person is present. The lead's route, then your one visit:
+
+```sh
+$ hoptell team land alice-n11-impl-1 --target main -m "Validate the settings file (n11)" --prepare
+alice-n11-impl-1: exited.
+Candidate 19380d22...7892 on main (at 96789d8a...28b7), signed and verified; squash of alice-n11-impl-1 at 893eb789...29f.
+...
+$ hoptell team evidence alice-n11-impl-1 --candidate 19380d22...7892 --tests pass --command "npm test" --report test.log
+$ hoptell review request --team n11 --base 96789d8a...28b7 --head 19380d22...7892
+$ hoptell review verdict --team n11 rv-1a2b3c4d alice-n11-rev-1 approve
+$ hoptell team land alice-n11-impl-1 --request-approval
+Landing L7: 19380d22...7892 on main (at 96789d8a...28b7), checked out in /srv/src/app; tests pass, review rv-1a2b3c4d: alice-n11-rev-1 approve.
+The owner decides it in a terminal before 2026-10-29T10:15:00.000Z: hoptell team approve L7
+```
+
+`--prepare` stops the member's session (by its recorded id; another implementer of the repository
+that still runs stops the command) and makes the candidate. The lead tests exactly `C` in a
+folder of its own and records the result with `team evidence`: the full `C`, which must be the
+member's current candidate, `pass` or `fail`, each command it ran, and the report (a text file of
+at most 64 KiB, stored by its digest). "pass" is the lead's claim, and a reviewer's verdict is a
+reviewer's: neither signature nor hoptell makes either true. `--request-approval` works only when
+evidence for exactly `C` is recorded and every reviewer asked in a review request of `T..C` has
+answered. It freezes the evidence in the landing action's manifest (C's subject, the diffstat, the
+patch, the test report and the verdicts, each with its digest) and prints the id. Then, in your
+terminal:
+
+```sh
+$ hoptell team approve L7
+Landing L7 of alice-n11-impl-1 (team n11) in /srv/src/app
+  target     main, checked out in /srv/src/app (fast-forwarded there)
+  candidate  19380d22...7892
+  on         96789d8a...28b7
+  subject    Validate the settings file (n11)
+  tests      pass (the lead's report 5f0c2e9a41b7, 812 bytes): npm test
+  reviews    review rv-1a2b3c4d: alice-n11-rev-1 approve
+  patch      1311 bytes: hoptell team approve L7 --show-diff prints it
+  expires    2026-10-29T10:15:00.000Z
+   lib/x.js | 2 +-
+   1 file changed, 1 insertion(+), 1 deletion(-)
+The test result and the verdicts come from agents: they are claims, not proof. Typing land below decides this landing and runs it now.
+Land L7 (19380d22...7892 on main)? Type land to confirm: land
+Landed 19380d22...7892 on main (was 96789d8a...28b7), landing L7.
+  worktree removed; branch team/n11/alice-n11-impl-1 deleted
+```
+
+`--show-diff` prints the frozen patch and changes nothing. A patch larger than 64 KiB, or one
+whose record would grow past 90,000 bytes, is never cut: it is marked too large to show, and
+`--show-diff` gives the record's path and the git command that shows `T..C` on your Mac. Failed
+tests or a reviewer's "changes" are shown as such, and you may still land; a dirty checkout, two
+checkouts of the target or an unknown outcome are refusals that no decision passes. A request is
+for exactly its evidence: new evidence, a later verdict of its review, a new request or
+`--discard` supersedes a request you have not decided, and a new candidate or `--discard` clears
+the evidence. A request expires 15 minutes after it was made; `team approve` then says so and
+asks you to have the lead request it again.
+
+**From Telegram.** When your Telegram owner channel is set up and its bridge is up to date,
+`--request-approval` also sends the request to the bridge, and prints:
+
+```sh
+Sent to the owner's Telegram. The owner decides it there, or in a terminal (hoptell team approve L7), before 2026-10-29T10:15:00.000Z.
+When the owner's decision arrives in your inbox, run: hoptell team apply L7
+```
+
+The bridge checks the request itself (every digest again from its bytes, and the action's
+digest from the manifest) and shows it as a card: what lands where, the tests and the verdicts,
+the diffstat and the deadline, with **Land L7**, **Reject** and **Show diff**. Show diff sends
+the frozen patch as an `L7.patch` file in the same chat; a patch too large to keep in the
+request says "too large to show here; review it on the Mac". Your tap is signed with the
+bridge's key and goes only to the lead's session, whose hoptell keeps the signed bytes next to
+the action. The lead then runs `hoptell team apply L7`: it verifies that decision again against
+the pin your Mac trusts, and lands it, or ends the action as rejected. A tap counts only before
+the request expires, and `apply` works for 15 minutes after the tap; the target, the commits,
+the mode and the checkout are checked again before anything moves, as with `team approve`. The
+first decision hoptell records wins, in Telegram or in your terminal: a decision you confirm in
+a terminal is recorded before the landing waits for the repository, a later tap is not used,
+and `team approve` shows a tap that was already kept instead of asking again. The card shows
+how the landing ended.
+A message that only claims to be your decision, or a decision for another action, moves
+nothing. With an older bridge, or with the bridge offline, `--request-approval` says "landing
+approval needs a bridge update; use hoptell team approve in a terminal", and the request waits
+for your terminal.
+
+You can also land by hand, with the manual route: you make the candidate, the lead runs the tests
+on it and has the reviewers review `T..C`, and then you approve exactly that pair. Stop every
+implementer of the repository first. In this example `main` is not checked out in any worktree
+(yours is on another branch); the case where it is follows below:
 
 ```sh
 $ hoptell team land alice-n11-impl-1 --target main -m "Validate the settings file (n11)"
@@ -1486,7 +1573,7 @@ Next: run the tests on the candidate, have the reviewers review it
 then the owner lands it in a terminal: hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
 $ hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
 Land 19380d22...7892 on its target (now 96789d8a...28b7)? Type land to confirm: land
-Landed 19380d22...7892 on main (was 96789d8a...28b7).
+Landed 19380d22...7892 on main (was 96789d8a...28b7), landing L1.
   worktree removed; branch team/n11/alice-n11-impl-1 deleted
 ```
 
@@ -1502,37 +1589,80 @@ target only by a compare-and-swap of `refs/heads/<target>` from `T` to `C`: if t
 any other commit at that moment, even an older one, nothing moves. It then reads the target back
 and checks that it is at `C`.
 
-hoptell does not move a target that is checked out in a worktree, your main one included, because
-that tree would be left behind. It checks that the worktree's `HEAD` is the target at `T` and
-prints what to run there:
+When the target is checked out in a worktree (usually your main folder is on `main`), hoptell
+fast-forwards that checkout itself, with `git merge --ff-only --no-autostash --no-overwrite-ignore
+--no-verify C` and its own hardened git (no hooks, filters, external diff or textconv, no submodule
+recursion). It does so only when exactly one worktree has the target checked out, and that folder
+is a worktree of the repository the team enrolled at `team up` (its git folder leads back to that
+repository; a folder replaced by another clone gets no git at all), its `HEAD` is the target at
+`T`, the index and the tracked files are clean, nothing is unmerged and no merge, rebase,
+cherry-pick, revert or bisect is in progress there. Untracked and ignored files stay, unless the
+landing adds a file where one of them is: then it stops, and hoptell never deletes or stashes them. Afterwards it
+checks that `HEAD` is still the target, the target is exactly `C`, the index matches `C` and the
+tree is clean. A checkout that is dirty, busy or not the only one stops the landing before
+anything moves, and says what to fix; run the same `--approve` command again once it is fixed, and
+hoptell moves it then. A decision made with `team approve` ends there: once it is fixed, the lead
+requests the landing again and you approve the new id.
+
+Every request and every approval is one landing action with an id (`L1`, `L2`, ...) that is never
+reused in your hoptell home. hoptell writes its manifest once (`teams/<team>/landings/<id>/manifest.json`: the
+repository, target, `T`, the member's head, `C`, the mode, the worktree it checks out, the
+frozen evidence of a request and an expiry 15 minutes later), and records the action's state in the team's state: ready, approved,
+accepted (the journal is written), moving (the move may have been tried), landed, finished; or
+blocked, expired, superseded or abandoned. An action that ends keeps a record next to its manifest
+(`final.json`), also after `team down`; hoptell checks that record strictly, and one that is
+malformed or belongs to another action stops the command. A manifest whose run stopped before
+any decision was recorded is listed by `team status` as orphaned: nothing acts on it, its id is
+not used again, and you remove it by hand when you like. A decision that did not start within 15 minutes expires, and the next
+`--approve` is a new action. Once an action is moving, hoptell never moves the target again under
+it. If a run stops or git fails while it moves, a later run only reads what happened: a target at
+`C` with a clean checkout finishes the landing; anything else is an unknown outcome. Then the
+action stays blocked, hoptell resets nothing, and `--confirm` is how you record the landing after
+you checked it. If it did not land and you want to give it up, `hoptell team land <member>
+--abandon <id>` (in your terminal, typing `abandon`) shows what the target and its checkout look
+like now, without concluding anything from it, and ends the action for good: its record says
+`abandoned`, with what it was for and what hoptell saw. It moves, merges and resets nothing,
+records no landing, and keeps the candidate and the worktree (`--discard` then drops the
+candidate and keeps the worktree). A new landing needs a new decision. Only when the target is still at `T` and its one checkout is clean does hoptell
+print a line to paste in that folder:
 
 ```sh
-main is checked out in /srv/src/app, so hoptell does not move it. hoptell checked that its HEAD is main at 96789d8a...28b7. In that folder, run the line below: it checks again that HEAD is refs/heads/main at 96789d8a...28b7, and fast-forwards only when both checks pass.
+main is still at 96789d8a...28b7 and /srv/src/app is clean. Check what happened there first; to land it by hand, run the line below in that folder: it checks again that HEAD is refs/heads/main at 96789d8a...28b7, and fast-forwards only when both checks pass.
   cd /srv/src/app
   test "$(git symbolic-ref HEAD)" = refs/heads/main && test "$(git rev-parse HEAD)" = 96789d8a...28b7 && git merge --ff-only 19380d22...7892
 then record it: hoptell team land alice-n11-impl-1 --confirm 96789d8a...28b7 19380d22...7892
 ```
 
-`--confirm T C` records the landing only when the target is exactly at `C` and `C` is still the
-verified candidate (parent `T`, the member's tree, a good signature). hoptell never merges,
+`--confirm T C` records the landing only when the target is exactly at `C`, `C` is still the
+verified candidate (parent `T`, the member's tree, a good signature) and a checkout of the target,
+if there is one, is the only one, on the target at `C` and clean. hoptell never merges,
 rebases or resolves conflicts: when the target moved, land by hand. `--discard` drops a
 candidate.
 
 hoptell holds its own lock while it lands, but it cannot lock out git commands you run yourself
 at the same time. If a worktree checks out the target in the moment between hoptell's check and
 its move, the branch moves but that worktree's index and files do not: they still hold `T`, so
-`git status` there shows the landed change as undone. hoptell reports this case with a warning.
-`git read-tree -m -u T C` in that worktree brings it to `C` and keeps your own changes. Avoid
-running git in the repository while a landing runs.
+`git status` there shows the landed change as undone. hoptell then does not finish the landing:
+the action stays blocked with the candidate and the worktree, and the message says so.
+`git read-tree -m -u T C` in that worktree brings it to `C` and keeps your own changes; then
+`--confirm` records the landing. A checkout that appears already at `C` and clean is fine, and
+the result names it. The
+fast-forward of a checked-out target has gaps of its own: an editor that writes a file after the
+clean check, `HEAD` switching to another branch at the same commit, and git changing the files
+before it updates the ref. It suits a quiet repository; it is not free of races. Avoid running
+git in the repository while a landing runs.
 
 hoptell records which member head landed as which commit on which target, and keeps the evidence
 until that record is written. Before the target moves, it writes a journal of the landing
-(repository, member, head, target, `T`, `C`) to the team's state. It records the landing once the
-target is at `C`. Only then does it delete the candidate branch and remove the worktree. If a step
-fails or the process stops on the way, the same `hoptell team land` command finishes the landing.
-The journal is dropped only when the target certainly did not move: git refused the update, and
-the target reads back at another commit than `C`. A signal, a failed read or a target that reads
-`C` keeps it. Publishing the candidate works the same way: hoptell journals the candidate before
+(repository, member, head, target, `T`, `C`, the action) to the team's state. It records the
+landing once the target is at `C`. Only then does it delete the candidate branch and remove the
+worktree. If a step fails or the process stops on the way, the same `hoptell team land` command
+finishes the landing. For a target that is not checked out, the journal is dropped only when the
+target certainly did not move: git refused the compare-and-swap, and the target reads back at
+another commit than `C`. A signal, a failed read or a target that reads `C` keeps it, with the
+action blocked. A team started with an older hoptell lands nothing new: discard its candidate
+(`--discard`), run `team down` and `team up` again, and build the candidate again; a landing it
+already had pending still finishes with the same command. Publishing the candidate works the same way: hoptell journals the candidate before
 it creates `team/<team>/land`, and the same `--target` command (or `--discard`) finishes a
 publication that stopped half-way. A branch whose read fails is never taken for a branch that is
 gone, and neither is one that git skips with a warning. hoptell never follows a symbolic ref:
@@ -1951,7 +2081,7 @@ hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit
 hoptell worktree list | commit <member> -m <message> [--allow-outside] | diff <member> [--stat] | remove <member>
 hoptell team up <team file> [--dry-run] [--yes] | status [<team>] [--json] | stop <member> | restart <member>   # see "Agent teams"
 hoptell team down [<team>] [--keep-worktrees]
-hoptell team land <member> --target <branch> -m <message> | --approve <T> <C> | --confirm <T> <C> | --discard   # the owner's landing, in a terminal
+hoptell team land <member> --target <branch> -m <message> | --approve <T> <C> | --confirm <T> <C> | --abandon <id> | --discard   # the owner's landing, in a terminal
 hoptell review request --team <team> --base <commit> --head <commit> [--to <reviewer>]...
 hoptell review verdict --team <team> <request> <reviewer> approve|changes
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]

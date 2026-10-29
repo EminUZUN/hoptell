@@ -75,6 +75,8 @@ export function fakeTelegram({ webhook = "" } = {}) {
     last: (re) => sent.filter((s) => s.method === "sendMessage" && re.test(s.params.text)).at(-1),
     calls: (method) => sent.filter((s) => s.method === method),
     cards: () => sent.filter((s) => s.method === "sendMessage" && /^❓ Question \d+ · ([^\n]* asks:|[^\n]*\nSent again[^\n]*)\n/.test(s.params.text)),
+    /** Landing cards (design 8 addendum, option 3), first copies and copies sent again. */
+    landingCards: () => sent.filter((s) => s.method === "sendMessage" && /^🛬 Landing L\d+ · /.test(s.params.text) && s.params.reply_markup?.inline_keyboard),
     texts: () => sent.filter((s) => s.method === "sendMessage").map((s) => s.params.text),
     replyTo: (card) => ({ message_id: card.message_id, text: card.params.text }),
     client(label = "bridge") {
@@ -141,6 +143,8 @@ export function fakeTelegram({ webhook = "" } = {}) {
         editMessageReplyMarkup: record("editMessageReplyMarkup"),
         answerCallbackQuery: record("answerCallbackQuery"),
         setMessageReaction: record("setMessageReaction"),
+        // A landing's patch (Show diff): recorded with its document {name, bytes}.
+        sendDocument: record("sendDocument"),
         setMyCommands: record("setMyCommands"),
         deleteMyCommands: record("deleteMyCommands"),
         // The bot's profile texts (hoptell telegram identity): a get returns what was last set.

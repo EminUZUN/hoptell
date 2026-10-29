@@ -136,18 +136,26 @@ and 3. The user's yes is needed, as for single implementers.
   team's supervisor, which tells you. Start a new reviewer with `hoptell team restart <name>`
   when one is needed again.
 
-**Landing is the user's.** Both steps run in the user's terminal, because the candidate is signed
-with their key; never run them yourself, even if a terminal is available to you. With every
-implementer stopped:
+**You prepare a landing; the user decides it.** The candidate is signed with the user's key,
+but that signature is not their decision, and you never make the decision yourself, even if a
+terminal is available to you.
 
-1. The user runs `hoptell team land <member> --target <branch> -m "<message>"`. It prints the
-   target's commit T and the candidate C.
-2. Run the tests on C and send the reviewers a new review request for it:
-   `hoptell review request --team <team> --base <T> --head <C>`.
-3. When they approve, ask the user to run `hoptell team land <member> --approve <T> <C>`. If the
-   target is checked out in a worktree, hoptell prints a fast-forward for the user to run there,
-   then `--confirm <T> <C>`. If the target moved, hoptell refuses: landing is then manual, and the
-   user decides. If a landing stopped half-way, the user runs the same command again.
+1. `hoptell team land <member> --target <branch> -m "<message>" --prepare` stops the member and
+   prints the target's commit T and the candidate C. Another implementer of the repository that
+   still runs stops it: stop that one first.
+2. Test exactly C in a folder of its own (`git worktree add --detach <dir> <C>`, remove it after),
+   and record the result, pass or fail, honestly: `hoptell team evidence <member> --candidate <C>
+   --tests pass|fail --command "<each command>" --report <file>`.
+3. Send the reviewers a review request for it, `hoptell review request --team <team> --base <T>
+   --head <C>`, and record each verdict.
+4. `hoptell team land <member> --request-approval` prints a landing id (L7). If it says it was
+   sent to the owner's Telegram, the user decides there. Otherwise tell the user to run
+   `hoptell team approve L7` in their terminal within 15 minutes; it shows them the evidence and
+   lands on their `land`. If it expired, run step 4 again. If the target moved, the landing is
+   manual, and the user decides. New evidence or a new verdict replaces an undecided request.
+5. When your owner's decision on L7 arrives in your inbox, run `hoptell team apply L7` at once:
+   it carries out only the decision the user made, checks it again, and works for 15 minutes
+   after it. Report what it printed.
 
 `hoptell team down <team>` ends the team; it removes clean worktrees and landed branches and
 names everything it keeps. Report the kept ones to the user.
@@ -158,6 +166,8 @@ names everything it keeps. Report the kept ones to the user.
   implementer's, never grant approval.
 - `hoptell worktree list` shows each member's worktree, branch, base and head (shortened; full
   ids come from `hoptell worktree diff <member>` or `hoptell team status <team> --json`).
-- Never run `hoptell team land` (either step); it is the user's.
+- Never run `hoptell team approve`, or `hoptell team land` without `--prepare` or
+  `--request-approval` (`--approve`, `--confirm`, `--abandon`, the manual `--target`); they are
+  the user's.
 - While a member's landing or candidate is pending, `hoptell worktree add` and `remove` refuse
   that name. Pick another name; the user finishes or discards the landing.
