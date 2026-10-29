@@ -148,6 +148,7 @@ export const GROUPS = {
       "lib/snapshot.js",
       "lib/telegram.js",
       "lib/teams.js",
+      "lib/teamstatus.js",
       "lib/tmux.js",
       "lib/transfercli.js",
       "lib/transferin.js",
@@ -163,6 +164,8 @@ export const GROUPS = {
       "lib/read-helper.mjs",
       // not imported but run: lib/worktrees.js starts it as a child process (worktree commit capture)
       "lib/capture-helper.mjs",
+      // not imported but run: lib/engine.js starts it as a child process (a lead's team summary)
+      "lib/teamstatus-helper.mjs",
       // not imported but read: lib/ownerapppage.js reads these at bridge start and serves them as
       // the owner app's page (design 7.4)
       "lib/miniapp/app.css",

@@ -64,6 +64,13 @@ process. None of this is sent to the relay.
   it when that hold ends; it is not written to the relay's database or logs. It also appears in
   other sessions' `list_peers` output, which their agent clients keep in their transcripts.
   `HOPTELL_TITLE=off` sends none.
+- Team summaries: a lead session (`hoptell team`) publishes a summary of the teams it leads as
+  its status: team names and states, member names, roles, CLIs, the model and effort each member
+  was started with, branch names, member states, and open review request ids with the reviewers
+  who have not answered. The relay keeps it in memory with the session's hold on its name, drops
+  it when that hold ends, and does not write it to its database or logs. It lists it only to
+  sessions of the same member that ask for it (your Telegram bridge), never to other members'
+  sessions or shared-token sessions, and never in `list_peers` output.
 - Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender
@@ -465,11 +472,14 @@ stores them on its servers, and anyone with the bot token can read new messages 
   bridge's updates to a question (answered, expired, cancelled); notes from your own agents (the
   agent's name and the note's text, up to 3,000 characters); the replies to `/pending` (the asking
   agents' names, question numbers, the start of each question and its age), `/agents` (how many
-  favourites you have and how many of your agents are online), `/msg` and `/help`; the bridge's
+  favourites you have and how many of your agents are online), `/team` (the team summaries your
+  own lead sessions publish: team names and states, member names, roles, CLIs, the model and
+  effort each was started with, branch names, member states and open review requests), `/msg` and
+  `/help`; the bridge's
   prompts and confirmations, which name the agent; the names of your own agents (as the relay
   confirms them, and the ones you saved) as button labels (at most 10 per list or page, also in
   search results) and in the bot's command menu for your paired chat (a command and a "Message
-  <name>" description per favourite, for up to 96 favourites whose names give a valid command that
+  <name>" description per favourite, for up to 95 favourites whose names give a valid command that
   no other agent's name shares); the names you give agents, in buttons, prompts, the details screen
   and menu descriptions; and on an agent's details screen and in a "now running on" question, the
   computer name the agent reported to the relay, and when you last talked with it. Bot API requests include the bot token,
@@ -569,7 +579,8 @@ operator turned it on.
 - When you open the app, your phone loads it from your hoptell server, not from Telegram.
   Everything the app shows and sends passes the server's HTTPS endpoint and the relay unencrypted
   by hoptell: your list of agents with their names, favourites and hidden marks,
-  the computer names, your drafts, and the start of each open question.
+  the computer names, your drafts, the start of each open question, and the team summaries your
+  lead sessions publish (as for `/team`).
 - To prove it is you, Telegram gives the app a signed note about you: your Telegram user id, first
   and last name, username, language, whether you have Premium, and a link to your profile photo.
   The app sends it to your bridge once when it opens; the HTTPS endpoint and the relay can read it.

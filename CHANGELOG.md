@@ -28,8 +28,10 @@
   refuse a repository whose config sets anything outside a short allow list. They need Git 2.43
   or later, and they refuse while any implementer of the repository is running, whatever its CLI,
   or while any other process of yours works in a member's worktree: stop the implementer (or let
-  it quit) before you commit or diff its work. See "Working with implementer
-  agents" in the README.
+  it quit) before you commit or diff its work. On Linux, processes whose working folder is hidden
+  even from you (`systemd --user`, `sshd`) count unless they are older than the team's first
+  launch or part of the command's own login. See "Working
+  with implementer agents" in the README.
 - `hoptell tmux --cwd <dir>` starts the agent in that folder, and `--task <file>` stores a task
   (at most 32 KiB) for the session, which reads it with the new `read_task` tool. This keeps the
   task off the command line; it is not hidden from other programs that run as you.
@@ -59,6 +61,15 @@
   filter of the repository runs for them. `team status` shows open requests and who has not
   answered; a fresh `team up` starts an empty queue.
 - `hoptell agents profiles` shows each profile's model and effort ("CLI default" when unset).
+- Team status in Telegram: a lead's session publishes a short summary of its teams (members with
+  role, CLI, model and effort at launch, branch and state, and open review requests) as its own
+  status at the relay, every 30 seconds while it leads a team. The bot's new `/team` command and
+  a Teams tab in the app show it, read-only, each team under the session that published it.
+  Relay protocol: a new capability `status`, a `set_status` request (text of at most 8 KiB, only
+  from the session that holds the name) and `list` with `status: true`, which returns a status
+  only to sessions of the same member. It needs the relay and the bridge from this release; with
+  an older relay nothing is published and `/team` says the server needs an update. The bot's menu
+  now holds up to 95 favourites.
 - Team lifetimes: `lifetimeMinutes` (per team or member) and `idleMinutes.reviewer` start a
   supervisor that shows a notice in the member's pane, ends it a minute later by its session id,
   and tells the lead once the end is confirmed. Implementers are never ended for idleness.

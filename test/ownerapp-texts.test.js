@@ -1,12 +1,19 @@
 // Every text the app shows (design 7.4, sections 7 and 8; tests of section 11, "Display"): the
 // page's own strings and every text the API answers pass the bot's text scan (no wire-name prefix,
 // relay alias, reference, long hex run, UUID or internal word); colliding names show wire names.
+import "./neutral-host.js"; // first: before any module reads the computer's name
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { HOSTNAME } from "../lib/config.js";
 import fs from "node:fs";
 import path from "node:path";
 import { PAGE_DIR } from "../lib/ownerapppage.js";
 import { agent, appClient, appSet, bridgeOn, fakeTelegram, newKey, newOp, ownerRelay, paired, setPeople, textProblems, tmpHome, until } from "./owner-helpers.js";
+
+
+test("the computer's name in these scenarios is the neutral stand-in, whatever the machine is called", () => {
+  assert.equal(HOSTNAME, "testhost");
+});
 
 test("display: the page's own strings pass the scan", () => {
   const src = fs.readFileSync(path.join(PAGE_DIR, "app.js"), "utf8");

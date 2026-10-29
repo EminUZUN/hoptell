@@ -4,8 +4,10 @@
 // First the table itself (lib/ownertexts.js, with sample values), then a sweep of everything the
 // bridge sent in a scenario that reaches most of them. Agent-supplied text (questions, notes,
 // choices) is chosen so that it passes the same scan, and so is not stripped.
+import "./neutral-host.js"; // first: before any module reads the computer's name
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { HOSTNAME } from "../lib/config.js";
 import { IDENTITY, IDENTITY_LIMITS, TEXTS, UNDELIVERED_REASONS, ago } from "../lib/ownertexts.js";
 import { OWNER_CHAT, OWNER_USER, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, textProblems as problems, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
@@ -46,6 +48,11 @@ const call = (key, f) => {
   }[key] ?? [SAMPLE.who];
   return f(...args);
 };
+
+
+test("the computer's name in these scenarios is the neutral stand-in, whatever the machine is called", () => {
+  assert.equal(HOSTNAME, "testhost");
+});
 
 test("the texts table: every bot text passes the scan, with sample values", () => {
   const keys = Object.keys(TEXTS);

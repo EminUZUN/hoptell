@@ -9,7 +9,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { controlledGit, findGit } from "../lib/gitsafe.js";
-import { parseLsofCwds, processCwds, processCwdsScan, processIdentity } from "../lib/host.js";
+import { currentBoot, parseLsofCwds, processCwds, processCwdsScan, processIdentity, processTable } from "../lib/host.js";
 import { withLock } from "../lib/locks.js";
 import { addWorktree, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberState, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
 import { sleep } from "./helpers.js";
@@ -325,7 +325,9 @@ function gitReporting(s, version) {
 }
 
 /** A process standing for a member's pane; stopped by its exact pid. */
-function paneProcess(t, script = "sleep 60") {
+// "exec": with a shell that forks even a single command (dash, Ubuntu's sh), stopping the shell
+// would leave its sleep running as a process the session started.
+function paneProcess(t, script = "exec sleep 60") {
   const c = spawn("sh", ["-c", script], { stdio: ["ignore", "pipe", "ignore"] });
   const exited = new Promise((r) => c.once("exit", r));
   const stop = async () => {
@@ -336,6 +338,20 @@ function paneProcess(t, script = "sleep 60") {
   };
   t.after(stop);
   return { pid: c.pid, stdout: c.stdout, stop };
+}
+
+/** For a failing assertion: the member's state and reason, and every process its session record names. */
+function explain(home, member, st) {
+  let rec = null;
+  try {
+    rec = JSON.parse(fs.readFileSync(path.join(home, "worktrees", "sessions", `${member}.json`), "utf8"));
+  } catch {}
+  const ids = rec ? [rec.root, ...rec.tree].filter(Boolean) : [];
+  const ps = ids.map((id) => {
+    const r = spawnSync("ps", ["-o", "pid=,ppid=,stat=,args=", "-p", String(id.pid)], { encoding: "utf8" });
+    return `${JSON.stringify(id)} -> ${r.stdout.trim() || "(not running)"}`;
+  });
+  return `${JSON.stringify(st)}; recorded: ${ps.join(" | ") || "none"}`;
 }
 
 const startAs = (home, rec, pid) => startMemberSession(home, rec, () => ({ sessionId: "$7", pane: "%9", pid: String(pid) }));
@@ -368,7 +384,8 @@ test("worktree commands refuse while any member of the repository runs, whatever
   assert.ok((await addWorktree(s.home, { repo: other.repo, member: "eve-impl-1", team: "n1", cli: "codex" })).path);
   // Once it stopped, every command runs.
   await p.stop();
-  assert.equal(memberState(s.home, "dana-impl-2").state, "stopped");
+  const after = memberState(s.home, "dana-impl-2");
+  assert.equal(after.state, "stopped", explain(s.home, "dana-impl-2", after));
   assert.ok((await commitWorktree(s.home, "dana-impl-1", { message: "m" })).commit);
   assert.ok((await commitWorktree(s.home, "dana-impl-2", { message: "m" })).commit);
   assert.match((await diffWorktree(s.home, "dana-impl-2")).text, /codex change/);
@@ -550,8 +567,9 @@ test("process working folders on Linux: a vanished process is skipped; a live on
   fs.symlinkSync("/work/repo-wt/dana-impl-1", path.join(proc, "100", "cwd"));
   fs.writeFileSync(path.join(proc, "100", "comm"), "codex\n");
   fs.mkdirSync(path.join(proc, "101")); // no readable cwd
+  fs.writeFileSync(path.join(proc, "101", "stat"), "101 (codex) S 1 101 101 0 -1\n"); // a live, running process
   fs.mkdirSync(path.join(proc, "self"));
-  const scan = (exists) => processCwds(uid, { platform: "linux", proc, exists });
+  const scan = (exists) => processCwds(uid, { platform: "linux", proc, exists, pause: () => {} });
   // 101 positively gone (kill(pid, 0) gives ESRCH): skipped.
   assert.deepEqual(scan((pid) => (pid === 101 ? false : true)), [{ pid: 100, cwd: "/work/repo-wt/dana-impl-1", command: "codex" }]);
   // 101 still alive, or not known to be gone: unknown.
@@ -581,6 +599,308 @@ test("process working folders on Linux: a vanished process is skipped; a live on
   // Its /proc entry gone after the listing: skipped.
   fs.rmSync(path.join(proc, "101"), { recursive: true });
   assert.deepEqual(scan(() => true).map((r) => r.pid), [100]);
+});
+
+test("process working folders on Linux: a live process that refuses its cwd to its own user (EACCES, EPERM) is listed as unreadable; EIO and a missing cwd stay unknown", (t) => {
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-proc-"));
+  t.after(() => fs.rmSync(proc, { recursive: true, force: true }));
+  const uid = process.getuid();
+  fs.mkdirSync(path.join(proc, "100"));
+  fs.symlinkSync("/work/repo-wt/dana-impl-1", path.join(proc, "100", "cwd"));
+  fs.writeFileSync(path.join(proc, "100", "comm"), "codex\n");
+  for (const [n, comm] of [["200", "systemd"], ["201", "sshd"]]) {
+    fs.mkdirSync(path.join(proc, n));
+    fs.symlinkSync("/", path.join(proc, n, "cwd"));
+    fs.writeFileSync(path.join(proc, n, "comm"), `${comm}\n`);
+    fs.writeFileSync(path.join(proc, n, "stat"), statLine(n, comm, "S", { start: Number(n) * 10 }));
+  }
+  const { readlinkSync } = fs;
+  const failing = new Map(); // pid folder -> error code of its cwd
+  t.mock.method(fs, "readlinkSync", (p, ...a) => {
+    const code = failing.get(path.basename(path.dirname(String(p))));
+    if (code) throw Object.assign(new Error(code), { code });
+    return readlinkSync(p, ...a);
+  });
+  const scan = (exists = () => true) => processCwdsScan(uid, { platform: "linux", proc, exists, pause: () => {} });
+  failing.set("200", "EACCES").set("201", "EPERM");
+  assert.deepEqual(scan(), {
+    rows: [{ pid: 100, cwd: "/work/repo-wt/dana-impl-1", command: "codex" }],
+    unreadable: [
+      { pid: 200, uid, start: "2000", command: "systemd" },
+      { pid: 201, uid, start: "2010", command: "sshd" },
+    ],
+  });
+  // Gone by kill(pid, 0): skipped, not listed.
+  assert.deepEqual(scan((pid) => pid !== 200).unreadable, [{ pid: 201, uid, start: "2010", command: "sshd" }]);
+  // Its start as that very stat gives it; none when the stat has no start field.
+  fs.writeFileSync(path.join(proc, "201", "stat"), "201 (sshd) S 1 201 201 0 -1\n");
+  assert.equal(scan().unreadable.find((u) => u.pid === 201).start, null);
+  fs.writeFileSync(path.join(proc, "201", "stat"), statLine("201", "sshd", "S", { start: 2010 }));
+  // Any other error on a live process is unknown, and so is an EACCES whose process cannot be told.
+  failing.set("201", "EIO");
+  assert.equal(scan().rows, null);
+  failing.set("201", "ENOENT");
+  assert.equal(scan().rows, null);
+  failing.set("201", "EACCES");
+  assert.equal(scan((pid) => (pid === 201 ? null : true)).rows, null);
+});
+
+// A /proc/<pid>/stat line: after the command, [0] state, [1] ppid, [17] num_threads, [19] start.
+const statLine = (n, comm, state, { threads = 1, start = 1000 } = {}) => {
+  const f = Array(22).fill("0");
+  Object.assign(f, { 0: state, 1: "1", 2: n, 3: n, 17: String(threads), 19: String(start) });
+  return `${n} (${comm}) ${f.join(" ")}\n`;
+};
+
+test("process working folders on Linux: an exited group (state Z or X, one thread, every task exited) without a cwd is skipped; a zombie leader whose threads run, or a live process, stays unknown", (t) => {
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-proc-"));
+  t.after(() => fs.rmSync(proc, { recursive: true, force: true }));
+  const uid = process.getuid();
+  fs.mkdirSync(path.join(proc, "100"));
+  fs.symlinkSync("/work", path.join(proc, "100", "cwd"));
+  // tasks: tid -> state of /proc/300/task/<tid>/stat (null: no task folder at all).
+  const entry = (n, stat, tasks = { [n]: "Z" }) => {
+    fs.rmSync(path.join(proc, n), { recursive: true, force: true });
+    fs.mkdirSync(path.join(proc, n)); // no cwd, as for an exited process
+    if (stat !== null) fs.writeFileSync(path.join(proc, n, "stat"), stat);
+    if (tasks !== null) fs.mkdirSync(path.join(proc, n, "task"));
+    for (const [tid, st] of Object.entries(tasks ?? {})) {
+      fs.mkdirSync(path.join(proc, n, "task", tid), { recursive: true });
+      fs.writeFileSync(path.join(proc, n, "task", tid, "stat"), statLine(tid, "sh", st));
+    }
+  };
+  // kill(pid, 0) succeeds for a zombie until it is reaped.
+  const scan = () => processCwdsScan(uid, { platform: "linux", proc, exists: () => true, pause: () => {} });
+  entry("300", statLine("300", "sh", "Z"));
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100], "a zombie is skipped");
+  entry("300", statLine("300", "a) b", "X")); // the state follows the last ")"
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100]);
+  entry("300", statLine("300", "sh", "S"));
+  assert.equal(scan().rows, null, "a live process without a cwd is unknown");
+  // A leader that called pthread_exit: Z, while a thread of it still runs (and writes).
+  entry("300", statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z", 301: "S" });
+  assert.equal(scan().rows, null, "a zombie leader with two threads is unknown");
+  entry("300", statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z" });
+  assert.equal(scan().rows, null, "num_threads above 1 is unknown whatever the task list shows");
+  entry("300", statLine("300", "sh", "Z"), { 300: "Z", 301: "R" });
+  assert.equal(scan().rows, null, "a live task is unknown");
+  entry("300", "300 (sh) Z 1\n");
+  assert.equal(scan().rows, null, "num_threads that cannot be read is unknown");
+  entry("300", statLine("300", "sh", "Z"), {});
+  assert.equal(scan().rows, null, "an empty task list is unknown");
+  entry("300", null);
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100], "its stat gone: gone");
+  // Any other failure to read the stat or the task list is unknown.
+  entry("300", statLine("300", "sh", "Z"));
+  const { readFileSync, readdirSync } = fs;
+  t.mock.method(fs, "readdirSync", (p, ...a) => {
+    if (String(p) === path.join(proc, "300", "task")) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    return readdirSync(p, ...a);
+  });
+  assert.equal(scan().rows, null);
+  t.mock.restoreAll();
+  t.mock.method(fs, "readFileSync", (p, ...a) => {
+    if (String(p) === path.join(proc, "300", "stat")) throw Object.assign(new Error("EIO"), { code: "EIO" });
+    return readFileSync(p, ...a);
+  });
+  assert.equal(scan().rows, null);
+});
+
+test("process working folders on Linux: a process caught while it exits is read again, briefly; gone or exited by then it is skipped, still so it is unknown, with the reason", (t) => {
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-proc-"));
+  t.after(() => fs.rmSync(proc, { recursive: true, force: true }));
+  const uid = process.getuid();
+  fs.mkdirSync(path.join(proc, "100"));
+  fs.symlinkSync("/work", path.join(proc, "100", "cwd"));
+  const entry = (n, stat, tasks) => {
+    fs.rmSync(path.join(proc, n), { recursive: true, force: true });
+    fs.mkdirSync(path.join(proc, n));
+    fs.writeFileSync(path.join(proc, n, "stat"), stat);
+    fs.writeFileSync(path.join(proc, n, "comm"), "sh\n");
+    if (tasks === null) return;
+    fs.mkdirSync(path.join(proc, n, "task"));
+    for (const [tid, st] of Object.entries(tasks)) {
+      fs.mkdirSync(path.join(proc, n, "task", tid));
+      fs.writeFileSync(path.join(proc, n, "task", tid, "stat"), statLine(tid, "sh", st));
+    }
+  };
+  // `then(read)`: called before each reading after the first, to change /proc meanwhile.
+  let pauses = [];
+  let then = () => {};
+  const scan = (exists = () => true) => {
+    pauses = [];
+    return processCwdsScan(uid, { platform: "linux", proc, exists, pause: (ms) => (pauses.push(ms), then(pauses.length)) });
+  };
+  const total = () => pauses.reduce((a, b) => a + b, 0);
+  const { readFileSync } = fs;
+  // Every reading the same: unknown after five more, about 750 ms, with the step and what it saw.
+  for (const [stat, tasks, why] of [
+    [statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z" }, "state Z, with num_threads 2 while every task listed has exited"],
+    [statLine("300", "sh", "Z"), null, "state Z, and its task listing is gone (ENOENT)"],
+    [statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z", 301: "R" }, "state Z, while its task 301 is in state R"],
+    [statLine("300", "sh", "D"), {}, "readlink cwd gave ENOENT while it runs (state D)"],
+    [statLine("300", "sh", "S"), {}, "readlink cwd gave ENOENT while it runs (state S)"],
+  ]) {
+    entry("300", stat, tasks);
+    const r = scan();
+    assert.equal(r.rows, null);
+    assert.ok(r.problem.startsWith("process 300 (sh): readlink cwd gave ENOENT") && r.problem.endsWith(why), r.problem);
+    assert.deepEqual(pauses, [50, 100, 150, 200, 250]);
+  }
+  entry("300", statLine("300", "sh", "Z"), { 300: "Z", 301: "Z" });
+  t.mock.method(fs, "readFileSync", (p, ...a) => {
+    if (String(p) === path.join(proc, "300", "task", "301", "stat")) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    return readFileSync(p, ...a);
+  });
+  assert.match(scan().problem, /state Z, and the stat of its task 301 is gone \(ENOENT\)$/);
+  t.mock.restoreAll();
+  // Resolved on the third reading (after the second pause): the group exited, or the process is gone.
+  entry("300", statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z", 301: "R" });
+  then = (i) => i === 2 && entry("300", statLine("300", "sh", "Z"), { 300: "Z", 301: "Z" });
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100]);
+  assert.deepEqual(pauses, [50, 100]);
+  entry("300", statLine("300", "sh", "R"), {});
+  then = (i) => i === 2 && fs.rmSync(path.join(proc, "300"), { recursive: true });
+  assert.deepEqual(scan().rows.map((r) => r.pid), [100]);
+  assert.deepEqual(pauses, [50, 100]);
+  entry("300", statLine("300", "sh", "Z", { threads: 2 }), { 300: "Z" });
+  then = () => {};
+  let calls = 0;
+  assert.deepEqual(scan((pid) => pid !== 300 || ++calls < 3).rows.map((r) => r.pid), [100], "ESRCH on a later look");
+  // A cwd that reads on a later reading is a row.
+  fs.rmSync(path.join(proc, "300"), { recursive: true });
+  entry("300", statLine("300", "sh", "R"), {});
+  then = (i) => i === 1 && fs.symlinkSync("/elsewhere", path.join(proc, "300", "cwd"));
+  assert.deepEqual(scan().rows.map((r) => r.pid).sort(), [100, 300]);
+  then = () => {};
+  // Not a shape of exiting: unknown at once, with no pause.
+  entry("300", statLine("300", "sh", "Z"), {});
+  assert.deepEqual(scan(), { rows: null, problem: "process 300 (sh): readlink cwd gave ENOENT; state Z, with no task listed" });
+  assert.deepEqual(pauses, []);
+  // More processes caught exiting than one scan waits for: unknown at the ninth, without waiting
+  // for it; the scan's pauses stay within 8 x 750 ms.
+  fs.rmSync(path.join(proc, "300"), { recursive: true });
+  const exiting = [];
+  for (let i = 0; i < 9; i++) {
+    const n = String(400 + i);
+    entry(n, statLine(n, "sh", "Z", { threads: 2 }), { [n]: "Z", [String(500 + i)]: "R" });
+    exiting.push(n);
+  }
+  // Each one gone (ESRCH) at its first look after a pause.
+  const looks = new Map();
+  const r = scan((pid) => pid === 100 || (looks.set(pid, (looks.get(pid) ?? 0) + 1), looks.get(pid) < 2));
+  assert.equal(r.rows, null);
+  assert.match(r.problem, /^more than 8 of your processes were exiting while hoptell read them \(the last: process \d+ \(sh\): .*state Z, while its task \d+ is in state R\)$/);
+  assert.deepEqual(pauses, Array(8).fill(50), "one pause each for the first eight, none for the ninth");
+  assert.ok(total() <= 8 * 750);
+  for (const n of exiting) fs.rmSync(path.join(proc, n), { recursive: true, force: true });
+});
+
+test("worktree member state: a process whose folder cannot be read counts unless it is older than the repository's first launch on this boot or one of hoptell's own ancestors", async (t) => {
+  const s = setup(t);
+  await add(s);
+  fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "changed\n");
+  const sessions = path.join(s.home, "worktrees", "sessions");
+  fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+  // A launch whose pane's process (tick `start` of this boot) has exited, with no other process
+  // recorded (Codex's case: a reparented writer is all that is left of it). firstLaunch: the first
+  // launch on the boot, which later launches keep.
+  const boot = currentBoot();
+  const launch = (start, firstLaunch = { boot, start }) =>
+    fs.writeFileSync(path.join(sessions, "dana-impl-1.json"), JSON.stringify({ version: 1, member: "dana-impl-1", sessionId: "$1", pane: "%1", root: { pid: 999_999, start, uid: process.getuid(), boot }, tree: [], started: new Date().toISOString(), firstLaunch }), { mode: 0o600 });
+  launch("1000");
+  // hoptell (500) runs under its login's sshd (902, started after the launch); systemd --user
+  // (900) is older than the launch; 901 and 903 started after it.
+  const rows = [
+    [500, { ppid: 902, start: "5000" }],
+    [902, { ppid: 1, start: "3000" }],
+    [900, { ppid: 1, start: "500" }],
+    [901, { ppid: 1, start: "2000" }],
+    [903, { ppid: 1, start: "1200" }],
+  ];
+  const procs = (unreadable) => ({
+    table: () => new Map(rows.map(([pid, r]) => [pid, { pid, uid: process.getuid(), ...r }])),
+    self: 500,
+    cwds: () => ({ rows: [{ pid: 500, cwd: s.root, command: "node" }], unreadable }),
+  });
+  // Each with the start the scan read from it, as the table shows it.
+  const unreadable = (pid, command) => ({ pid, uid: process.getuid(), start: rows.find(([p]) => p === pid)[1].start, command });
+  const systemd = unreadable(900, "systemd");
+  const sshd = unreadable(902, "sshd");
+  const writer = unreadable(901, "writer");
+  const child = unreadable(903, "child");
+  const change = (n) => fs.writeFileSync(path.join(s.wt, "lib", "x.js"), `changed ${n}\n`);
+  const commit = (u) => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { procs: procs(u) });
+  // Older than the launch, or in hoptell's own ancestor chain: not counted.
+  assert.ok((await commit([systemd, sshd])).commit);
+  // A pid reused since the table was read: the table shows the old process (500, before the
+  // launch), the scan read the new one (2000). Only the scan's start counts, and one that differs
+  // from the table's, or none at all, places nothing; nor does the chain place a reused pid.
+  change(1);
+  await refusal(() => commit([{ ...systemd, start: "2000" }]), "member_unknown", /process 900 \(systemd/);
+  await refusal(() => commit([{ ...systemd, start: "400" }]), "member_unknown", /process 900 \(systemd/);
+  await refusal(() => commit([{ ...systemd, start: null }]), "member_unknown", /process 900 \(systemd, started at an unknown time\)/);
+  await refusal(() => commit([{ ...sshd, start: "6000" }]), "member_unknown", /process 902 \(sshd/);
+  // An unreadable process started after the launch, outside the chain: it could be the member's.
+  await refusal(() => commit([systemd, sshd, writer]), "member_unknown", /process 901 \(writer, started [^)]+\) of yours could not be inspected, so it runs no git on this repository\. Processes you cannot inspect count unless they are older than the team's first launch or part of this command's own login\. One of a later login .* end it, or wait for it to end/);
+  // A relaunch at tick 1500 keeps the baseline at 1000: the child started at 1200 still counts.
+  launch("1500", { boot, start: "1000" });
+  await refusal(() => commit([child]), "member_unknown", /process 903 \(child/);
+  // A record written before firstLaunch existed: its root is the baseline.
+  const rec = JSON.parse(fs.readFileSync(path.join(sessions, "dana-impl-1.json"), "utf8"));
+  delete rec.firstLaunch;
+  fs.writeFileSync(path.join(sessions, "dana-impl-1.json"), JSON.stringify(rec), { mode: 0o600 });
+  await refusal(() => commit([writer]), "member_unknown", /process 901 \(writer/);
+  assert.ok((await commit([systemd, child])).commit, "older than its root (1500)");
+  // After a reboot (no launch on this boot), or with no launch record at all, no process of a
+  // member started by hoptell tmux can exist: none counts.
+  change(2);
+  launch("1000", { boot: "another-boot", start: "1000" });
+  assert.ok((await commit([systemd, writer, child])).commit);
+  change(3);
+  fs.rmSync(path.join(sessions, "dana-impl-1.json"));
+  assert.ok((await commit([systemd, writer])).commit);
+});
+
+test("worktree member state: a relaunch keeps the member's first launch on this boot", async (t) => {
+  const s = setup(t);
+  const rec = await add(s);
+  const file = path.join(s.home, "worktrees", "sessions", "dana-impl-1.json");
+  const a = paneProcess(t);
+  await startAs(s.home, rec, a.pid);
+  const first = processIdentity(a.pid);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).firstLaunch, { boot: first.boot, start: first.start });
+  await a.stop();
+  const b = paneProcess(t);
+  await startAs(s.home, rec, b.pid);
+  const again = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(again.root, processIdentity(b.pid));
+  assert.deepEqual(again.firstLaunch, { boot: first.boot, start: first.start }, "the relaunch does not move it");
+  await b.stop();
+  // A first launch of another boot is replaced.
+  fs.writeFileSync(file, JSON.stringify({ ...again, firstLaunch: { boot: "another-boot", start: "1" } }), { mode: 0o600 });
+  const c = paneProcess(t);
+  await startAs(s.home, rec, c.pid);
+  const third = processIdentity(c.pid);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).firstLaunch, { boot: third.boot, start: third.start });
+  // A malformed one makes the record unreadable.
+  fs.writeFileSync(file, JSON.stringify({ ...again, firstLaunch: { boot: "x" } }), { mode: 0o600 });
+  assert.equal(memberState(s.home, "dana-impl-1").state, "unknown");
+});
+
+test("worktree member state: a recorded process of the member counts as running while it runs, whatever its folder shows", async (t) => {
+  const s = setup(t);
+  await add(s);
+  fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "changed\n");
+  // The member's session root has exited, its child is alive and unreadable.
+  const child = spawn("sleep", ["60"], { stdio: "ignore" });
+  t.after(() => child.kill());
+  const id = processIdentity(child.pid);
+  const sessions = path.join(s.home, "worktrees", "sessions");
+  fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(sessions, "dana-impl-1.json"), JSON.stringify({ version: 1, member: "dana-impl-1", sessionId: "$1", pane: "%1", root: { ...id, pid: 999_999, start: "Mon Jan  1 00:00:00 2024" }, tree: [id], started: new Date().toISOString() }), { mode: 0o600 });
+  const withChild = { table: processTable, self: process.pid, cwds: () => ({ rows: [], unreadable: [{ pid: child.pid, uid: id.uid, start: id.start, command: "sleep" }] }) };
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { procs: withChild }), "member_running");
 });
 
 test("worktree records: every field is checked; a missing or malformed one refuses before any git runs", async (t) => {

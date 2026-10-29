@@ -617,8 +617,8 @@ test("menu: a favourite named agents gets no command and /agents stays the stati
   await setPeople(s.home, ["me-agents", "me-zed"]);
   await s.bridge.menuCheck();
   const cmds = s.tg.calls("setMyCommands").at(-1).params.commands;
-  assert.deepEqual(cmds.map((c) => c.command), ["msg", "agents", "pending", "help", "zed"]);
-  assert.deepEqual(cmds.slice(0, 4).map((c) => c.description), ["Message an agent", "Your agents and favourites", "Questions waiting for you", "How this works"]);
+  assert.deepEqual(cmds.map((c) => c.command), ["msg", "agents", "team", "pending", "help", "zed"]);
+  assert.deepEqual(cmds.slice(0, 5).map((c) => c.description), ["Message an agent", "Your agents and favourites", "Your agent teams", "Questions waiting for you", "How this works"]);
   zed.client.close();
   await sleep(200);
   await s.bridge.menuCheck();

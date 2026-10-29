@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { processIdentity } from "../lib/host.js";
+import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
 import { NOTICE_MS, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamCommand, teamDown, teamLandApprove, teamLandCandidate, teamLandDiscard, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
 import { addWorktree, commitWorktree, landApprove, landCandidate, readWorktreeRecord, registrationOf, removeWorktree, worktreeCommand, worktreePaths } from "../lib/worktrees.js";
 import { findGit } from "../lib/gitsafe.js";
@@ -560,12 +560,15 @@ test("supervisor and down: a stop that fails, an unknown identity or a stale sup
   const sup = session(T0);
   const s = readState(home, "n2");
   s.members = [memberRow("dana-n2-rev-1", "reviewer", null)];
-  s.supervisor = { ...sup, root: { ...sup.root, start: "Thu Jan  1 00:00:00 1970" } };
+  // Another start in the same form as the real one (Linux: clock ticks; macOS: ps lstart): a
+  // start in the other form is no comparison, so it would read as unknown.
+  const otherStart = /^\d+$/.test(sup.root.start) ? String(Number(sup.root.start) + 1) : "Thu Jan  1 00:00:00 1970";
+  s.supervisor = { ...sup, root: { ...sup.root, start: otherStart } };
   writeTeam(home, s);
   const calls = [];
   const r = await teamDown(home, "n2", {}, { ...base, endSession: (pane, pid, id) => calls.push(id) });
   assert.deepEqual(calls, []);
-  assert.deepEqual(r.report[0], { name: "supervisor", state: "not running" });
+  assert.deepEqual(r.report[0], { name: "supervisor", state: "not running" }, `stored ${JSON.stringify(s.supervisor.root)}; now ${JSON.stringify(processInfo(sup.root.pid))}; boot ${currentBoot()}; identityState ${identityState(s.supervisor.root)}`);
   assert.equal(r.down, true);
   s.status = "up";
   s.supervisor = sup;
@@ -1293,7 +1296,14 @@ function secondClone(t, x) {
   const pathB = path.join(rootB, path.basename(wtParent), path.basename(x.rec.path));
   fs.cpSync(x.s.repo, repoB, { recursive: true });
   fs.cpSync(wtParent, path.dirname(pathB), { recursive: true });
-  git(repoB, "worktree", "repair", pathB);
+  // Point the copy and the clone at each other directly: `git worktree repair <path>` leaves a
+  // .git file that still names a valid admin folder (the first clone's) unchanged on Git 2.43.
+  const id = path.basename(fs.readFileSync(path.join(pathB, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim());
+  const adminB = path.join(repoB, ".git", "worktrees", id);
+  assert.ok(fs.existsSync(adminB), `the clone has the worktree's admin folder ${id}`);
+  fs.writeFileSync(path.join(pathB, ".git"), `gitdir: ${adminB}\n`);
+  fs.writeFileSync(path.join(adminB, "gitdir"), `${path.join(pathB, ".git")}\n`);
+  git(repoB, "worktree", "repair", pathB); // no change expected; any other inconsistency is repaired
   assert.ok(fs.readFileSync(path.join(pathB, ".git"), "utf8").includes(rootB), "the copy is a worktree of its own clone");
   const recFile = worktreePaths(x.s.home).record(x.member);
   const recA = fs.readFileSync(recFile, "utf8");

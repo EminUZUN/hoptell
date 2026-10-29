@@ -1297,7 +1297,17 @@ than hoptell and the shell it runs in) has its working folder in the member's wo
 a tool command an agent's background service runs there. hoptell reads those folders with `lsof`
 on macOS and from `/proc` on Linux; when it cannot tell, it refuses. A process that left the
 worktree but still writes into it is not seen, which is why an implementer must have quit, not
-only gone quiet. Start implementers with `hoptell tmux --cwd`. Before `worktree commit`, `diff`,
+only gone quiet. Linux does not show even to you the working folder of a non-dumpable process,
+such as `systemd --user`, `(sd-pam)` or the `sshd` process of a login, and an implementer's
+process can become one too. Processes you cannot inspect count unless they are older than the
+team's first launch or part of this command's own login. "First launch" is the earliest pane
+process `hoptell tmux` started for a member of the repository on this boot; relaunching a member
+does not move it. So a login that started after the team (say a second `ssh` session) makes every
+`worktree` command refuse, naming the process: end that login, or wait for it to end. When no
+member was launched since the last reboot, none of them counts: no member's process can be
+running. A member started without `hoptell tmux` is seen only by its working folder. `worktree
+list` says how many such processes there are. Any other folder that fails to read makes it
+refuse. Start implementers with `hoptell tmux --cwd`. Before `worktree commit`, `diff`,
 `remove` or a new `worktree add` in that repository, stop the implementer or let it quit, and
 `cd` out of the worktree in other shells. Set `user.name` and `user.email` in the repository's own config; the
 controlled git reads no global configuration. `hoptell worktree` needs Git 2.43 or later.
@@ -1407,6 +1417,25 @@ message. `team status` lists the open requests and who has not answered, and the
 latest finished one. A team keeps up to 200 requests: answered ones make room, and a new request
 is refused while all 200 are open. Each reviewer's latest verdict is always kept. A fresh
 `team up` starts an empty queue. A verdict is a review, not your approval.
+
+**Team status in Telegram.** The lead's hoptell session publishes a short summary of the teams it
+leads as its own status at the relay: each team's name and state, and per member its name, role,
+CLI, the model and effort it was started with ("CLI default" when unset), branch and state, plus
+the open review requests and who has not answered. A member's state is `working`, `ready` (the
+lead committed its work and has not asked for a review of it yet), `in review`, `approved` (every
+reviewer asked approved its latest commit) or `exited`; a reviewer is `in review` while a request
+waits for its verdict, else `ready`. A review is listed only of a member of the team's list and
+waiting for reviewers of it. The session updates the summary every 30 seconds while it leads a team
+that is not down, and clears it when it leads none. A separate process reads the team states and
+the process table for it and is ended after 5 seconds, so the session itself never waits for that
+work. Team commands never wait for it either, and a relay
+that refuses it changes nothing else. `/team` in the bot chat and the Teams tab of the app show
+these summaries. Each team is shown under the session that published it; a member name that two
+sessions both claim is shown under neither. Nothing in this view grants anything or can be
+tapped. The relay lists a summary only to sessions of your own member that ask for it (your bridge),
+never to other members or to shared-token sessions. It needs a relay with the `status` capability
+(0.4.0); with an older relay, nothing is published and `/team` says that the server needs an
+update.
 
 **Landing.** Only you land: both steps run in your terminal, because the candidate is signed with
 your key and an agent's session never uses it. Stop every implementer of the repository first.
@@ -1729,7 +1758,8 @@ while a question stays open in `/pending`.
 **Commands.** The bot's menu is set for your paired chat only.
 
 - It holds `/msg` (pick an agent), `/agents` (your agents and favourites; `/peers` still works
-  the same way), `/pending` (open questions, oldest first: number, agent, the start of the
+  the same way), `/team` (your agent teams, see "Team status in Telegram" in "Agent teams"),
+  `/pending` (open questions, oldest first: number, agent, the start of the
   question and its age; 8 per page, with a button to show a question's card again), `/help`
   and, when the app is on, `/app`.
 - Then it has one command per favourite, online or not: its name, lower-cased, with `-` as `_`
@@ -1741,11 +1771,11 @@ while a question stays open in `/pending`.
   refuses one that is ambiguous. After the collision clears, the command may reach the
   remaining agent; use `@<name> <text>` to name the recipient exactly, or `/msg` when the
   agent's button is shown.
-- The menu shows at most 100 commands, the ones above and up to 96 favourites (95 with `/app`).
+- The menu shows at most 100 commands, the ones above and up to 95 favourites (94 with `/app`).
   It is updated within about a minute as agents come and go.
 
 **The app.** A small app inside Telegram shows all your agents at once, grouped by computer, with
-search, and your open questions. Turn it on with `hoptell telegram app --on` (with the bridge
+search, your open questions and your agent teams (read-only). Turn it on with `hoptell telegram app --on` (with the bridge
 stopped), then open it from `📱 Open the app` under `/msg`, `/agents` and `/pending`, or with
 `/app`. Your phone loads the app from your hoptell server, so it must be able to reach that server.
 For a company server, connect to the company network or VPN. It needs a relay whose operator has
