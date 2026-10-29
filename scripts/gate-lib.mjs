@@ -147,6 +147,7 @@ export const GROUPS = {
       "lib/settings.js",
       "lib/snapshot.js",
       "lib/telegram.js",
+      "lib/teams.js",
       "lib/tmux.js",
       "lib/transfercli.js",
       "lib/transferin.js",

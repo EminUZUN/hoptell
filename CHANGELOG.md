@@ -37,7 +37,44 @@
   adds the template with the CLI's own per-session flag, and a launch prompt that points at
   `read_task`. `~/.config/hoptell/roles/<role>.md` replaces the shipped text.
 - Claude Code plugin: a new `hoptell-implementers` skill covers worktrees, task files, the
-  implement-and-review loop and cleanup.
+  implement-and-review loop, teams, landing and cleanup.
+- Agent teams: `hoptell team up <team file> [--dry-run] | status | stop | restart | down` starts
+  a lead's implementers and reviewers from one JSON file (`schema/team.schema.json`): a worktree
+  per implementer, then each member in tmux with the role `<role>,<team>`, its preset, role
+  template and task. Member names start with the lead's first part; implementers' `owns` globs
+  must not overlap; agy implementers are refused. Members that write need your yes (a terminal
+  answer or `--yes`). `stop`, `restart` and `down` act on the tmux session and process hoptell
+  recorded, never on a name, and send no signal when that process cannot be confirmed; a team is
+  down only when every stop is confirmed. `down` removes only clean worktrees and branches with
+  nothing unlanded, and names what it keeps. See "Agent teams" in the README.
+- Team members' hoptell MCP servers leave out `ask_owner` and `spawn_agent` and refuse direct
+  calls to them; owner questions and new agents go through the lead. `team up` and `team restart`
+  set the signal in the session's environment. This is a policy, not a security boundary: a
+  member runs as your OS user and could start an unfiltered server of its own.
+- Review queue: `hoptell review request --team <team> --base <c> --head <c> [--to <reviewer>]`
+  records a request for a member's recorded commits (or a landing candidate's `T..C`) in the team's state and sends it to the
+  team's reviewers; the lead records each reply with `hoptell review verdict --team <team> <request>
+  <reviewer> approve|changes`. hoptell never reads a verdict out of a message. Reviewers are told
+  to read the range with `git diff --no-ext-diff --no-textconv`, so no diff program or textconv
+  filter of the repository runs for them. `team status` shows open requests and who has not
+  answered; a fresh `team up` starts an empty queue.
+- `hoptell agents profiles` shows each profile's model and effort ("CLI default" when unset).
+- Team lifetimes: `lifetimeMinutes` (per team or member) and `idleMinutes.reviewer` start a
+  supervisor that shows a notice in the member's pane, ends it a minute later by its session id,
+  and tells the lead once the end is confirmed. Implementers are never ended for idleness.
+- Landing: `hoptell team land <member> --target <branch> -m <message>` makes one commit signed
+  with your SSH key, with the member's reviewed tree on the target's current commit, and verifies
+  it; `--approve <T> <C>` moves the target from `T` to exactly that commit by compare-and-swap,
+  never by a merge. A target checked out in a worktree is not moved: hoptell prints the
+  fast-forward to run there, and `--confirm <T> <C>` records it. All steps run only in your
+  terminal. hoptell journals the candidate before it publishes its branch, and a landing before
+  the target moves, and records it before it deletes
+  the candidate branch or the worktree, so an interrupted landing is finished by running the same
+  command again; `team down` keeps the worktree of a member whose landing or candidate is not
+  resolved, `team land` still reaches it, and `team up` waits for it. It removes the member's worktree and branch only by that record, never by
+  comparing patches. `hoptell worktree remove` follows the same rule. Landing never follows a
+  symbolic ref, and it acts only on the worktree its team registered; `hoptell worktree add` and
+  `remove` refuse a member name whose landing is still pending.
 
 ## 0.3.2 (2026-10-27)
 

@@ -9,7 +9,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { controlledGit, findGit } from "../lib/gitsafe.js";
-import { parseLsofCwds, processCwds, processIdentity } from "../lib/host.js";
+import { parseLsofCwds, processCwds, processCwdsScan, processIdentity } from "../lib/host.js";
 import { withLock } from "../lib/locks.js";
 import { addWorktree, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberState, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
 import { sleep } from "./helpers.js";
@@ -750,4 +750,55 @@ test("hoptell worktree: the command line (list, add, commit, diff, remove, usage
   const missing = cli("diff", "dana-impl-1");
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /dana-impl-1 has no hoptell worktree/);
+});
+
+test("the macOS cwd scan: only a complete lsof answer is used; anything else refuses and says why", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-lsof-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const gone = spawnSync("true").pid; // exited and reaped
+  let n = 0;
+  const fake = (out, tail) => {
+    const f = path.join(dir, `lsof-${++n}`);
+    fs.writeFileSync(path.join(dir, `out-${n}`), out);
+    fs.writeFileSync(f, `#!/bin/sh\ncat '${path.join(dir, `out-${n}`)}'\n${tail}\n`, { mode: 0o755 });
+    return f;
+  };
+  const me = process.pid;
+  const exists = (pid) => pid !== gone;
+  const scan = (out, tail) => processCwdsScan(501, { platform: "darwin", lsof: fake(out, tail), exists });
+  const partial = `p${me}\ncnode\nfcwd\nn/work\np${gone}\ncsleep\n`;
+  // Exit 0: a row without a folder is dropped only for a process that is gone.
+  assert.deepEqual(scan(partial, "exit 0").rows, [{ pid: me, cwd: "/work", command: "node" }]);
+  assert.match(scan(`p${me}\ncnode\nfcwd\nn/work\np1\nclaunchd\n`, "exit 0").problem, /lsof did not give the folder of process 1, which still runs/);
+  // Exit 1 with output that parses, a signal, output that does not parse, no lsof: unknown.
+  const one = scan(partial, "echo 'lsof: WARNING: cannot stat() a file system' >&2; exit 1");
+  assert.equal(one.rows, null);
+  assert.equal(one.problem, "lsof exited 1: lsof: WARNING: cannot stat() a file system");
+  assert.match(scan(partial, "kill -9 $$").problem, /lsof was stopped by SIGKILL/);
+  assert.match(scan("garbage\n", "exit 0").problem, /lsof's output did not parse/);
+  assert.match(processCwdsScan(501, { platform: "darwin", lsof: path.join(dir, "none") }).problem, /lsof failed \(ENOENT\)/);
+});
+
+test("worktree member state through the real scan: a process born during a failed scan is never missed, and one found is named", async (t) => {
+  const s = setup(t);
+  await add(s);
+  fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "changed\n");
+  const git = canaryGit(s);
+  const pidFile = path.join(s.root, "born.pid");
+  t.after(() => {
+    try {
+      process.kill(Number(fs.readFileSync(pidFile, "utf8")));
+    } catch {}
+  });
+  // lsof that starts a process in the worktree while it scans, leaves it out and exits 1.
+  const lsof = path.join(s.root, "lsof-born");
+  fs.writeFileSync(lsof, `#!/bin/sh\n(cd '${s.wt}' && exec sleep 60 </dev/null >/dev/null 2>&1) &\necho $! > '${pidFile}'\necho p${process.pid}; echo cnode; echo fcwd; echo n/\nexit 1\n`, { mode: 0o755 });
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { git, procs: { lsof, platform: "darwin" } }), "member_unknown", /could not be read \(lsof exited 1\)/);
+  assert.ok(Number(fs.readFileSync(pidFile, "utf8")) > 1, "the process was born during the scan");
+  // A complete answer that has it: it is named.
+  const born = Number(fs.readFileSync(pidFile, "utf8"));
+  const found = path.join(s.root, "lsof-found");
+  fs.writeFileSync(found, `#!/bin/sh\necho p${process.pid}; echo cnode; echo fcwd; echo n/\necho p${born}; echo csleep; echo fcwd; echo n${s.wt}\nexit 0\n`, { mode: 0o755 });
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { git, procs: { lsof: found, platform: "darwin" } }), "member_running", new RegExp(`process ${born} \\(sleep\\) runs in its worktree`));
+  assert.ok(!fs.existsSync(s.canary), "git ran before the check");
 });

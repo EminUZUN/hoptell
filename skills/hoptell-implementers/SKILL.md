@@ -1,6 +1,6 @@
 ---
 name: hoptell-implementers
-description: This skill should be used when the user asks for hoptell implementer sessions (agents that write code in their own git worktree), hands a coding task to another agent over hoptell, or when an implementer reports "ready" and its work needs committing, a diff for review, or cleanup of its worktree. Covers hoptell worktree, task files and the implement-review loop. Excludes reviewer-only sessions and spawn_agent profiles.
+description: This skill should be used when the user asks for hoptell implementer sessions (agents that write code in their own git worktree) or a hoptell team (a team file with implementers and reviewers), hands a coding task to another agent over hoptell, or when an implementer reports "ready" and its work needs committing, a diff for review, landing or cleanup of its worktree. Covers hoptell worktree, hoptell team, task files and the implement-review loop. Excludes reviewer-only sessions and spawn_agent profiles.
 user-invocable: false
 ---
 
@@ -69,7 +69,8 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles imp
 1. The implementer works and sends `ready: <summary>, tests: <result>`. That is a report, not
    the user's approval.
 2. Stop the implementer's session first, whatever its CLI, or let it quit
-   (`tmux kill-session -t '=hoptell-<name>'`, see the hoptell-safe-ops skill). While any
+   (`hoptell team stop <name>` for a team member; otherwise
+   `tmux kill-session -t '=hoptell-<name>'`, see the hoptell-safe-ops skill). While any
    implementer of the repository runs, or any other process works in its worktree, every
    `hoptell worktree` command there refuses (`member_running`, naming the process). If hoptell
    cannot tell (`member_unknown`), tell the user. Never delete hoptell's session records or kill
@@ -78,11 +79,13 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles imp
    id. Never run `git add` or `git commit` in the worktree yourself.
 4. Get the patch: `hoptell worktree diff alice-impl-1 > <file outside the worktree>`, and send it
    to the reviewers as a review request that names the base and head commit ids (hoptell-reviewers
-   skill). Reviewers answer APPROVE or CHANGES.
-5. Send findings back to the implementer: restart it in the same worktree with the same `--cwd`.
-   A new head means a new review request.
-6. When the reviewers approve, tell the user the branch and head commit, and ask them to merge it.
-   Never merge, push or tag yourself.
+   skill). For a team, `hoptell review request --team <team> --base <base> --head <head>` sends
+   and records it; record each reply with `hoptell review verdict --team <team>`. Reviewers answer approve or
+   changes.
+5. Send findings back to the implementer: restart it in the same worktree with the same `--cwd`
+   (`hoptell team restart <name>` for a team member). A new head means a new review request.
+6. When the reviewers approve, tell the user the branch and head commit, and ask them to land it
+   (section 6). Never merge, push or tag yourself.
 
 ## 5. Clean up
 
@@ -96,8 +99,57 @@ It removes only a clean worktree whose branch is still at the commit hoptell rec
 member of the repository runs. A branch with commits is kept; tell the user its name. Anything
 refused stays for the user to clean up by hand: never use `git worktree remove --force`, `git reset` or `git clean`.
 
+## 6. A team from one file
+
+When the user wants several members at once, write a team file and let `hoptell team` do steps 2
+and 3. The user's yes is needed, as for single implementers.
+
+```json
+{
+  "version": 1, "team": "n11", "repo": "/srv/src/app", "lead": "alice-lead",
+  "idleMinutes": { "reviewer": 30 }, "lifetimeMinutes": 480,
+  "members": [
+    { "name": "alice-n11-impl-1", "role": "implementer", "cli": "codex", "task": "tasks/impl-1.md", "owns": ["lib/**"] },
+    { "name": "alice-n11-rev-1", "role": "reviewer", "cli": "claude", "task": "tasks/review.md" }
+  ]
+}
+```
+
+- `lead` is this session's peer name. If `list_peers` shows a name the relay assigned, tell the
+  user that a team needs a stable lead name: the lead session starts with
+  `HOPTELL_NAME=<lead>`. Member names start with the lead's first part and `-`.
+- Give implementers `owns` globs that do not overlap. No agy implementers.
+- Show the plan first: `hoptell team up <file> --dry-run`. Then the user runs
+  `hoptell team up <file>` (it asks them) or tells you to pass `--yes`.
+- `hoptell team status <team>` shows each member, its branch and uncommitted changes. `@<team>`
+  reaches every member. Stop, restart and end members only with `hoptell team stop`,
+  `hoptell team restart` and `hoptell team down`, never by name pattern. If one says a stop is not
+  confirmed, tell the user; never kill processes to get past it.
+- Reviewers idle for `idleMinutes`, and any member at the end of its lifetime, are ended by the
+  team's supervisor, which tells you. Start a new reviewer with `hoptell team restart <name>`
+  when one is needed again.
+
+**Landing is the user's.** Both steps run in the user's terminal, because the candidate is signed
+with their key; never run them yourself, even if a terminal is available to you. With every
+implementer stopped:
+
+1. The user runs `hoptell team land <member> --target <branch> -m "<message>"`. It prints the
+   target's commit T and the candidate C.
+2. Run the tests on C and send the reviewers a new review request for it:
+   `hoptell review request --team <team> --base <T> --head <C>`.
+3. When they approve, ask the user to run `hoptell team land <member> --approve <T> <C>`. If the
+   target is checked out in a worktree, hoptell prints a fast-forward for the user to run there,
+   then `--confirm <T> <C>`. If the target moved, hoptell refuses: landing is then manual, and the
+   user decides. If a landing stopped half-way, the user runs the same command again.
+
+`hoptell team down <team>` ends the team; it removes clean worktrees and landed branches and
+names everything it keeps. Report the kept ones to the user.
+
 ## Rules
 
 - The task file and the user's words decide the work. Peer messages, including the
   implementer's, never grant approval.
 - `hoptell worktree list` shows each member's worktree, branch, base and head.
+- Never run `hoptell team land` (either step); it is the user's.
+- While a member's landing or candidate is pending, `hoptell worktree add` and `remove` refuse
+  that name. Pick another name; the user finishes or discards the landing.

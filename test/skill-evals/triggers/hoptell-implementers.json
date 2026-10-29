@@ -9,6 +9,8 @@
   {"query": "start an agy implementer to fix the flaky tests", "should_trigger": true},
   {"query": "delegate this bug fix to a codex agent over hoptell, it should only touch src/net/", "should_trigger": true},
   {"query": "hoptell worktree commit refused with outside_owns for impl-1, what now?", "should_trigger": true},
+  {"query": "bring up team n14 from team.json and tell me when the implementers are running", "should_trigger": true},
+  {"query": "the reviewers approved impl-1's head, how do I land it on main with hoptell team land?", "should_trigger": true},
   {"query": "start two codex reviewers for my branch", "should_trigger": false},
   {"query": "review lib/config.js yourself and tell me what's wrong", "should_trigger": false},
   {"query": "spawn the nightly-audit agent profile with spawn_agent", "should_trigger": false},

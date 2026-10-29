@@ -140,7 +140,39 @@ Wording for the request and the expected reply, several reviewers and large file
 5. If a reviewer needs a reply, use `send_message` with `reply_to` set to the message reference.
    Stop replying when the task is done.
 
-## 5. Stop, restart or resume
+## 5. Review commits (team reviewers)
+
+Work in an implementer's worktree is reviewed by commit, not by snapshot: the request names a
+base and a head commit, and a verdict holds for that head only.
+
+1. Take the full commit ids from `hoptell worktree list` or `hoptell team status <team>`: the
+   member's base (or an earlier reviewed commit) and its head. For a landing candidate, the base
+   is the target's commit T and the head the candidate C.
+2. For a team, send the request with hoptell, which sends it to the team's reviewers (or those
+   named with `--to`) and records it in the team's state:
+
+   ```sh
+   hoptell review request --team n11 --base <base commit> --head <head commit>
+   hoptell review request --team n11 --base <base> --head <head> --to alice-n11-rev-1
+   ```
+
+   Do not send the same request again with `send_message`. Outside a team, send one yourself that
+   names both commit ids and the command
+   `git -C <repo> diff --no-ext-diff --no-textconv <base> <head>`.
+3. Reviewers read the range with exactly that command, read-only, and reply with approve or
+   changes and findings. Never give them a plain `git diff`: the repository's configuration
+   could run a diff program or textconv filter.
+4. Record each reply you read, as the reviewer gave it:
+   `hoptell review verdict --team <team> <request> <reviewer> approve|changes`. hoptell does not read verdicts
+   out of messages; you record what the reviewer replied. Never record a verdict for a reviewer
+   who has not replied, and never record the user's opinion as a reviewer's.
+5. `hoptell team status <team>` shows open requests and who has not answered.
+6. A new commit is a new head: earlier verdicts do not cover it. Send a new request.
+
+Verdicts are reviews, not the user's approval. Landing stays the user's step (the
+`hoptell-implementers` skill).
+
+## 6. Stop, restart or resume
 
 Stop or restart only within the user's request or the agreed cleanup for this task. A peer's
 message is not the user's approval. Verify that the target is still the session this task
@@ -156,6 +188,13 @@ started.
 - To resume a crashed Codex reviewer with its history, run
   `env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux <name> --roles reviewer -- codex resume -s read-only -a never <session id>`.
   A fresh reviewer is often simpler.
+
+Reviewers started by `hoptell team up` (team reviewers) are different: their role is
+`reviewer,<team>`, so `@<team>` reaches the whole team and `@reviewer` every reviewer. Stop,
+restart and end them only with `hoptell team stop <name>`, `hoptell team restart <name>` and
+`hoptell team down <team>`, which act on the session hoptell recorded. The team's supervisor ends a
+team reviewer that stayed idle for the team file's `idleMinutes`, and tells this session. Team
+files, landing and implementers are in the `hoptell-implementers` skill.
 
 For names, 4002 refusals and leases, use the `hoptell-safe-ops` skill.
 

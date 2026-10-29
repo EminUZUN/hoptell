@@ -10,6 +10,8 @@
   {"query": "I'd like a couple of independent reviews of migrations/0042_users.sql from other agents on the relay before I run it in staging", "should_trigger": true},
   {"query": "stop the two reviewers you started earlier, I'm done for the day", "should_trigger": true},
   {"query": "resume the codex reviewer that died, session id is 0199c3a1-7a6b-7c00-9e1f-3b2a1d0c4e5f", "should_trigger": true},
+  {"query": "ask the n12 team reviewers to review dana-n12-impl-1's commits from its base to its head", "should_trigger": true},
+  {"query": "dana-n12-rev-1 answered review request rv-1a2b3c4d with changes, record its verdict", "should_trigger": true},
   {"query": "Spawn an agent with the profile nightly-tests and give it the task: run the full test suite and report failures.", "should_trigger": false},
   {"query": "review lib/relay.js yourself for race conditions, I don't need other agents", "should_trigger": false},
   {"query": "run codex exec 'summarize the README' and paste me the output", "should_trigger": false},

@@ -157,6 +157,7 @@ test("hoptell tmux --cwd --task: the agent starts in the folder, the task is sto
   assert.equal(fs.readFileSync(stored, "utf8"), taskText);
   const env = execFileSync("tmux", ["show-environment", "-t", `=${session}`], { encoding: "utf8" });
   assert.match(env, new RegExp(`^HOPTELL_TASK=${sha(taskText)}$`, "m"));
+  assert.match(env, /^HOPTELL_TEAM_MEMBER=$/m, "a plain hoptell tmux session is not a team member");
   const commands = execFileSync("tmux", ["list-panes", "-s", "-t", `=${session}`, "-F", "#{pane_start_command}"], { encoding: "utf8" });
   assert.ok(!commands.includes(secretish) && !env.includes(secretish), "the task text is not on a command line or in the environment");
 

@@ -1274,8 +1274,9 @@ hoptell worktree diff alice-impl-1 > n11-impl-1.patch                  # base..h
 ```
 
 Send the patch to the reviewers with the base and head commit ids. Findings go back to the
-implementer; a new head means a new review. When the reviewers approve, merging the branch is
-your call: the lead asks you and never merges, pushes or tags by itself.
+implementer; a new head means a new review. When the reviewers approve, landing is your call:
+the lead asks you and never merges, pushes or tags by itself (`hoptell team land`, below, is the
+owner's landing step).
 
 **Controlled git.** The lead's git runs outside any sandbox on files an agent wrote, so
 `hoptell worktree` runs git with no system or global configuration, an empty `HOME` and no
@@ -1303,8 +1304,197 @@ controlled git reads no global configuration. `hoptell worktree` needs Git 2.43 
 
 **Cleanup.** Stop the member's session, then `hoptell worktree remove alice-impl-1`. It removes only
 a clean worktree of a stopped member whose branch is still at the commit hoptell recorded. The branch is deleted only
-when it has no commits of the member; otherwise it is kept and named. hoptell never runs
+when it has no commits of the member, or when `hoptell team land` recorded its head as landed and
+the landed commit is in the target; otherwise it is kept and named. hoptell never runs
 `git reset`, `git clean` or `git worktree remove --force`; anything it refuses stays for you.
+
+## Agent teams
+
+`hoptell team` starts a lead's implementers and reviewers from one file, watches their lifetimes,
+and stops them by the tmux sessions it recorded. It uses the steps of the two sections above
+(`worktree add`, `hoptell tmux --cwd --task`, the role presets and templates) and adds the
+landing step, which is yours. A team member's hoptell MCP server leaves out `ask_owner` and
+`spawn_agent` and refuses a direct call to them: questions for you, and requests for more
+agents, go through the lead. `team up` and `team restart` mark the session as a team member in
+its environment (`HOPTELL_TEAM_MEMBER`); a peer message cannot set or clear that, and the lead's
+own session and other sessions keep every tool. This is a policy, not a security boundary: a
+member runs as your OS user and could start another hoptell server or the hoptell CLI without the
+filter. A real boundary needs credentials scoped per session, which is later work.
+
+**The team file.** JSON, checked before anything starts (`schema/team.schema.json`):
+
+```json
+{
+  "version": 1,
+  "team": "n11",
+  "repo": "~/src/app",
+  "lead": "alice-lead",
+  "idleMinutes": { "reviewer": 30 },
+  "lifetimeMinutes": 480,
+  "members": [
+    { "name": "alice-n11-impl-1", "role": "implementer", "cli": "codex", "task": "tasks/impl-1.md", "owns": ["lib/**", "test/**"] },
+    { "name": "alice-n11-impl-2", "role": "implementer", "cli": "claude", "model": "opus", "task": "tasks/impl-2.md", "owns": ["docs/**"] },
+    { "name": "alice-n11-rev-1", "role": "reviewer", "cli": "claude", "effort": "high", "task": "tasks/review.md" },
+    { "name": "alice-n11-rev-2", "role": "reviewer", "cli": "agy", "model": "<full agy model id>", "task": "tasks/review.md" }
+  ]
+}
+```
+
+Relative paths are from the team file's folder. `lead` is the lead session's peer name: start the
+lead with `HOPTELL_NAME=alice-lead` so the members' replies reach it (`team up` warns when the
+`HOPTELL_NAME` it runs with is another name). Every member's name starts with the lead's first part
+and `-` (`alice-`), the shape a member token's names have. Each member gets a task file (at most
+32 KiB), served by `read_task`; hoptell keeps a copy in the team's folder so a restart serves the
+same text. A member's model and effort come from the team file, then your
+`<hoptell home>/presets/roles.json`, then the shipped presets, then the CLI's own configuration.
+Two implementers whose `owns` may name the same file are refused (an implementer without `owns`
+may change anything, so it overlaps every other one); agy implementers are refused, and agy
+members are refused while the repository has an `.agents/mcp_config.json`. `base` (default
+`HEAD`) is the one commit all worktrees start from; `worktrees` puts them in another folder than
+`<repo>-wt`.
+
+**Up, status, stop, restart, down.**
+
+```sh
+hoptell team up team.json --dry-run   # every worktree add and tmux command it would run
+hoptell team up team.json             # asks you, since implementers can write; --yes answers yes
+hoptell team status n11
+hoptell team stop alice-n11-impl-1    # before you commit, diff or land its work
+hoptell team restart alice-n11-impl-1 # a fresh session in the same worktree, same task
+hoptell team down n11                 # stops everyone; removes what is safe to remove
+```
+
+`up` makes every implementer's worktree first and then starts each member in tmux with the role
+`<role>,<team>` (so `@n11` reaches the whole team), its preset flags, role template and task.
+Members run in your terminal with your account, like any `hoptell tmux` session. `status` shows
+each member's state, CLI, the model and effort it was started with, its branch and commits, and
+uncommitted changes; it runs git only while no implementer runs. `stop`, `restart` and `down` act
+on the tmux session id and the process hoptell recorded at launch, never on a name pattern; a
+session someone else replaced under the same name is left alone. A session is ended only while
+its pane's process is still the one hoptell recorded; when hoptell cannot tell, it sends no
+signal and says so. `restart` starts the CLI fresh (no conversation is resumed) and tells it its
+branch and head. `down` removes a worktree only when the member is confirmed stopped and the
+worktree is clean, and its branch only when nothing on it is unlanded; whatever it keeps, it
+names. A team whose stops are not all confirmed stays `stopping`, and `down` can be run again. A
+member name belongs to one active team; a team that is down keeps its landing history.
+
+**Lifetimes and idle reviewers.** With `lifetimeMinutes` (team-wide or per member) or
+`idleMinutes.reviewer`, `up` starts a supervisor in its own tmux session. A reviewer whose pane
+printed nothing and who had no waiting message for `idleMinutes` is ended; any member is ended at
+the end of its lifetime. Implementers are never ended for idleness. The supervisor first shows a
+notice in the member's pane, ends it a minute later by its session id, and tells the lead once the
+end is confirmed; a stop that did not work is noted and tried again. A reviewer whose CLI keeps
+redrawing its screen counts as active, and so does one whose activity tmux cannot report.
+
+**Review requests.** The lead asks the team's reviewers to review a member's commits and records
+their verdicts:
+
+```sh
+hoptell review request --team n11 --base <commit> --head <commit> [--to alice-n11-rev-1]
+hoptell review verdict --team n11 rv-1a2b3c4d alice-n11-rev-1 approve    # or changes
+```
+
+`review request` takes full commit ids that hoptell recorded in one member's worktree (its base or
+a `hoptell worktree commit`), `--base` before `--head`, or exactly the target's commit `T` and the
+candidate `C` of the team's landing candidate (`--base T --head C`), and reviewers of that team. It records the
+request (an `rv-` id, base, head, member, reviewers asked) in the team's state first, then sends
+it to each reviewer as `hoptell send` would. The request tells reviewers to read the range with
+`git -C <repo> diff --no-ext-diff --no-textconv <base> <head>`, so no external diff program or
+textconv filter of the repository runs for them. A send that fails leaves the request recorded and
+prints its text. `review verdict` records what a reviewer replied, for that request's head only;
+request ids are unique within a team, so it names the team. hoptell never reads a verdict out of a
+message. `team status` lists the open requests and who has not answered, and the verdicts of the
+latest finished one. A team keeps up to 200 requests: answered ones make room, and a new request
+is refused while all 200 are open. Each reviewer's latest verdict is always kept. A fresh
+`team up` starts an empty queue. A verdict is a review, not your approval.
+
+**Landing.** Only you land: both steps run in your terminal, because the candidate is signed with
+your key and an agent's session never uses it. Stop every implementer of the repository first.
+You make the candidate, the lead runs the tests on it and has the reviewers review `T..C`, and then
+you approve exactly that pair. In this example `main` is not checked out in any worktree (yours is
+on another branch); the case where it is follows below:
+
+```sh
+$ hoptell team land alice-n11-impl-1 --target main -m "Validate the settings file (n11)"
+Candidate 19380d22...7892 on main (at 96789d8a...28b7), signed and verified; squash of alice-n11-impl-1 at 893eb789...29f.
+ lib/x.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+Next: run the tests on the candidate, have the reviewers review
+  git diff --no-ext-diff --no-textconv 96789d8a...28b7 19380d22...7892
+then the owner lands it in a terminal: hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
+$ hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
+Land 19380d22...7892 on its target (now 96789d8a...28b7)? Type land to confirm: land
+Landed 19380d22...7892 on main (was 96789d8a...28b7).
+  worktree removed; branch team/n11/alice-n11-impl-1 deleted
+```
+
+(Commit ids shortened here; hoptell prints and takes them in full.) The candidate `C` is one
+commit, signed with your SSH key, whose tree is the member's reviewed head and whose parent is the
+target's commit `T`; it is made only while the target is still at the team's base, and kept on
+`team/<team>/land`. hoptell verifies its signature before it shows it to you and again before it
+lands. `--approve T C` lands exactly that pair, and only while the member's head is still the one
+the candidate was made from and the candidate branch still points at `C`. hoptell moves the
+target only by a compare-and-swap of `refs/heads/<target>` from `T` to `C`: if the target is at
+any other commit at that moment, even an older one, nothing moves. It then reads the target back
+and checks that it is at `C`.
+
+hoptell does not move a target that is checked out in a worktree, your main one included, because
+that tree would be left behind. It checks that the worktree's `HEAD` is the target at `T` and
+prints what to run there:
+
+```sh
+main is checked out in /srv/src/app, so hoptell does not move it. hoptell checked that its HEAD is main at 96789d8a...28b7. In that folder, check it again and fast-forward:
+  cd /srv/src/app
+  git symbolic-ref HEAD    # must print refs/heads/main
+  git rev-parse HEAD       # must print 96789d8a...28b7
+  git merge --ff-only 19380d22...7892
+then record it: hoptell team land alice-n11-impl-1 --confirm 96789d8a...28b7 19380d22...7892
+```
+
+`--confirm T C` records the landing only when the target is exactly at `C` and `C` is still the
+verified candidate (parent `T`, the member's tree, a good signature). hoptell never merges,
+rebases or resolves conflicts: when the target moved, land by hand. `--discard` drops a
+candidate.
+
+hoptell holds its own lock while it lands, but it cannot lock out git commands you run yourself
+at the same time. If a worktree checks out the target in the moment between hoptell's check and
+its move, the branch moves but that worktree's index and files do not: they still hold `T`, so
+`git status` there shows the landed change as undone. hoptell reports this case with a warning.
+`git read-tree -m -u T C` in that worktree brings it to `C` and keeps your own changes. Avoid
+running git in the repository while a landing runs.
+
+hoptell records which member head landed as which commit on which target, and keeps the evidence
+until that record is written. Before the target moves, it writes a journal of the landing
+(repository, member, head, target, `T`, `C`) to the team's state. It records the landing once the
+target is at `C`. Only then does it delete the candidate branch and remove the worktree. If a step
+fails or the process stops on the way, the same `hoptell team land` command finishes the landing.
+The journal is dropped only when the target certainly did not move: git refused the update, and
+the target reads back at another commit than `C`. A signal, a failed read or a target that reads
+`C` keeps it. Publishing the candidate works the same way: hoptell journals the candidate before
+it creates `team/<team>/land`, and the same `--target` command (or `--discard`) finishes a
+publication that stopped half-way. A branch whose read fails is never taken for a branch that is
+gone, and neither is one that git skips with a warning. hoptell never follows a symbolic ref:
+a target, candidate branch or member branch that is one stops the command, and every ref update
+it makes acts on the ref itself (`--no-deref`). A landing acts only on the worktree its team
+registered: if the member's record now names another repository or worktree (a name reused
+elsewhere), approve, discard and the rerun of a publication refuse and change nothing; `team
+down` keeps such a worktree instead of removing it, and `team status` and `team restart` do not
+use it.
+`hoptell worktree add` and `remove` refuse a member name whose landing is pending in any team,
+active or down. While a landing is pending,
+or a candidate was neither approved nor discarded, `hoptell team down` stops the team's sessions
+but keeps that member's worktree, candidate and journal, and says which command resolves it;
+`--approve`, `--confirm` and `--discard` still reach the member of a team that is down. `hoptell
+team up` of that team, or of a team with that member, waits until it is resolved.
+The member's worktree and branch are removed only when the worktree is clean, the branch is still
+at the head that landed, and the landed commit is in the target; hoptell never decides that
+something landed by comparing patches.
+
+Landing needs SSH commit signing set in the repository's own config when the worktree was added
+(`gpg.format ssh`, `user.signingkey`, `gpg.ssh.allowedSignersFile`); a repository without it can
+use teams, but you land its work yourself. hoptell runs `ssh-keygen` from a fixed path (`/usr/bin`,
+`/bin`, `/usr/local/bin` or `/opt/homebrew/bin`) and passes your `SSH_AUTH_SOCK` only to the signing step.
+`hoptell worktree remove` after a landing deletes the branch by the same rule.
 
 ## Spawning agents
 
@@ -1689,7 +1879,7 @@ hoptell listen [--no-ack] --session <folder> [seconds]  # the same, for the fold
                                       # prints the messages, then acknowledges them; --no-ack prints a receipt instead
 hoptell ack <receipt> (<name> | --session <folder>)     # acknowledges messages printed with --no-ack
 hoptell doctor [--relay-check] [--fix] # checks settings, relay, login, inbox and tmux; never prints the token
-hoptell agents profiles              # agent profiles and their approval state (see "Spawning agents")
+hoptell agents profiles              # agent profiles, their approval state, model and effort (see "Spawning agents")
 hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
 hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   # what each agent CLI offers and what changed
