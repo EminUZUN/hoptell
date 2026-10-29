@@ -312,7 +312,7 @@ test("page: the Teams tab shows each team as text only (hostile names stay text)
     "POST session": { token: "t".repeat(43), expires_in: 900 },
     "GET sessions": { sessions: [], counts: {} },
     "GET teams": {
-      teams: [{ team: "n1", status: "partial", lead: `${hostile} (lead)`, machine: "mbp", members: [{ label: hostile, role: "implementer", cli: "codex", model: "gpt-5", effort: "CLI default", branch: "team/n1/x", state: "in review", online: true }], more: 2, reviews: [{ member: hostile, waiting: ["rev"] }] }],
+      teams: [{ team: "n1", status: "partial", lead: `${hostile} (lead)`, machine: "mbp", members: [{ label: hostile, role: "implementer", cli: "codex", model: "gpt-5", effort: null, state: "in review", online: true }], more: 2, reviews: [{ member: hostile, waiting: ["rev"] }] }],
       more: 1,
     },
   };
@@ -334,7 +334,7 @@ test("page: the Teams tab shows each team as text only (hostile names stay text)
   await settle();
   assert.ok(calls.includes("GET teams"));
   const texts = dom.app.text();
-  for (const line of [`Team n1 · led by ${hostile} (lead)`, "partial · on mbp", hostile, "implementer · codex · model gpt-5, effort CLI default (at launch)", "in review · team/n1/x · 🟢 online", "2 more not shown", `🔎 Review of ${hostile}'s work: waiting for rev`, "1 more team not shown.", "Read-only. The teams report this themselves."]) assert.ok(texts.includes(line), line);
+  for (const line of [`Team n1 · led by ${hostile} (lead)`, "partly started · on mbp", hostile, "implementer · codex · model gpt-5", "in review · 🟢 online", "2 more not shown", `🔎 Review of ${hostile}'s work: waiting for rev`, "1 more team not shown.", "Read-only. Each team is shown as its lead session reports it; model and effort as set at launch."]) assert.ok(texts.includes(line), line);
   const screen = dom.app.all().filter((e) => e.tag !== "nav" && !(e.className ?? "").startsWith("tab"));
   assert.ok(!screen.some((e) => e.tag === "img"), "no element from a name");
   assert.ok(!screen.some((e) => e.tag === "button" || Object.keys(e.listeners).length), "nothing to tap outside the tabs");

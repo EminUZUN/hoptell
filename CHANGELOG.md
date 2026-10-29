@@ -2,6 +2,10 @@
 
 ## 0.4.0 (unreleased)
 
+Upgrade note: this release changes the relay protocol (capability `status`). Upgrade the relay
+and the Telegram bridge, restart the bridge, and restart lead sessions. With an older relay
+nothing is published; with an older bridge `/team` is an unknown command.
+
 - Agent CLI capabilities: `hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff]
   [--json]` shows what each installed agent CLI offers (flags, and models and efforts from the
   CLI's own caches, as advice), what hoptell's tests verified about its sandbox and permission
@@ -15,8 +19,9 @@
   `<hoptell home>/presets/roles.json` overrides them per CLI and role. agy takes its effort in
   the model id and never gets `--effort`. agy reviewers start in plan mode with `--sandbox` and
   without per-tool prompts; agy implementers are not offered.
-- `/hoptell:reviewers [count] [codex|claude|agy] [model] [effort]`, and the `hoptell-reviewers`
-  skill takes every launch's flags from `hoptell agents flags`.
+- `/hoptell:reviewers` now supports agy and optional model and effort arguments
+  (`[count] [codex|claude|agy] [model] [effort]`); the `hoptell-reviewers` skill takes each
+  launch's flags from `hoptell agents flags`.
 - Agent profiles (`spawn_agent`): the fixed Codex effort map is gone. `max` now passes as `max`;
   a profile with effort `minimal` or `ultra` is refused when it loads, naming the efforts the
   recorded gates allow.
@@ -26,12 +31,12 @@
   review from `hoptell worktree diff`. These commands run git with no global configuration and no
   hook, filter, textconv or external diff, commit through plumbing that applies no filter, and
   refuse a repository whose config sets anything outside a short allow list. They need Git 2.43
-  or later, and they refuse while any implementer of the repository is running, whatever its CLI,
-  or while any other process of yours works in a member's worktree: stop the implementer (or let
-  it quit) before you commit or diff its work. On Linux, processes whose working folder is hidden
-  even from you (`systemd --user`, `sshd`) count unless they are older than the team's first
-  launch or part of the command's own login. See "Working
-  with implementer agents" in the README.
+  or later. The commands that run git (`add`, `commit`, `diff`, `remove`) refuse while any
+  implementer of the repository is running, whatever its CLI, or while any other process of
+  yours works in a member's worktree: stop the implementer (or let it quit) before you commit or
+  diff its work. On Linux, processes whose working folder is hidden even from you
+  (`systemd --user`, `sshd`) count unless they are older than the team's first launch or part of
+  the command's own login. See "Working with implementer agents" in the README.
 - `hoptell tmux --cwd <dir>` starts the agent in that folder, and `--task <file>` stores a task
   (at most 32 KiB) for the session, which reads it with the new `read_task` tool. This keeps the
   task off the command line; it is not hidden from other programs that run as you.
@@ -51,7 +56,7 @@
   nothing unlanded, and names what it keeps. See "Agent teams" in the README.
 - Team members' hoptell MCP servers leave out `ask_owner` and `spawn_agent` and refuse direct
   calls to them; owner questions and new agents go through the lead. `team up` and `team restart`
-  set the signal in the session's environment. This is a policy, not a security boundary: a
+  set `HOPTELL_TEAM_MEMBER` in the session's environment. This is a policy, not a security boundary: a
   member runs as your OS user and could start an unfiltered server of its own.
 - Review queue: `hoptell review request --team <team> --base <c> --head <c> [--to <reviewer>]`
   records a request for a member's recorded commits (or a landing candidate's `T..C`) in the team's state and sends it to the
@@ -62,30 +67,34 @@
   answered; a fresh `team up` starts an empty queue.
 - `hoptell agents profiles` shows each profile's model and effort ("CLI default" when unset).
 - Team status in Telegram: a lead's session publishes a short summary of its teams (members with
-  role, CLI, model and effort at launch, branch and state, and open review requests) as its own
+  role, CLI, model and effort at launch, and state, and open review requests) as its own
   status at the relay, every 30 seconds while it leads a team. The bot's new `/team` command and
   a Teams tab in the app show it, read-only, each team under the session that published it.
   Relay protocol: a new capability `status`, a `set_status` request (text of at most 8 KiB, only
   from the session that holds the name) and `list` with `status: true`, which returns a status
   only to sessions of the same member. It needs the relay and the bridge from this release; with
   an older relay nothing is published and `/team` says the server needs an update. The bot's menu
-  now holds up to 95 favourites.
+  holds one favourite fewer (95, or 94 with /app), since `/team` takes a line.
+- PRIVACY.md: the team summaries, and the new local files (task copies, team state and history,
+  worktree and session records, capability records and presets).
 - Team lifetimes: `lifetimeMinutes` (per team or member) and `idleMinutes.reviewer` start a
   supervisor that shows a notice in the member's pane, ends it a minute later by its session id,
   and tells the lead once the end is confirmed. Implementers are never ended for idleness.
-- Landing: `hoptell team land <member> --target <branch> -m <message>` makes one commit signed
-  with your SSH key, with the member's reviewed tree on the target's current commit, and verifies
-  it; `--approve <T> <C>` moves the target from `T` to exactly that commit by compare-and-swap,
-  never by a merge. A target checked out in a worktree is not moved: hoptell prints the
-  fast-forward to run there, and `--confirm <T> <C>` records it. All steps run only in your
-  terminal. hoptell journals the candidate before it publishes its branch, and a landing before
-  the target moves, and records it before it deletes
-  the candidate branch or the worktree, so an interrupted landing is finished by running the same
-  command again; `team down` keeps the worktree of a member whose landing or candidate is not
-  resolved, `team land` still reaches it, and `team up` waits for it. It removes the member's worktree and branch only by that record, never by
-  comparing patches. `hoptell worktree remove` follows the same rule. Landing never follows a
-  symbolic ref, and it acts only on the worktree its team registered; `hoptell worktree add` and
-  `remove` refuse a member name whose landing is still pending.
+- Landing, the candidate: `hoptell team land <member> --target <branch> -m <message>` makes one
+  commit signed with your SSH key, with the member's reviewed tree on the target's current
+  commit, and verifies it; `--approve <T> <C>` moves the target from `T` to exactly that commit
+  by compare-and-swap, never by a merge. A target checked out in a worktree is not moved: hoptell
+  prints the fast-forward to run there, and `--confirm <T> <C>` records it. All steps run only in
+  your terminal. Landing never follows a symbolic ref, and it acts only on the worktree its team
+  registered.
+- Landing, the journal: hoptell journals the candidate before it publishes its branch, and a
+  landing before the target moves, and records the landing before it deletes the candidate
+  branch or the worktree. An interrupted landing is finished by running the same command again.
+  The member's worktree and branch are removed only by that record, never by comparing patches;
+  `hoptell worktree remove` follows the same rule.
+- Landing, while one is pending: `team down` keeps the worktree of a member whose landing or
+  candidate is not resolved, `team land` still reaches it, and `team up` waits for it;
+  `hoptell worktree add` and `remove` refuse that member name.
 
 ## 0.3.2 (2026-10-27)
 

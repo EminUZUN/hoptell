@@ -1165,8 +1165,8 @@ refused with close code 4002. When an agent runs these commands from inside tmux
 `hoptell agents flags <codex|claude|agy> --role reviewer [--model <model>] [--effort <effort>]`
 prints the agent command and flags to put after `--` (the role's safety flags from your presets,
 then the model and effort as that CLI takes them), and its warnings on standard error. Use it for
-every launch, also without a model or effort: without a model, the CLI's own settings choose
-one.
+every launch, also without a model or effort: without explicit values, the role preset supplies
+model and effort, and the CLI picks what the preset leaves unset.
 
 ```sh
 $ hoptell agents flags codex --role reviewer --model gpt-6.1-sol --effort xhigh
@@ -1175,9 +1175,9 @@ $ hoptell agents flags agy --role reviewer --model gemini-4-argon-high
 agy --mode plan --sandbox --dangerously-skip-permissions --model gemini-4-argon-high
 ```
 
-With these flags, Codex and Claude Code reviewers get effort `high` unless you name another.
-agy takes its effort in the model id, so give the complete id (`gemini-4-argon-high`); hoptell
-refuses an agy effort without one and never passes `--effort` to agy. Models and efforts are checked against
+The shipped Codex and Claude Code reviewer presets use high effort. hoptell refuses `--effort`
+for agy (give the complete model id instead, such as `gemini-4-argon-high`) and never passes
+`--effort` to agy. Models and efforts are checked against
 the lists the CLIs cache for your account (Codex's `models_cache.json`, Claude Code's model
 catalog when it holds one account) and, for Codex, the list built into the binary. These lists
 are advice: a model or effort they lack gets a warning with the list's age, and the CLI decides.
@@ -1249,7 +1249,8 @@ into `<hoptell home>/sessions/<name>.task` (0600) at launch, and the session rea
 `read_task` tool, which serves only the task stored for that session at its start. This keeps the
 task off the command line and out of the tmux pane; it is not hidden from other programs that run
 as you. `--lead` makes `hoptell agents flags` add a role template and a launch prompt that points
-at `read_task`:
+at `read_task`. `read_task` exists only in a session started with `--task`, so `--lead` needs
+`--task` (`hoptell tmux` warns when the prompt mentions `read_task` and no task was given):
 
 ```sh
 hoptell agents flags codex --role implementer --lead alice-lead
@@ -1289,8 +1290,9 @@ SSH signing settings recorded at `worktree add`); a hook path, filter, textconv,
 other program is refused, as is a change to the signing settings or to `.git/info/attributes`.
 These checks find changes; they do not stop one that races them. The guarantee rests on the
 repository's `.git` staying trusted, and no implementer is kept away from it: they run as you,
-whatever their CLI or sandbox flags. So every `hoptell worktree` command refuses while any member
-of the repository is running. `hoptell tmux --cwd <worktree>` records the member's session (its
+whatever their CLI or sandbox flags. So the `hoptell worktree` commands that run git (`add`,
+`commit`, `diff`, `remove`) refuse while any member of the repository is running; `list` only
+reports. `hoptell tmux --cwd <worktree>` records the member's session (its
 tmux session id and its pane's process, then also the processes that one started). A member
 counts as running while any of those processes is alive, or while any process of yours (other
 than hoptell and the shell it runs in) has its working folder in the member's worktree, such as
@@ -1302,11 +1304,11 @@ such as `systemd --user`, `(sd-pam)` or the `sshd` process of a login, and an im
 process can become one too. Processes you cannot inspect count unless they are older than the
 team's first launch or part of this command's own login. "First launch" is the earliest pane
 process `hoptell tmux` started for a member of the repository on this boot; relaunching a member
-does not move it. So a login that started after the team (say a second `ssh` session) makes every
-`worktree` command refuse, naming the process: end that login, or wait for it to end. When no
-member was launched since the last reboot, none of them counts: no member's process can be
-running. A member started without `hoptell tmux` is seen only by its working folder. `worktree
-list` says how many such processes there are. Any other folder that fails to read makes it
+does not move it. So a login that started after the team (say a second `ssh` session) makes the
+`worktree` commands that run git refuse, naming the process: end that login, or wait for it to
+end. With no `hoptell tmux` launch on this boot, none of the processes it launched can remain;
+processes started another way are checked only by their working folder. `worktree list` says
+how many such processes there are. Any other folder that fails to read makes it
 refuse. Start implementers with `hoptell tmux --cwd`. Before `worktree commit`, `diff`,
 `remove` or a new `worktree add` in that repository, stop the implementer or let it quit, and
 `cd` out of the worktree in other shells. Set `user.name` and `user.email` in the repository's own config; the
@@ -1352,7 +1354,10 @@ filter. A real boundary needs credentials scoped per session, which is later wor
 
 Relative paths are from the team file's folder. `lead` is the lead session's peer name: start the
 lead with `HOPTELL_NAME=alice-lead` so the members' replies reach it (`team up` warns when the
-`HOPTELL_NAME` it runs with is another name). Every member's name starts with the lead's first part
+`HOPTELL_NAME` it runs with is another name), and with the flags
+`hoptell agents flags <cli> --role lead` prints. A lead takes no `--lead` (there is no lead role
+template), for example
+`HOPTELL_NAME=alice-lead HOPTELL_PUSH=tmux hoptell tmux alice-lead -- <its output>`. Every member's name starts with the lead's first part
 and `-` (`alice-`), the shape a member token's names have. Each member gets a task file (at most
 32 KiB), served by `read_task`; hoptell keeps a copy in the team's folder so a restart serves the
 same text. A member's model and effort come from the team file, then your
@@ -1362,6 +1367,22 @@ may change anything, so it overlaps every other one); agy implementers are refus
 members are refused while the repository has an `.agents/mcp_config.json`. `base` (default
 `HEAD`) is the one commit all worktrees start from; `worktrees` puts them in another folder than
 `<repo>-wt`.
+
+**Before `team up`.** hoptell's git reads no global configuration, so set these in the
+repository's own config: `user.name` and `user.email` (without them `worktree commit` refuses:
+"the repository's config has no user.name; hoptell's git reads no global configuration, so set it
+with: git config user.name ..."), and for landing SSH signing: `gpg.format ssh`,
+`user.signingkey` and `gpg.ssh.allowedSignersFile` (without them `team land` refuses with
+`signing_required`). `worktree add` records the signing settings, so set them before `team up`.
+
+The lead must be a session connected to the relay under the lead name: an agent session, or
+`hoptell wait`. `hoptell listen` only reads a local inbox, so the members' messages to a lead that
+only listens fail. After the start, `team up` checks the relay and warns when the lead is not
+online. Interactive Codex asks you to trust each new folder in its pane before it starts;
+`team up` names every Codex member whose folder Codex's `config.toml` does not mark trusted, and
+hoptell never trusts a folder for you. A Codex member's hoptell MCP server is the one in Codex's
+`config.toml` (`[mcp_servers.hoptell]`), which can be another hoptell install than the one that
+runs `team up`; `team up` warns when it is, and names both.
 
 **Up, status, stop, restart, down.**
 
@@ -1385,15 +1406,26 @@ its pane's process is still the one hoptell recorded; when hoptell cannot tell, 
 signal and says so. `restart` starts the CLI fresh (no conversation is resumed) and tells it its
 branch and head. `down` removes a worktree only when the member is confirmed stopped and the
 worktree is clean, and its branch only when nothing on it is unlanded; whatever it keeps, it
-names. A team whose stops are not all confirmed stays `stopping`, and `down` can be run again. A
-member name belongs to one active team; a team that is down keeps its landing history.
+names; `down --keep-worktrees` stops the members and removes no worktree or branch. A team whose
+stops are not all confirmed stays `stopping`, and `down` can be run again. A member name belongs
+to one active team; a team that is down keeps its landing history.
+
+A team is `starting` while `up` starts its members, `up` once all started, `partial` (shown as
+"partly started") when some did not start, `stopping` while a `down` has stops not confirmed, and
+`down` once every member is stopped. In `team status` a member is `not started`, `running`,
+`exited`, `ended (<reason>)` or `unknown`. `ended (<reason>)` means the supervisor ended it for
+idleness or lifetime; a confirmed manual stop shows as `exited`. `unknown` means hoptell cannot
+confirm that process's state and sends it no signal; an unknown implementer also blocks the
+commands that run git in its repository.
 
 **Lifetimes and idle reviewers.** With `lifetimeMinutes` (team-wide or per member) or
 `idleMinutes.reviewer`, `up` starts a supervisor in its own tmux session. A reviewer whose pane
 printed nothing and who had no waiting message for `idleMinutes` is ended; any member is ended at
 the end of its lifetime. Implementers are never ended for idleness. The supervisor first shows a
 notice in the member's pane, ends it a minute later by its session id, and tells the lead once the
-end is confirmed; a stop that did not work is noted and tried again. A reviewer whose CLI keeps
+end is confirmed; a stop that did not work is noted and tried again. The supervisor is a hoptell
+session of its own named `<prefix>-<team>-supervisor` (`alice-n11-supervisor`): its messages to
+the lead come from that name. A reviewer whose CLI keeps
 redrawing its screen counts as active, and so does one whose activity tmux cannot report.
 
 **Review requests.** The lead asks the team's reviewers to review a member's commits and records
@@ -1420,12 +1452,12 @@ is refused while all 200 are open. Each reviewer's latest verdict is always kept
 
 **Team status in Telegram.** The lead's hoptell session publishes a short summary of the teams it
 leads as its own status at the relay: each team's name and state, and per member its name, role,
-CLI, the model and effort it was started with ("CLI default" when unset), branch and state, plus
+CLI, the model and effort it was started with (shown only when set at launch) and state, plus
 the open review requests and who has not answered. A member's state is `working`, `ready` (the
 lead committed its work and has not asked for a review of it yet), `in review`, `approved` (every
-reviewer asked approved its latest commit) or `exited`; a reviewer is `in review` while a request
-waits for its verdict, else `ready`. A review is listed only of a member of the team's list and
-waiting for reviewers of it. The session updates the summary every 30 seconds while it leads a team
+reviewer asked approved its latest commit), `exited` or `unknown` (hoptell cannot tell whether it
+still runs); a reviewer is `in review` while a request waits for its verdict, else `ready`. A
+review is shown only when its member and the reviewers it waits for are in the team's list. The session updates the summary every 30 seconds while it leads a team
 that is not down, and clears it when it leads none. A separate process reads the team states and
 the process table for it and is ended after 5 seconds, so the session itself never waits for that
 work. Team commands never wait for it either, and a relay
@@ -1448,8 +1480,9 @@ $ hoptell team land alice-n11-impl-1 --target main -m "Validate the settings fil
 Candidate 19380d22...7892 on main (at 96789d8a...28b7), signed and verified; squash of alice-n11-impl-1 at 893eb789...29f.
  lib/x.js | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
-Next: run the tests on the candidate, have the reviewers review
-  git diff --no-ext-diff --no-textconv 96789d8a...28b7 19380d22...7892
+Next: run the tests on the candidate, have the reviewers review it
+  hoptell review request --team n11 --base 96789d8a...28b7 --head 19380d22...7892
+  (they read git diff --no-ext-diff --no-textconv 96789d8a...28b7 19380d22...7892)
 then the owner lands it in a terminal: hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
 $ hoptell team land alice-n11-impl-1 --approve 96789d8a...28b7 19380d22...7892
 Land 19380d22...7892 on its target (now 96789d8a...28b7)? Type land to confirm: land
@@ -1457,7 +1490,9 @@ Landed 19380d22...7892 on main (was 96789d8a...28b7).
   worktree removed; branch team/n11/alice-n11-impl-1 deleted
 ```
 
-(Commit ids shortened here; hoptell prints and takes them in full.) The candidate `C` is one
+(Commit ids shortened here; hoptell prints and takes them in full.) To run the tests on `C`,
+check it out in a folder of its own: `git worktree add --detach <dir> <C>`, test there, then
+`git worktree remove <dir>`. That is your own git, outside hoptell's checks. The candidate `C` is one
 commit, signed with your SSH key, whose tree is the member's reviewed head and whose parent is the
 target's commit `T`; it is made only while the target is still at the team's base, and kept on
 `team/<team>/land`. hoptell verifies its signature before it shows it to you and again before it
@@ -1472,11 +1507,9 @@ that tree would be left behind. It checks that the worktree's `HEAD` is the targ
 prints what to run there:
 
 ```sh
-main is checked out in /srv/src/app, so hoptell does not move it. hoptell checked that its HEAD is main at 96789d8a...28b7. In that folder, check it again and fast-forward:
+main is checked out in /srv/src/app, so hoptell does not move it. hoptell checked that its HEAD is main at 96789d8a...28b7. In that folder, run the line below: it checks again that HEAD is refs/heads/main at 96789d8a...28b7, and fast-forwards only when both checks pass.
   cd /srv/src/app
-  git symbolic-ref HEAD    # must print refs/heads/main
-  git rev-parse HEAD       # must print 96789d8a...28b7
-  git merge --ff-only 19380d22...7892
+  test "$(git symbolic-ref HEAD)" = refs/heads/main && test "$(git rev-parse HEAD)" = 96789d8a...28b7 && git merge --ff-only 19380d22...7892
 then record it: hoptell team land alice-n11-impl-1 --confirm 96789d8a...28b7 19380d22...7892
 ```
 
@@ -1914,8 +1947,13 @@ hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
 hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   # what each agent CLI offers and what changed
 hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>] [--lead <name> [--template <t>]]   # flags for hoptell tmux ... --
-hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>]   # an implementer's worktree (see "Working with implementer agents")
+hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>] [--repo <dir>]   # an implementer's worktree (see "Working with implementer agents")
 hoptell worktree list | commit <member> -m <message> [--allow-outside] | diff <member> [--stat] | remove <member>
+hoptell team up <team file> [--dry-run] [--yes] | status [<team>] [--json] | stop <member> | restart <member>   # see "Agent teams"
+hoptell team down [<team>] [--keep-worktrees]
+hoptell team land <member> --target <branch> -m <message> | --approve <T> <C> | --confirm <T> <C> | --discard   # the owner's landing, in a terminal
+hoptell review request --team <team> --base <commit> --head <commit> [--to <reviewer>]...
+hoptell review verdict --team <team> <request> <reviewer> approve|changes
 hoptell agents list | stop <run> | result <run> | confirm <run> [--start | --discard] | audit [--run <run>]
 hoptell telegram setup [--relay <alias>] [--name owner]   # the owner channel (token on standard input)
 hoptell telegram pair | run | status | unpair [--all]   # run exits 78 when the encryption policy refuses it

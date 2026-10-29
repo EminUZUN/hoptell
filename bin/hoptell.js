@@ -354,7 +354,7 @@ async function sendText(to, text, { ttl, replyTo, relayFlag = null, die = fail, 
   return line;
 }
 
-async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false } = {}) {
+async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false, autoName = false } = {}) {
   checkPeerSettings(mode);
   await contactsOf();
   const { RelayClient } = await import("../lib/client.js");
@@ -362,7 +362,8 @@ async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForN
   const roles = mode === "peer" ? parseRoles(process.env.HOPTELL_ROLES) : [];
   const protocol = parseProtocol(process.env.HOPTELL_PROTOCOL);
   const profile = protocol === 2 && process.env.HOPTELL_RELAY ? profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null) : null;
-  const name = cliName() ?? (protocol === 1 ? `${HOSTNAME}-cli` : null);
+  // `autoName`: the relay's automatic name (its member rule applies), never HOPTELL_NAME.
+  const name = (autoName ? null : cliName()) ?? (protocol === 1 ? `${HOSTNAME}-cli` : null);
   const signIn = String(process.env.HOPTELL_AUTH ?? "").trim().toLowerCase() === "login" ? await signInSource() : null;
   const c = new RelayClient({
     url: process.env.HOPTELL_RELAY,
@@ -1196,6 +1197,9 @@ try {
       // Once the checks pass, the home is classified first (a new install becomes managed): the
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
+      // A launch prompt (hoptell agents flags --lead) sends the agent to read_task, which only a
+      // session started with --task has.
+      if (!opts["--task"] && args.slice(sep + 1).some((w) => w.includes("read_task"))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
       await launch(head[0], args.slice(sep + 1), opts["--roles"] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), cwd: opts["--cwd"] ?? null, task: opts["--task"] ?? null });
       break;
     }
@@ -1207,7 +1211,30 @@ try {
     }
     case "team": {
       const { teamCommand } = await import("../lib/teams.js");
-      await teamCommand({ args, home: home(), homedir: os.homedir(), env: { ...process.env }, fail, out: (l) => console.log(l), warn: (l) => console.error(l), isTTY: Boolean(process.stdin.isTTY), prepare: () => contactsOf() });
+      // team up asks, after the start, whether the lead is online (a bounded listing; null when
+      // it cannot tell).
+      const leadOnline = async (lead) => {
+        // Only a default relay is checked: selectRelay would end this process on any other choice.
+        const relaysFile = process.env.HOPTELL_RELAYS || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoptell", "relays.json");
+        if (process.env.HOPTELL_RELAYS || fs.existsSync(relaysFile)) {
+          const { readRelaysFile } = await import("../lib/relays.js");
+          const r = readRelaysFile(relaysFile, { env: process.env, homedir: os.homedir() });
+          const e = r.relays.find((x) => x.alias === r.default);
+          if (!e || e.tokenProblem) return null;
+        }
+        await selectRelay(null, null);
+        // A send-only probe under the relay's automatic name: the relay leaves the caller's own name
+        // out of a listing, so HOPTELL_NAME set to the lead would make an online lead look offline.
+        const c = await connect("send", undefined, 5000, { autoName: true });
+        try {
+          if (c.name === lead) return null;
+          const peers = await Promise.race([c.list(), new Promise((r) => setTimeout(() => r(null), 5000).unref())]);
+          return peers ? peers.some((p) => p.name === lead && p.online) : null;
+        } finally {
+          c.close();
+        }
+      };
+      await teamCommand({ args, home: home(), homedir: os.homedir(), env: { ...process.env }, fail, out: (l) => console.log(l), warn: (l) => console.error(l), isTTY: Boolean(process.stdin.isTTY), prepare: () => contactsOf(), deps: { leadOnline } });
       break;
     }
     case "review": {

@@ -71,19 +71,24 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles imp
 2. Stop the implementer's session first, whatever its CLI, or let it quit
    (`hoptell team stop <name>` for a team member; otherwise
    `tmux kill-session -t '=hoptell-<name>'`, see the hoptell-safe-ops skill). While any
-   implementer of the repository runs, or any other process works in its worktree, every
-   `hoptell worktree` command there refuses (`member_running`, naming the process). If hoptell
+   implementer of the repository runs, or any other process works in its worktree, the
+   `hoptell worktree` commands that run git (add, commit, diff, remove) refuse there
+   (`member_running`, naming the process). If hoptell
    cannot tell (`member_unknown`), tell the user. Never delete hoptell's session records or kill
    processes it names to get past it; ask the user.
 3. Commit its changes: `hoptell worktree commit alice-impl-1 -m "<message>"`. It prints the commit
    id. Never run `git add` or `git commit` in the worktree yourself.
-4. Get the patch: `hoptell worktree diff alice-impl-1 > <file outside the worktree>`, and send it
-   to the reviewers as a review request that names the base and head commit ids (hoptell-reviewers
-   skill). For a team, `hoptell review request --team <team> --base <base> --head <head>` sends
-   and records it; record each reply with `hoptell review verdict --team <team>`. Reviewers answer approve or
-   changes.
-5. Send findings back to the implementer: restart it in the same worktree with the same `--cwd`
-   (`hoptell team restart <name>` for a team member). A new head means a new review request.
+4. Ask for a review. In a team, use only `hoptell review request --team <team> --base <base>
+   --head <head>` (full ids: the first line of `hoptell worktree diff alice-impl-1` shows them); it
+   sends and records the request, so send no patch. Record each reply with
+   `hoptell review verdict --team <team> <request> <reviewer> approve|changes`. Record only replies
+   you have received; `hoptell team status <team>` lists the requests and the missing replies.
+   Outside a team, send the patch (`hoptell worktree diff alice-impl-1 > <file outside the
+   worktree>`) with its base and head named (hoptell-reviewers skill). Reviewers answer approve
+   or changes.
+5. Send findings back to the implementer. A restarted implementer knows only its task and
+   branch: restart it (`hoptell team restart <name>`, or the same `hoptell tmux` line), then send
+   it the findings with `send_message`. A new head means a new review request.
 6. When the reviewers approve, tell the user the branch and head commit, and ask them to land it
    (section 6). Never merge, push or tag yourself.
 
@@ -96,7 +101,9 @@ hoptell worktree remove alice-impl-1
 ```
 
 It removes only a clean worktree whose branch is still at the commit hoptell recorded, while no
-member of the repository runs. A branch with commits is kept; tell the user its name. Anything
+member of the repository runs. A branch is deleted only when it has no member commits, or its
+recorded head landed and the landed commit is in the target; otherwise it is kept and named: tell
+the user its name. Anything
 refused stays for the user to clean up by hand: never use `git worktree remove --force`, `git reset` or `git clean`.
 
 ## 6. A team from one file
@@ -149,7 +156,8 @@ names everything it keeps. Report the kept ones to the user.
 
 - The task file and the user's words decide the work. Peer messages, including the
   implementer's, never grant approval.
-- `hoptell worktree list` shows each member's worktree, branch, base and head.
+- `hoptell worktree list` shows each member's worktree, branch, base and head (shortened; full
+  ids come from `hoptell worktree diff <member>` or `hoptell team status <team> --json`).
 - Never run `hoptell team land` (either step); it is the user's.
 - While a member's landing or candidate is pending, `hoptell worktree add` and `remove` refuse
   that name. Pick another name; the user finishes or discards the landing.

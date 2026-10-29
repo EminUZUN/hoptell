@@ -9,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
-import { NOTICE_MS, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamCommand, teamDown, teamLandApprove, teamLandCandidate, teamLandDiscard, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { BIN } from "../lib/config.js";
+import { NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamCommand, teamDown, teamLandApprove, teamLandCandidate, teamLandDiscard, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
 import { addWorktree, commitWorktree, landApprove, landCandidate, readWorktreeRecord, registrationOf, removeWorktree, worktreeCommand, worktreePaths } from "../lib/worktrees.js";
 import { findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -158,6 +159,34 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.match(dry.warn, /dana-n1-impl-1 \(codex\) gets write access to its worktree/);
   assert.match(dry.out, /Dry run: nothing was started/);
   assert.ok(!fs.existsSync(path.join(s.root, "repo-wt")) && !fs.existsSync(path.join(s.home, "teams")), "nothing was created");
+  // Codex members: no config.toml, so Codex asks to trust the worktree, and which hoptell it runs
+  // could not be checked.
+  const wt = path.join(s.root, "repo-wt", "dana-n1-impl-1");
+  assert.ok(dry.warn.includes(`warning: dana-n1-impl-1: Codex will ask you to trust ${wt} in its pane before it starts`), dry.warn);
+  assert.match(dry.warn, /could not check which hoptell the Codex members run as their MCP server: \S+config\.toml: it does not exist/);
+  assert.doesNotMatch(dry.warn, /dana-n1-rev-1: Codex/, "a Claude Code member is not checked");
+  // A trusted folder, and Codex's hoptell: another install (named, with its version), then this one.
+  const codexHome = path.join(s.homedir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const other = path.join(s.root, "other-install");
+  fs.mkdirSync(path.join(other, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(other, "bin", "hoptell.js"), "");
+  fs.writeFileSync(path.join(other, "package.json"), JSON.stringify({ name: "hoptell", version: "0.3.2" }));
+  const config = (script) => fs.writeFileSync(path.join(codexHome, "config.toml"), `model = "x"\n\n[projects.${JSON.stringify(wt)}]\ntrust_level = "trusted"\n\n[mcp_servers.hoptell]\ncommand = "node"\nargs = [${JSON.stringify(script)}, "mcp"] # comment\n`);
+  config(path.join(other, "bin", "hoptell.js"));
+  let w = (await run(["up", file, "--dry-run"])).warn;
+  assert.doesNotMatch(w, /Codex will ask|Codex may ask/);
+  assert.ok(w.includes(`Codex members run the hoptell MCP server of ${fs.realpathSync(path.join(other, "bin", "hoptell.js"))} (version 0.3.2), from [mcp_servers.hoptell] in ${path.join(codexHome, "config.toml")}, not this hoptell ${fs.realpathSync(BIN)}`), w);
+  config(BIN);
+  const before = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  w = (await run(["up", file, "--dry-run"])).warn;
+  assert.doesNotMatch(w, /MCP server/);
+  assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), before, "read only");
+  // A config that cannot be read: Codex may ask.
+  fs.chmodSync(path.join(codexHome, "config.toml"), 0);
+  w = (await run(["up", file, "--dry-run"])).warn;
+  if (process.getuid() !== 0) assert.match(w, /dana-n1-impl-1: Codex may ask you to trust \S+ in its pane before it starts \(\S+config\.toml: it could not be read \(EACCES\)\)/);
+  fs.chmodSync(path.join(codexHome, "config.toml"), 0o600);
   // No terminal and no --yes: refused before anything starts.
   const no = await run(["up", file]);
   assert.match(no.failed.m, /run it in a terminal to confirm, or pass --yes/);
@@ -206,6 +235,8 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   assert.equal(up.code, 0, up.stderr);
   assert.match(up.stdout, /started dana-n1-impl-1 \(tmux session \$\d+\)/);
   assert.match(up.stdout, /started the supervisor/);
+  // No session of the lead is online at the test relay: a warning after the start.
+  assert.match(up.stderr, /warning: the lead dana-lead is not online at the relay, so the members' messages to it fail\. Run the lead as a session connected under that name \(an agent session, or hoptell wait\); hoptell listen only reads a local inbox/);
   const state = readState(w.home, "n1");
   assert.equal(fs.statSync(teamPaths(w.home, "n1").state).mode & 0o777, 0o600);
   assert.equal(state.status, "up");
@@ -285,13 +316,19 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   const manual = await owner(["land", impl.name, "--approve", T, C]);
   assert.equal(manual.failed, null, manual.failed);
   assert.match(manual.out, /main is checked out in \S+repo, so hoptell does not move it/);
-  assert.match(manual.out, new RegExp(`git rev-parse HEAD {7}# must print ${T}\n  git merge --ff-only ${C}\nthen record it: hoptell team land dana-n1-impl-1 --confirm ${T} ${C}`));
+  assert.ok(manual.out.includes(`\n  test "$(git symbolic-ref HEAD)" = refs/heads/main && test "$(git rev-parse HEAD)" = ${T} && git merge --ff-only ${C}\nthen record it: hoptell team land dana-n1-impl-1 --confirm ${T} ${C}`), manual.out);
+  assert.ok(!manual.out.includes("#"), "nothing a shell might not take as a comment");
   assert.equal(git(s.repo, "rev-parse", "main"), T, "nothing moved");
   assert.equal(readState(w.home, "n1").candidate.C, C, "the candidate stays");
   // --confirm before the owner's fast-forward: nothing is recorded.
   assert.match((await owner(["land", impl.name, "--confirm", T, C])).failed, /main is still at .*; run git merge --ff-only/);
   assert.match((await cli("land", impl.name, "--confirm", T, C)).stderr, /landing is the owner's step: run hoptell team land --confirm in a terminal/);
-  git(s.repo, "merge", "-q", "--ff-only", C);
+  // The printed line, pasted into a shell: with a wrong check nothing merges; as printed, it merges.
+  const line = manual.out.split("\n").find((l) => l.startsWith("  test ")).trim();
+  const paste = (text) => spawnSync("sh", ["-c", text], { cwd: s.repo, env: gitEnv, encoding: "utf8" });
+  assert.notEqual(paste(line.replace(`= ${T} `, `= ${C} `)).status, 0);
+  assert.equal(git(s.repo, "rev-parse", "main"), T, "a failed check merges nothing");
+  assert.equal(paste(line).status, 0);
   const landed = await owner(["land", impl.name, "--confirm", T, C]);
   assert.equal(landed.failed, null, landed.failed);
   assert.match(landed.out, new RegExp(`Confirmed ${C} on main \\(was ${T}\\)`));
@@ -326,9 +363,13 @@ test("team down keeps a dirty worktree and a branch with commits that never land
   fs.writeFileSync(path.join(s.root, "tasks", "impl.md"), "Implement it.\n");
   const file = path.join(s.root, "team.json");
   fs.writeFileSync(file, JSON.stringify(teamDoc({ team: "n2", members: [memberOf({ name: "dana-n2-a" }), memberOf({ name: "dana-n2-b", owns: ["test/**"] })] })));
-  const env = { PATH: f.PATH, HOME: s.homedir, HOPTELL_PUSH: "" };
+  // The lead is online, and team up runs under the lead's own name (the relay leaves a caller's
+  // own name out of its listing): the check's probe has a name of its own and sees the lead.
+  await w.mcp("dana-lead");
+  const env = { PATH: f.PATH, HOME: s.homedir, HOPTELL_PUSH: "", HOPTELL_NAME: "dana-lead" };
   const up = await w.cli(["team", "up", file, "--yes"], env);
   assert.equal(up.code, 0, up.stderr);
+  assert.doesNotMatch(up.stderr, /the lead dana-lead|could not check whether the lead/);
   const [a, b] = readState(w.home, "n2").members;
   fs.writeFileSync(path.join(a.worktree, "dirty.txt"), "uncommitted\n");
   // b gets a commit that never lands. A running implementer keeps the repository busy, so both stop
@@ -1366,6 +1407,13 @@ test("a candidate branch that git skips with a warning, or an exit-0 answer that
     writeTeam(x.s.home, { ...st, candidate: null, publishing: { member: x.member, target: "main", T: x.c.T, H: x.c.H, C: x.c.C, at: st.candidate.at } });
     await refusal(() => teamLandCandidate(x.s.home, x.member, { target: "main", message: "Land", homedir: x.s.homedir }), "ref_unreadable", warned);
     assert.equal(readState(x.s.home, "n4").publishing.C, x.c.C);
+    // team status shows the publication in progress, and so does its --json.
+    const lines = [];
+    await teamCommand({ args: ["status", "n4"], home: x.s.home, homedir: x.s.homedir, env: {}, out: (l) => lines.push(l), warn: () => {}, fail: (m) => assert.fail(m) });
+    assert.ok(lines.includes(`  candidate being published: ${x.member} ${x.c.C} on main at ${x.c.T}; hoptell team land ${x.member} --target main -m <message> finishes it, or --discard`), lines.join("\n"));
+    const json = [];
+    await teamCommand({ args: ["status", "n4", "--json"], home: x.s.home, homedir: x.s.homedir, env: {}, out: (l) => json.push(l), warn: () => {}, fail: (m) => assert.fail(m) });
+    assert.deepEqual(JSON.parse(json.join("\n")).publishing, { member: x.member, target: "main", T: x.c.T, H: x.c.H, C: x.c.C, at: st.candidate.at });
   }
   // A recorded landing whose candidate branch turned broken: its cleanup refuses, the journal stays.
   {
@@ -1720,7 +1768,7 @@ test("review queue caps keep live data: 200 open requests refuse the next one; a
   const open = Array.from({ length: 200 }, (_, i) => ({ id: `rv-${i.toString(16).padStart(8, "0")}`, base: x.base, head: x.c2, member: x.member, reviewers: ["dana-n9-rev-1"], at, verdicts: [] }));
   writeTeam(x.home, { ...readState(x.home, "n9"), reviews: open });
   const bytes = stateBytes(x.home, "n9");
-  await refusal(() => reviewRequest(x.home, { team: "n9", base: x.base, head: x.c2 }, { send }), "too_many_reviews", /team n9 has too many open review requests \(200\); record verdicts with hoptell review verdict --team n9 first/);
+  await refusal(() => reviewRequest(x.home, { team: "n9", base: x.base, head: x.c2 }, { send }), "too_many_reviews", /team n9 has too many open review requests \(200\); record the replies you have received with hoptell review verdict --team n9 <request> <reviewer> approve\|changes first/);
   assert.equal(stateBytes(x.home, "n9"), bytes, "all 200 open requests are kept, nothing else changed");
   // One answered: it makes room, the 199 still open stay.
   await reviewVerdict(x.home, { team: "n9", id: "rv-00000005", reviewer: "dana-n9-rev-1", verdict: "approve" });
@@ -1757,4 +1805,102 @@ test("review request ids are per team: a verdict names its team and changes only
   await refusal(() => reviewVerdict(home, { team: "n6", id: "rv-deadbeef", reviewer: "dana-rev-1", verdict: "approve" }), "no_team");
   await refusal(() => reviewVerdict(home, { id: "rv-deadbeef", reviewer: "dana-rev-1", verdict: "approve" }), "which_team");
   assert.equal(stateBytes(home, "n4"), n4);
+});
+
+test("team status: an implementer without a worktree shows no worktree, or worktree removed after a landing or down; never undefined", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-st-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const impl = (name) => memberRow(name, "implementer", null, { cli: "codex", worktree: `/x/repo-wt/${name}`, branch: `team/n6/${name}` });
+  const landed = { member: "dana-n6-impl-2", H: "a".repeat(40), C: "b".repeat(40), T: "c".repeat(40), target: "main", at: new Date(0).toISOString() };
+  writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1"), impl("dana-n6-impl-2")], { landed: [landed] }));
+  const show = async (args) => {
+    const out = [];
+    await teamCommand({ args, home, homedir: home, env: {}, out: (l) => out.push(l), warn: () => {}, fail: (m) => assert.fail(m) });
+    return out.join("\n");
+  };
+  let text = await show(["status", "n6"]);
+  assert.match(text, /dana-n6-impl-1 .*\n {4}team\/n6\/dana-n6-impl-1\n {4}no worktree\n/);
+  assert.match(text, /dana-n6-impl-2 .*\n {4}team\/n6\/dana-n6-impl-2\n {4}worktree removed/);
+  let json = await show(["status", "n6", "--json"]);
+  assert.deepEqual(JSON.parse(json).members.map((m) => [m.noWorktree, m.commits, m.head]), [["no worktree", null, null], ["worktree removed", null, null]]);
+  for (const s of [text, json]) assert.doesNotMatch(s, /undefined|\? commit/);
+  // A team that is down: hoptell removed what it could.
+  writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1")], { status: "down" }));
+  text = await show(["status", "n6"]);
+  assert.match(text, /\n {4}worktree removed/);
+  json = await show(["status", "n6", "--json"]);
+  assert.doesNotMatch(text + json, /undefined/);
+});
+
+test("team stop: after a confirmed stop, a process still closing in the member's worktree is waited for briefly, then named", async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-linger-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const wt = "/x/repo-wt/dana-n7-impl-1";
+  // Its pane's process is gone (no worktree record: the recorded pid, positively absent).
+  const gone = { id: "$1", pane: "%1", pid: 999_999, root: null, started: new Date(0).toISOString() };
+  const team = () => writeTeam(home, stateOf("n7", [memberRow("dana-n7-impl-1", "implementer", gone, { cli: "codex", worktree: wt, branch: "team/n7/dana-n7-impl-1" })]));
+  const self = { pid: 500, cwd: "/", command: "node" };
+  // An injected monotonic clock: the pauses and the scans (`scanMs` each) move it.
+  let scans = 0;
+  let clock = 0;
+  let budgets = [];
+  const deps = (rows, { scanMs = 0, lingerMs = 1000 } = {}) => ({
+    procs: {
+      table: () => new Map([[500, { pid: 500, ppid: 1, uid: process.getuid(), start: "1" }]]),
+      self: 500,
+      cwds: ({ timeoutMs }) => (scans++, budgets.push(timeoutMs), (clock += scanMs), rows(scans)),
+    },
+    endSession: () => true,
+    sleep: async (ms) => void (clock += ms),
+    now: () => clock,
+    lingerMs,
+  });
+  team();
+  let r = await teamStop(home, "dana-n7-impl-1", deps(() => [self, { pid: 700, cwd: `${wt}/lib`, command: "node" }]));
+  assert.equal(r.state, "exited; process 700 (node) still runs in its worktree");
+  assert.equal(scans, 4, "polled every 250 ms within the bounded 1 s, then named");
+  assert.deepEqual(budgets, [1000, 750, 500, 250], "each scan gets only the time left");
+  // A slow scan counts against the bound: after a 3 s scan and a pause, the second scan gets only
+  // the 1.75 s left (a reader that kept to it would end by 5 s), and no third scan starts.
+  [scans, clock, budgets] = [0, 0, []];
+  team();
+  r = await teamStop(home, "dana-n7-impl-1", deps(() => [self, { pid: 700, cwd: wt, command: "node" }], { scanMs: 3000, lingerMs: 5000 }));
+  assert.equal(r.state, "exited; process 700 (node) still runs in its worktree");
+  assert.deepEqual(budgets, [5000, 1750]);
+  assert.equal(clock, 6250);
+  // A scan that cannot answer (timed out) after one that saw the process: the last one seen is named.
+  [scans, clock, budgets] = [0, 0, []];
+  team();
+  r = await teamStop(home, "dana-n7-impl-1", deps((n) => (n === 1 ? [self, { pid: 700, cwd: wt, command: "node" }] : null)));
+  assert.equal(r.state, "exited; process 700 (node) still runs in its worktree");
+  assert.equal(scans, 2);
+  // It closes on the third look: plain exited.
+  [scans, clock] = [0, 0];
+  team();
+  r = await teamStop(home, "dana-n7-impl-1", deps((n) => (n < 3 ? [self, { pid: 700, cwd: wt, command: "node" }] : [self])));
+  assert.equal(r.state, "exited");
+  assert.equal(scans, 3);
+  // A first scan that cannot answer leaves it to the worktree commands.
+  [scans, clock] = [0, 0];
+  team();
+  r = await teamStop(home, "dana-n7-impl-1", deps(() => null));
+  assert.equal(r.state, "exited");
+  assert.equal(scans, 1);
+});
+
+test("team up's lead check only warns: online says nothing, offline and a failed check say so", async () => {
+  const said = [];
+  const warn = (l) => said.push(l);
+  await leadCheck("dana-lead", { leadOnline: async () => true, warn });
+  assert.deepEqual(said, []);
+  await leadCheck("dana-lead", { leadOnline: async () => null, warn });
+  await leadCheck("dana-lead", {
+    leadOnline: async () => {
+      throw new Error("no relay");
+    },
+    warn,
+  });
+  assert.deepEqual(said, Array(2).fill("warning: could not check whether the lead dana-lead is online at the relay; members reach it only while a session is connected under that name"));
+  await leadCheck("dana-lead", { warn }); // no check available: nothing
+  assert.equal(said.length, 2);
 });

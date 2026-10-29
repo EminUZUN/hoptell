@@ -480,7 +480,9 @@ test("hoptell agents flags --lead: the role template with the CLI's own per-sess
   assert.match((await run(["flags", "codex", "--role", "implementer", "--lead", "bad name"])).failed.m, /invalid lead name/);
   assert.match((await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--template", "boss"])).failed.m, /no role template "boss"/);
   assert.equal((await run(["flags", "codex", "--role", "implementer", "--template", "tester"])).failed.c, 2);
-  assert.match((await run(["flags", "codex", "--role", "lead", "--lead", "dana-lead"])).failed.m, /no role template "lead"/);
+  const lead = (await run(["flags", "codex", "--role", "lead", "--lead", "dana-lead"])).failed;
+  assert.equal(lead.c, 2);
+  assert.match(lead.m, /there is no lead role template: start a lead without --lead \(hoptell agents flags codex --role lead, in a session named after the team file's lead\)/);
   assert.match((await run(["flags", "agy", "--role", "implementer", "--lead", "dana-lead"])).failed.m, /agy implementers are not offered/);
   // A Codex version outside the verified range: template and prompt together as the prompt, with a warning.
   const newer = await runWith(fakeClis(t, { versions: { codex: "0.165.0", claude: "2.1.296", agy: "1.4.8" } }))(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--json"]);

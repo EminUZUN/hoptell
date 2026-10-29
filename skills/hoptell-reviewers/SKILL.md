@@ -62,8 +62,8 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles
   Do not switch to an editing mode unless the user asks for edits. Do not add a hoptell channel
   flag: `hoptell tmux` supplies tmux delivery.
 - Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt after `-i`
-  (it then stays interactive). Plan mode keeps agy to reading and planning without a prompt per
-  tool. Plan mode is agy's own rule and `--sandbox` does not confine writes or the network, so an
+  (it then stays interactive). `--dangerously-skip-permissions` stops the prompt per tool; plan
+  mode keeps agy to reading and planning. Plan mode is agy's own rule and `--sandbox` does not confine writes or the network, so an
   agy reviewer is limited by policy, like Claude Code in plan mode, not by an OS sandbox. Never
   start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
   registration, which the user sets up once (see hoptell's README).
@@ -87,15 +87,14 @@ hoptell agents flags agy --role reviewer --model gemini-4-argon-high
 ```
 
 - The first line of output is the agent command with its flags, for example
-  `codex -s read-only -a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"'`. Without a
-  model, the CLI's own settings choose it; reviewers get effort `high` (Codex, Claude Code) from
-  the preset unless the user names another.
+  `codex -s read-only -a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"'`. Without
+  explicit values, the role preset supplies model and effort; the CLI picks what the preset
+  leaves unset. The shipped Codex and Claude Code reviewer presets use high effort.
 - Warnings follow on standard error: a model or effort the CLI's cached list lacks, an effort
   left to the CLI's settings, how far the reviewer is contained, a CLI that changed since the
   last record. They do not stop the launch; tell the user, and the CLI decides.
-- agy takes its effort in the model id (`gemini-4-argon-high`): pass the complete id as the model
-  and no effort. hoptell refuses an agy effort without one, and never passes `--effort` to agy.
-  hoptell does not read agy's model list; the user can run `agy models`.
+- hoptell refuses `--effort` for agy (give the complete model id, such as `gemini-4-argon-high`)
+  and never passes `--effort` to agy. It does not read agy's model list; see `agy models`.
 - If the command refuses, tell the user why and start nothing. If it is not available (an older
   hoptell), use the launch lines shown above, with Codex `-m <model>` and
   `-c model_reasoning_effort="<effort>"`, Claude Code `--model <model>` and `--effort <effort>`.
@@ -145,9 +144,9 @@ Wording for the request and the expected reply, several reviewers and large file
 Work in an implementer's worktree is reviewed by commit, not by snapshot: the request names a
 base and a head commit, and a verdict holds for that head only.
 
-1. Take the full commit ids from `hoptell worktree list` or `hoptell team status <team>`: the
-   member's base (or an earlier reviewed commit) and its head. For a landing candidate, the base
-   is the target's commit T and the head the candidate C.
+1. Take full commit ids (`worktree list` shortens them): the member's base (or an earlier
+   reviewed commit) and head from the first line of `hoptell worktree diff <member>` or from
+   `hoptell team status <team> --json`. For a landing candidate, the T and C `team land` printed.
 2. For a team, send the request with hoptell, which sends it to the team's reviewers (or those
    named with `--to`) and records it in the team's state:
 

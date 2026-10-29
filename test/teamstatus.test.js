@@ -440,13 +440,13 @@ test("/team: each team under the session that reported it, labels and text clean
   assert.equal(m.params.parse_mode, undefined, "plain text");
   assert.equal(m.params.reply_markup, undefined, "no buttons");
   assert.match(text, /^👥 Team n1 · led by lead\n/);
-  assert.match(text, /• n1-impl · implementer · codex, model <img src=x onerror=alert\(1\)> X, effort high \(at launch\) · feature\/<b>x<\/b> · working/);
-  assert.match(text, /• n1-rev · reviewer · claude, model CLI default, effort CLI default \(at launch\) · in review/);
+  assert.match(text, /• n1-impl · implementer · codex · model <img src=x onerror=alert\(1\)> X · effort high · working/);
+  assert.match(text, /• n1-rev · reviewer · claude · in review/);
   assert.match(text, /🔎 Review of n1-impl's work: waiting for n1-rev/);
   assert.match(text, /👥 Team n9 · led by other\n• n9-impl/);
   assert.ok(!text.includes("\u202E"), "no bidi override");
   assert.doesNotMatch(text, /zz|bob/);
-  assert.match(text, /This view is read-only\./);
+  assert.match(text, /Read-only\. Each team is shown as its lead session reports it; model and effort as set at launch\./);
   // A session that stops reporting is gone from the next answer (/teams is the same command).
   await s.lead.client.setStatus(null);
   s.tg.say("/teams");
@@ -464,7 +464,7 @@ test("/team on a relay without statuses says it needs an update; with no team re
   const { bridge } = bridgeOn(t, { home, telegram: tg.client(), url: r.url, token: r.tokens.me, key: newKey() });
   await until(() => bridge.leading(), 4000, "leadership");
   tg.say("/teams");
-  await until(() => tg.texts().includes("No teams yet. A team shows up here once its lead's session reports it."), 8000, "no teams");
+  await until(() => tg.texts().includes("No teams to show. A team shows up here while its lead session is online."), 8000, "no teams");
   bridge.relay.caps = bridge.relay.caps.filter((c) => c !== "status");
   tg.say("/team");
   await until(() => tg.texts().includes("I can't show your teams: the hoptell server needs an update."), 8000, "needs an update");
@@ -485,8 +485,8 @@ test("Mini App: GET teams lists each team under its reporting session with label
       ["n9", "other"],
     ],
   );
-  assert.deepEqual(teams[0].members[0], { label: "n1-impl", role: "implementer", cli: "codex", model: "<img src=x onerror=alert(1)> X", effort: "high", branch: "feature/<b>x</b>", state: "working", online: false });
-  assert.equal(teams[0].members[1].model, "CLI default");
+  assert.deepEqual(teams[0].members[0], { label: "n1-impl", role: "implementer", cli: "codex", model: "<img src=x onerror=alert(1)> X", effort: "high", state: "working", online: false });
+  assert.equal(teams[0].members[1].model, null, "unset at launch: not shown");
   assert.deepEqual(teams[0].reviews, [{ member: "n1-impl", waiting: ["n1-rev"] }]);
   assert.doesNotMatch(res.body, /"h":|bob|\\u202e/i);
 });

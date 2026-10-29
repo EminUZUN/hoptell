@@ -10,9 +10,11 @@ Use the hoptell-reviewers skill to start reviewer agents for this project.
 Arguments: $ARGUMENTS
 
 - The first argument is how many reviewers to start (default 1). The second is the agent:
-  `codex` (default), `claude` or `agy`. A third and fourth are an optional model and effort;
-  without them each reviewer uses its CLI's own settings. For agy, the model is the complete id
-  with its effort (for example `gemini-4-argon-high`) and there is no separate effort.
+  `codex` (default), `claude` or `agy`. A third and fourth are an optional model and effort.
+  Without them, the role preset supplies model and effort, and the CLI picks what the preset
+  leaves unset; the shipped Codex and Claude Code reviewer presets use high effort. hoptell
+  refuses `--effort` for agy (give the complete model id, for example `gemini-4-argon-high`)
+  and never passes `--effort` to agy.
 - Get each reviewer's agent command and flags from
   `hoptell agents flags <agent> --role reviewer [--model <model>] [--effort <effort>]`, as the
   skill shows, also when no model or effort is given (it applies the presets and checks the

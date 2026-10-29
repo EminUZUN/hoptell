@@ -11,7 +11,7 @@ import { BIN } from "../lib/config.js";
 import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { currentBoot, parseLsofCwds, processCwds, processCwdsScan, processIdentity, processTable } from "../lib/host.js";
 import { withLock } from "../lib/locks.js";
-import { addWorktree, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberState, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
+import { addWorktree, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberState, processIn, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
 import { sleep } from "./helpers.js";
 
 // Git for setting up the test repositories: no system or global configuration of the developer's.
@@ -1040,7 +1040,7 @@ test("hoptell worktree: the command line (list, add, commit, diff, remove, usage
   const a = cli("add", "dana-impl-1", "--team", "n1", "--cli", "codex", "--owns", "lib/**,test/**");
   assert.equal(a.status, 0, a.stderr);
   assert.match(a.stdout, new RegExp(`Worktree for dana-impl-1: ${s.wt}`));
-  assert.match(a.stdout, /hoptell tmux dana-impl-1 --cwd \S+ --task <file>/);
+  assert.match(a.stdout, /Start it there: HOPTELL_PUSH=tmux hoptell tmux dana-impl-1 --roles implementer --cwd \S+ --task <file> -- <the command hoptell agents flags codex --role implementer --lead <lead> prints>/);
   assert.match(cli("list").stdout, /^dana-impl-1 {2}codex {2}stopped {2}team\/n1\/dana-impl-1 .* 0 commits {2}owns lib\/\*\*,test\/\*\*$/m);
   fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "changed\n");
   const c = cli("commit", "dana-impl-1", "-m", "from the cli");
@@ -1097,6 +1097,41 @@ test("the macOS cwd scan: only a complete lsof answer is used; anything else ref
   assert.match(scan(partial, "kill -9 $$").problem, /lsof was stopped by SIGKILL/);
   assert.match(scan("garbage\n", "exit 0").problem, /lsof's output did not parse/);
   assert.match(processCwdsScan(501, { platform: "darwin", lsof: path.join(dir, "none") }).problem, /lsof failed \(ENOENT\)/);
+  // A scan given a time budget stops lsof when it runs out (team stop's bounded wait).
+  const t0 = performance.now();
+  assert.match(processCwdsScan(501, { platform: "darwin", lsof: fake(partial, "exec sleep 20"), exists, timeoutMs: 200 }).problem, /lsof failed \(ETIMEDOUT\)/);
+  assert.ok(performance.now() - t0 < 5000);
+});
+
+test("one budget for a whole observation: the cwd scan gets what the table read left, and none runs without a table or time", (t) => {
+  // In-memory readers on an injected clock, each keeping to the limit it is given.
+  let clock = 0;
+  const calls = [];
+  const reader = (kind, ms, result) => ({ timeoutMs }) => {
+    calls.push([kind, timeoutMs]);
+    clock += Math.min(ms, timeoutMs ?? ms);
+    return result;
+  };
+  const table = new Map([[500, { pid: 500, ppid: 1, uid: process.getuid(), start: "1" }]]);
+  const look = (tableMs, tableResult) => {
+    [clock, calls.length] = [0, 0];
+    return processIn("/x/wt", { table: reader("table", tableMs, tableResult), cwds: reader("cwds", 80, [{ pid: 700, cwd: "/x/wt/lib", command: "node" }]), self: 500, clock: () => clock }, 100);
+  };
+  assert.deepEqual(look(80, table), { pid: 700, cwd: "/x/wt/lib", command: "node" });
+  assert.deepEqual(calls, [["table", 100], ["cwds", 20]], "the scan gets only the 20 ms the table left");
+  assert.ok(clock <= 100, `the observation took ${clock} ms of a 100 ms budget`);
+  // A failed table read, or one that used up the budget: no cwd scan starts.
+  assert.deepEqual(look(10, null), { unknown: "the process table could not be read" });
+  assert.deepEqual(calls, [["table", 100]]);
+  assert.deepEqual(look(100, table), { unknown: "the time for the scan ran out" });
+  assert.deepEqual(calls, [["table", 100]]);
+  // On Linux, the deadline is checked before each process is read.
+  const proc = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-proc-"));
+  t.after(() => fs.rmSync(proc, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(proc, "4242"));
+  let ticks = 0;
+  const r = processCwdsScan(process.getuid(), { platform: "linux", proc, timeoutMs: 100, clock: () => (ticks++ ? 1000 : 0) });
+  assert.equal(r.problem, `the time for the scan ran out before ${proc}/4242 was read`);
 });
 
 test("worktree member state through the real scan: a process born during a failed scan is never missed, and one found is named", async (t) => {
