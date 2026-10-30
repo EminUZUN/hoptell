@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/EminUZUN/hoptell/schema/team.schema.json",
+  "title": "hoptell team file",
+  "description": "A team for hoptell team up: the lead session, its members, their CLIs, tasks and limits. Checked by lib/teams.js, which also refuses what a schema cannot say: member names that do not start with the lead's first part and \"-\", a name used twice, an agy implementer, owns or folder on a reviewer, and two implementers whose owns may name the same file (a missing owns overlaps everything). Relative paths are from the team file's folder; \"~/\" is the home folder.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "team", "repo", "lead", "members"],
+  "properties": {
+    "version": { "const": 1 },
+    "team": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$", "not": { "const": "all" }, "description": "Used in the branch names team/<team>/<member> and the role <role>,<team>." },
+    "repo": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "The git repository the implementers work on." },
+    "base": { "type": "string", "pattern": "^[A-Za-z0-9][\\w./^~-]{0,199}$", "default": "HEAD", "description": "The commit every implementer's worktree starts from (one base for the team)." },
+    "worktrees": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "The folder for the worktrees; by default <repo>-wt next to the repository. Neither inside the repository nor containing it." },
+    "lead": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "The lead session's peer name (start the lead with HOPTELL_NAME set to it). Its part before the first \"-\" is the members' prefix." },
+    "idleMinutes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "reviewer": { "type": "integer", "minimum": 1, "maximum": 1440 } },
+      "description": "Reviewers with no output and no waiting message this long are ended; implementers never are."
+    },
+    "lifetimeMinutes": { "type": "integer", "minimum": 1, "maximum": 1440, "description": "The default lifetime of each member, from its start." },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "role", "cli", "task"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+          "role": { "enum": ["implementer", "reviewer"] },
+          "cli": { "enum": ["codex", "claude", "agy"], "description": "agy implementers are refused." },
+          "model": { "type": "string", "description": "Over the owner's preset, the shipped preset and the CLI's own configuration." },
+          "effort": { "type": "string" },
+          "task": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "The member's task file (at most 32 KiB), served by read_task." },
+          "owns": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 256, "not": { "pattern": "^/" } }, "description": "Implementers only: the globs the member may change." },
+          "template": { "enum": ["reviewer", "implementer", "tester"], "description": "The role template; by default the role." },
+          "lifetimeMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "folder": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "Implementers only: the worktree's folder name." }
+        }
+      }
+    }
+  }
+}

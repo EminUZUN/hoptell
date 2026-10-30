@@ -52,6 +52,10 @@ test("profiles: the schema file and the checker agree on fields, caps and refusa
     [{ cliOptions: { model: "gpt 5" } }, /cliOptions.model/],
     [{ cliOptions: { flags: "--yolo" } }, /unknown option "flags"/],
     [{ cliOptions: { effort: "huge" } }, /cliOptions.effort must be/],
+    // No listed model offers "minimal"; "ultra" passed no gate (design 8, topic 1).
+    [{ cliOptions: { effort: "minimal" } }, /cliOptions.effort must be one of low, medium, high, xhigh, max \(the efforts hoptell's gate records allow for codex\)/],
+    [{ cliOptions: { effort: "ultra" } }, /cliOptions.effort must be one of low, medium, high, xhigh, max/],
+    [{ cli: "claude", cliOptions: { effort: "minimal" } }, /gate records allow for claude/],
     [{ cli: "gemini", cliOptions: { effort: "high" } }, /only for codex and claude/],
     [{ cliOptions: { allowedTools: ["Read"] } }, /only for claude/],
     [{ cli: "claude", cliOptions: { allowedTools: ["--dangerously-skip-permissions"] } }, /allowedTools must list/],
@@ -225,7 +229,7 @@ test("hoptell agents profiles and profile approve", async (t) => {
   const env = { ...process.env, HOPTELL_HOME: w.home, HOPTELL_ENV: path.join(w.base, "empty.env"), XDG_CONFIG_HOME: path.join(w.base, "config"), HOME: w.homedir };
   const run = (...args) => new Promise((resolve) => execFile(process.execPath, [BIN, "agents", ...args], { env }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr })));
   let r = await run("profiles");
-  assert.match(r.stdout, /codex-reviewer {2}not approved yet/);
+  assert.match(r.stdout, /codex-reviewer {2}not approved yet.* {2}codex, [\w/]+, [\w-]+, model CLI default, effort CLI default$/m);
   assert.match(r.stdout, /broken {2}INVALID/);
   assert.match(r.stdout, /approve with: hoptell agents profile approve codex-reviewer/);
   // R7: a codex profile without --accept-read-risk: the warning, verbatim, then a refusal naming
@@ -251,7 +255,8 @@ test("hoptell agents profiles and profile approve", async (t) => {
   r = await run("profiles");
   assert.match(r.stdout, /codex-reviewer {2}approved/);
   // The flag on a profile of another CLI: refused (it means nothing there), nothing approved.
-  writeProfile(w.home, profileDoc(w.work, { id: "claude-helper", cli: "claude", name: { prefix: "claude-h" } }));
+  writeProfile(w.home, profileDoc(w.work, { id: "claude-helper", cli: "claude", name: { prefix: "claude-h" }, cliOptions: { model: "sonnet", effort: "high" } }));
+  assert.match((await run("profiles")).stdout, /claude-helper {2}not approved yet.* {2}claude, .*, model sonnet, effort high$/m);
   r = await run("profile", "approve", "claude-helper", "--accept-read-risk");
   assert.equal(r.code, 2, r.stdout + r.stderr);
   assert.match(r.stderr, /--accept-read-risk applies only to codex profiles/);

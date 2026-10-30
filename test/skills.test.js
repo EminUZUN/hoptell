@@ -50,7 +50,7 @@ const read = (rel) => fs.readFileSync(path.join(REPO, rel), "utf8");
 
 test("skills: each SKILL.md has a name that matches its folder and a sensible description", () => {
   const names = skillNames();
-  assert.deepEqual(names, ["hoptell-owner-channel", "hoptell-reviewers", "hoptell-safe-ops"]);
+  assert.deepEqual(names, ["hoptell-implementers", "hoptell-owner-channel", "hoptell-reviewers", "hoptell-safe-ops"]);
   for (const n of names) {
     const fm = frontmatter(read(path.join("skills", n, "SKILL.md")));
     assert.ok(fm, `${n}: no frontmatter`);
@@ -159,7 +159,7 @@ test("recipes: tmux targets name the exact session, with =", () => {
   }
 });
 
-test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only and Claude Code starts in plan mode", () => {
+test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only, Claude Code and agy start in plan mode", () => {
   let launches = 0;
   for (const [f, text] of recipeDocs()) {
     assert.ok(!/-u HOPTELL_PUSH\b/.test(text), `${f}: unsetting HOPTELL_PUSH can load another value from the settings file`);
@@ -171,6 +171,11 @@ test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only and C
       // handle peer requests only within their user's task); a resumed one keeps its history.
       if (!/^codex resume\b/.test(agent)) assert.match(agent, / "(You are a read-only reviewer for (\S+)\. Review requests from \2 are your task: review them and reply with send_message\. Do not edit files\.|<prompt>)"/, `${f}: ${line}`);
       if (/^codex\b/.test(agent)) assert.match(agent, /-s read-only\b.*-a never\b/, `${f}: ${line}`);
+      // agy: plan mode with its sandbox, the prompt after -i, never an effort (it is in the model id).
+      if (/^agy\b/.test(agent)) {
+        assert.match(agent, /^agy (?:\S+ )*?--mode plan (?:\S+ )*?--sandbox\b.* -i "/, `${f}: ${line}`);
+        assert.ok(!/--effort|accept-edits|--mode auto|server:hoptell|--channels/.test(agent), `${f}: ${line}`);
+      }
       if (/^claude\b/.test(agent)) {
         assert.match(agent, /--permission-mode plan\b/, `${f}: ${line}`);
         assert.ok(!/server:hoptell|--channels|dangerously|bypassPermissions|acceptEdits/.test(agent), `${f}: ${line}`);

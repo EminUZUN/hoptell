@@ -10,6 +10,7 @@ import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { agentsWorld, killSupervisor } from "./agents-helpers.js";
 import { agentCommand, launchDetached } from "../lib/tmux.js";
+import { BIN } from "../lib/config.js";
 import { readAudit, withAgentsLock } from "../lib/agents.js";
 import { TREE_HARD, TREE_MAX, createRunFiles, isLive, processTree, listRuns, newRunId, prune, readRun, runPaths, signalChecked, startSupervisor, stopProcess, stopRun, supervise, sweep, updateRun, agentEnv, cutUtf8 } from "../lib/agentruns.js";
 import { currentBoot, descendantIdentities, identityState, parsePsTable, processIdentity, processInfo, processTable, sameIdentity } from "../lib/host.js";
@@ -990,6 +991,9 @@ test("tmux: the agent exiting by itself ends its session by session id; hoptell 
   // The existing launch path is unchanged; a spawned run's pane has no name-based kill.
   assert.equal(agentCommand(["codex", "-c", "x=1"], "hoptell-a"), "'codex' '-c' 'x=1'; tmux kill-session -t '=hoptell-a'");
   assert.equal(agentCommand(["node", "bin", "agents", "exec"], "hoptell-a", { endByName: false }), "'node' 'bin' 'agents' 'exec'");
+  // hoptell tmux waits, briefly, for a prompt answer's result to go out before it ends the session (a Quit).
+  assert.equal(agentCommand(["codex"], "hoptell-a", { name: "me-a" }), `'codex'; '${process.execPath}' '${BIN}' prompt-wait 'me-a'; tmux kill-session -t '=hoptell-a'`);
+  assert.equal(agentCommand(["codex"], "hoptell-a", { endByName: false, name: "me-a" }), "'codex'");
   const w = agentsWorld(t);
   const name = `t7x${crypto.randomBytes(3).toString("hex")}-e5f6`;
   const session = `hoptell-${name}`;

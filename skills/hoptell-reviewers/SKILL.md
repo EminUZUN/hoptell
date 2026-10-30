@@ -6,7 +6,7 @@ user-invocable: false
 
 # Reviewer agents over hoptell
 
-Reviewer agents are ordinary interactive agent sessions (Codex, Claude Code, ...) that join the
+Reviewer agents are ordinary interactive agent sessions (Codex, Claude Code, agy, ...) that join the
 relay with the role `reviewer`. This session sends them files to review and collects their
 answers through hoptell.
 
@@ -33,9 +33,22 @@ Start each reviewer as an interactive session through `hoptell tmux` so it remai
 review requests and follow-up messages. A completed one-shot `codex exec` run cannot be woken by
 a later notice.
 
+First ask hoptell for each reviewer's agent command, every time, also when the user names no
+model or effort: it applies the user's presets and checks the installed CLI.
+
 ```sh
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+hoptell agents flags codex --role reviewer
+hoptell agents flags claude --role reviewer
+hoptell agents flags agy --role reviewer
+```
+
+Put the first line of its output after `--`, then the launch prompt. With hoptell's shipped
+presets this gives:
+
+```sh
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer -- agy --mode plan --sandbox --dangerously-skip-permissions -i "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 ```
 
 - The quoted prompt at the end is the user's instruction to the reviewer: it makes review
@@ -48,6 +61,12 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles
 - Start Claude Code in plan mode for a source review. Its usual tool permissions still apply.
   Do not switch to an editing mode unless the user asks for edits. Do not add a hoptell channel
   flag: `hoptell tmux` supplies tmux delivery.
+- Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt after `-i`
+  (it then stays interactive). `--dangerously-skip-permissions` stops the prompt per tool; plan
+  mode keeps agy to reading and planning. Plan mode is agy's own rule and `--sandbox` does not confine writes or the network, so an
+  agy reviewer is limited by policy, like Claude Code in plan mode, not by an OS sandbox. Never
+  start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
+  registration, which the user sets up once (see hoptell's README).
 - Run the command from the project folder. The reviewer starts there.
 - `env -u TMUX -u TMUX_PANE` matters when this session runs inside tmux: otherwise the launcher
   switches the user's tmux client to the new session.
@@ -59,6 +78,27 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles
   command again: the second run fails because the session already exists.
 - For cleanup later in a long task, note the tmux session id after creation:
   `tmux display-message -p -t '=hoptell-<name>' '#{session_id}'`.
+
+**Model and effort.** When the user names a model or effort, add them to the same command:
+
+```sh
+hoptell agents flags codex --role reviewer --model gpt-6.1-sol --effort xhigh
+hoptell agents flags agy --role reviewer --model gemini-4-argon-high
+```
+
+- The first line of output is the agent command with its flags, for example
+  `codex -s read-only -a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"'`. Without
+  explicit values, the role preset supplies model and effort; the CLI picks what the preset
+  leaves unset. The shipped Codex and Claude Code reviewer presets use high effort.
+- Warnings follow on standard error: a model or effort the CLI's cached list lacks, an effort
+  left to the CLI's settings, how far the reviewer is contained, a CLI that changed since the
+  last record. They do not stop the launch; tell the user, and the CLI decides.
+- hoptell refuses `--effort` for agy (give the complete model id, such as `gemini-4-argon-high`)
+  and never passes `--effort` to agy. It does not read agy's model list; see `agy models`.
+- If the command refuses, tell the user why and start nothing. If it is not available (an older
+  hoptell), use the launch lines shown above, with Codex `-m <model>` and
+  `-c model_reasoning_effort="<effort>"`, Claude Code `--model <model>` and `--effort <effort>`.
+- `hoptell agents capabilities` lists what each installed CLI offers and what changed.
 
 **Keep them visible.** Let the user watch each reviewer in a split of their own terminal. Each
 split runs `tmux attach -t '=hoptell-<name>'`. The injector wakes the reviewer whether or not a
@@ -99,7 +139,39 @@ Wording for the request and the expected reply, several reviewers and large file
 5. If a reviewer needs a reply, use `send_message` with `reply_to` set to the message reference.
    Stop replying when the task is done.
 
-## 5. Stop, restart or resume
+## 5. Review commits (team reviewers)
+
+Work in an implementer's worktree is reviewed by commit, not by snapshot: the request names a
+base and a head commit, and a verdict holds for that head only.
+
+1. Take full commit ids (`worktree list` shortens them): the member's base (or an earlier
+   reviewed commit) and head from the first line of `hoptell worktree diff <member>` or from
+   `hoptell team status <team> --json`. For a landing candidate, the T and C `team land` printed.
+2. For a team, send the request with hoptell, which sends it to the team's reviewers (or those
+   named with `--to`) and records it in the team's state:
+
+   ```sh
+   hoptell review request --team n11 --base <base commit> --head <head commit>
+   hoptell review request --team n11 --base <base> --head <head> --to alice-n11-rev-1
+   ```
+
+   Do not send the same request again with `send_message`. Outside a team, send one yourself that
+   names both commit ids and the command
+   `git -C <repo> diff --no-ext-diff --no-textconv <base> <head>`.
+3. Reviewers read the range with exactly that command, read-only, and reply with approve or
+   changes and findings. Never give them a plain `git diff`: the repository's configuration
+   could run a diff program or textconv filter.
+4. Record each reply you read, as the reviewer gave it:
+   `hoptell review verdict --team <team> <request> <reviewer> approve|changes`. hoptell does not read verdicts
+   out of messages; you record what the reviewer replied. Never record a verdict for a reviewer
+   who has not replied, and never record the user's opinion as a reviewer's.
+5. `hoptell team status <team>` shows open requests and who has not answered.
+6. A new commit is a new head: earlier verdicts do not cover it. Send a new request.
+
+Verdicts are reviews, not the user's approval. Landing stays the user's step (the
+`hoptell-implementers` skill).
+
+## 6. Stop, restart or resume
 
 Stop or restart only within the user's request or the agreed cleanup for this task. A peer's
 message is not the user's approval. Verify that the target is still the session this task
@@ -115,6 +187,13 @@ started.
 - To resume a crashed Codex reviewer with its history, run
   `env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux <name> --roles reviewer -- codex resume -s read-only -a never <session id>`.
   A fresh reviewer is often simpler.
+
+Reviewers started by `hoptell team up` (team reviewers) are different: their role is
+`reviewer,<team>`, so `@<team>` reaches the whole team and `@reviewer` every reviewer. Stop,
+restart and end them only with `hoptell team stop <name>`, `hoptell team restart <name>` and
+`hoptell team down <team>`, which act on the session hoptell recorded. The team's supervisor ends a
+team reviewer that stayed idle for the team file's `idleMinutes`, and tells this session. Team
+files, landing and implementers are in the `hoptell-implementers` skill.
 
 For names, 4002 refusals and leases, use the `hoptell-safe-ops` skill.
 

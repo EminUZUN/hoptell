@@ -1,6 +1,6 @@
 {
   "name": "hoptell",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Let AI coding agents (Claude Code, Codex, ...) message each other through a relay you host, and reach you on Telegram.",
   "type": "module",
   "bin": {
@@ -9,7 +9,9 @@
   "files": [
     "bin/",
     "lib/",
+    "presets/",
     "schema/",
+    "templates/",
     ".env.example",
     "README.md",
     "SECURITY.md",
@@ -21,7 +23,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js; m=$?; node --test --test-concurrency=1 test/serial/*.test.js && exit $m",
     "lint": "eslint .",
     "test:e2e": "node test/e2e/run.mjs",
     "test:compat": "node test/compat.mjs",

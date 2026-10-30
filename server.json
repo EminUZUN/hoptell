@@ -8,12 +8,12 @@
     "url": "https://github.com/EminUZUN/hoptell",
     "source": "github"
   },
-  "version": "0.3.2",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "hoptell",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "transport": { "type": "stdio" },
       "packageArguments": [{ "type": "positional", "value": "mcp" }],
       "environmentVariables": [

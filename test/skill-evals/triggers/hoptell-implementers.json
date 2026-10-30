@@ -1,0 +1,22 @@
+[
+  {"query": "start a codex implementer over hoptell in its own worktree to add retries to lib/client.js", "should_trigger": true},
+  {"query": "hand the config refactor to another agent: give it a worktree and let it implement, I'll review", "should_trigger": true},
+  {"query": "spin up two implementers for team n12, one for lib/ and one for test/, each in a hoptell worktree", "should_trigger": true},
+  {"query": "dana-impl-1 says ready, commit its work and send the diff to the reviewers", "should_trigger": true},
+  {"query": "Can a Claude Code session implement the parser fix in a separate worktree while you keep reviewing?", "should_trigger": true},
+  {"query": "the implementer finished, get me the patch of its branch so codex can review it", "should_trigger": true},
+  {"query": "clean up the worktree of alice-impl-2, we're done with that task", "should_trigger": true},
+  {"query": "start an agy implementer to fix the flaky tests", "should_trigger": true},
+  {"query": "delegate this bug fix to a codex agent over hoptell, it should only touch src/net/", "should_trigger": true},
+  {"query": "hoptell worktree commit refused with outside_owns for impl-1, what now?", "should_trigger": true},
+  {"query": "bring up team n14 from team.json and tell me when the implementers are running", "should_trigger": true},
+  {"query": "the reviewers approved impl-1's head, how do I land it on main with hoptell team land?", "should_trigger": true},
+  {"query": "start two codex reviewers for my branch", "should_trigger": false},
+  {"query": "review lib/config.js yourself and tell me what's wrong", "should_trigger": false},
+  {"query": "spawn the nightly-audit agent profile with spawn_agent", "should_trigger": false},
+  {"query": "ask me on telegram before you merge anything", "should_trigger": false},
+  {"query": "create a git worktree for the release branch so I can test it by hand", "should_trigger": false},
+  {"query": "kill all the leftover hoptell tmux sessions from yesterday", "should_trigger": false},
+  {"query": "implement the retry logic in lib/client.js now", "should_trigger": false},
+  {"query": "send CHANGELOG.md to @reviewer for a wording check", "should_trigger": false}
+]

@@ -1,5 +1,193 @@
 # Changelog
 
+## 0.4.0 (2026-10-30)
+
+Upgrade note: this release changes the relay protocol (capability `status`). Upgrade the relay
+and the Telegram bridge, restart the bridge, and restart lead sessions. With an older relay
+nothing is published; with an older bridge `/team` is an unknown command. The Telegram cards
+for landing, auto-land and Codex's folder trust need the bridge from this release too. An older
+relay still sends `@all` and `@<role>` messages to the injectors' own connections (below), and
+hoptell before 0.4.0 lists those connections in `list_peers`. A session started with `hoptell
+tmux` before the upgrade keeps its old injector, which does not watch for prompts; start it again.
+
+- Agent CLI capabilities: `hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff]
+  [--json]` shows what each installed agent CLI offers (flags, and models and efforts from the
+  CLI's own caches, as advice), what hoptell's tests verified about its sandbox and permission
+  modes on which versions, and what changed since the last record. It runs only `--version`,
+  `--help` and a few listing commands, each with an empty home and working folder, and never
+  starts a model. `hoptell doctor` notes a CLI that changed.
+- Role presets: `hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead>
+  [--model <model>] [--effort <effort>]` prints the agent command to put after `hoptell tmux ...
+  --`: the role's safety flags, then the model and effort as that CLI takes them, with warnings.
+  The presets ship in `presets/roles.json` with their sources and dates; your
+  `<hoptell home>/presets/roles.json` overrides them per CLI and role. agy takes its effort in
+  the model id and never gets `--effort`. agy reviewers start in plan mode with `--sandbox` and
+  without per-tool prompts; agy implementers are not offered.
+- `/hoptell:reviewers` now supports agy and optional model and effort arguments
+  (`[count] [codex|claude|agy] [model] [effort]`); the `hoptell-reviewers` skill takes each
+  launch's flags from `hoptell agents flags`.
+- Agent profiles (`spawn_agent`): the fixed Codex effort map is gone. `max` now passes as `max`;
+  a profile with effort `minimal` or `ultra` is refused when it loads, naming the efforts the
+  recorded gates allow.
+- Implementers: `hoptell worktree add | list | commit | diff | remove` gives each implementer a
+  git worktree next to the repository, on a branch `team/<team>/<member>`. Implementers never
+  commit; the lead commits their changes with `hoptell worktree commit` and takes the patch for
+  review from `hoptell worktree diff`. These commands run git with no global configuration and no
+  hook, filter, textconv or external diff, commit through plumbing that applies no filter, and
+  refuse a repository whose config sets anything outside a short allow list. They need Git 2.43
+  or later. The commands that run git (`add`, `commit`, `diff`, `remove`) refuse while any
+  implementer of the repository is running, whatever its CLI, or while any other process of
+  yours works in a member's worktree: stop the implementer (or let it quit) before you commit or
+  diff its work. On Linux, processes whose working folder is hidden even from you
+  (`systemd --user`, `sshd`) count unless they are older than the team's first launch or part of
+  the command's own login. See "Working with implementer agents" in the README.
+- `hoptell tmux --cwd <dir>` starts the agent in that folder, and `--task <file>` stores a task
+  (at most 32 KiB) for the session, which reads it with the new `read_task` tool. This keeps the
+  task off the command line; it is not hidden from other programs that run as you.
+- Role templates (`reviewer`, `implementer`, `tester`): `hoptell agents flags ... --lead <name>`
+  adds the template with the CLI's own per-session flag, and a launch prompt that points at
+  `read_task`. `~/.config/hoptell/roles/<role>.md` replaces the shipped text.
+- Claude Code plugin: a new `hoptell-implementers` skill covers worktrees, task files, the
+  implement-and-review loop, teams, landing and cleanup.
+- Agent teams: `hoptell team up <team file> [--dry-run] | status | stop | restart | down` starts
+  a lead's implementers and reviewers from one JSON file (`schema/team.schema.json`): a worktree
+  per implementer, then each member in tmux with the role `<role>,<team>`, its preset, role
+  template and task. Member names start with the lead's first part; implementers' `owns` globs
+  must not overlap; agy implementers are refused. Members that write need your yes (a terminal
+  answer or `--yes`). `stop`, `restart` and `down` act on the tmux session and process hoptell
+  recorded, never on a name, and send no signal when that process cannot be confirmed; a team is
+  down only when every stop is confirmed. `down` removes only clean worktrees and branches with
+  nothing unlanded, and names what it keeps. See "Agent teams" in the README.
+- Team members' hoptell MCP servers leave out `ask_owner` and `spawn_agent` and refuse direct
+  calls to them; owner questions and new agents go through the lead. `team up` and `team restart`
+  set `HOPTELL_TEAM_MEMBER` in the session's environment. This is a policy, not a security boundary: a
+  member runs as your OS user and could start an unfiltered server of its own.
+- Review queue: `hoptell review request --team <team> --base <c> --head <c> [--to <reviewer>]`
+  records a request for a member's recorded commits (or a landing candidate's `T..C`) in the team's state and sends it to the
+  team's reviewers; the lead records each reply with `hoptell review verdict --team <team> <request>
+  <reviewer> approve|changes`. hoptell never reads a verdict out of a message. Reviewers are told
+  to read the range with `git diff --no-ext-diff --no-textconv`, so no diff program or textconv
+  filter of the repository runs for them. `team status` shows open requests and who has not
+  answered; a fresh `team up` starts an empty queue.
+- `hoptell agents profiles` shows each profile's model and effort ("CLI default" when unset).
+- Team status in Telegram: a lead's session publishes a short summary of its teams (members with
+  role, CLI, model and effort at launch, and state, and open review requests) as its own
+  status at the relay, every 30 seconds while it leads a team. The bot's new `/team` command and
+  a Teams tab in the app show it, read-only, each team under the session that published it.
+  Relay protocol: a new capability `status`, a `set_status` request (text of at most 8 KiB, only
+  from the session that holds the name) and `list` with `status: true`, which returns a status
+  only to sessions of the same member. It needs the relay and the bridge from this release; with
+  an older relay nothing is published and `/team` says the server needs an update. The bot's menu
+  holds one favourite fewer (95, or 94 with /app), since `/team` takes a line.
+- PRIVACY.md: the team summaries, and the new local files (task copies, team state and history,
+  worktree and session records, capability records and presets).
+- Team lifetimes: `lifetimeMinutes` (per team or member) and `idleMinutes.reviewer` start a
+  supervisor that shows a notice in the member's pane, ends it a minute later by its session id,
+  and tells the lead once the end is confirmed. Implementers are never ended for idleness.
+- Landing, the candidate: `hoptell team land <member> --target <branch> -m <message>` makes one
+  commit signed with your SSH key, with the member's reviewed tree on the target's current
+  commit, and verifies it; `--approve <T> <C>` moves the target from `T` to exactly that commit
+  by compare-and-swap. A target checked out in exactly one clean worktree is fast-forwarded there
+  by hoptell (`git merge --ff-only` with its hardened git, checked before and after); a dirty,
+  busy or ambiguous checkout stops the landing before anything moves and says what to fix.
+  `--confirm <T> <C>` records a landing you made or checked yourself. All steps run only in
+  your terminal. Landing never follows a symbolic ref, and it acts only on the worktree its team
+  registered.
+- Landing that the lead prepares: `team land <member> --target <branch> -m <message> --prepare`
+  stops the member and makes the signed candidate without a terminal; `team evidence <member>
+  --candidate <C> --tests pass|fail --command <command> --report <file>` records the lead's tests
+  of exactly that commit; `team land <member> --request-approval` freezes the evidence (subject,
+  diffstat, patch, test report, verdicts, each with its digest) in a landing action once its
+  review request is answered, and prints its id. You decide it in one visit: `hoptell team approve
+  L<n>` shows the evidence (`--show-diff` the patch; one too large to keep inline is marked so and
+  never cut) and lands it when you type `land`. The signature is provenance, not your decision;
+  the test result and the verdicts are the agents' claims. New evidence, a later verdict or a new
+  request supersedes an undecided request, and an expired one says what to do. The manual route
+  (`--target` and `--approve` in your terminal) stays.
+- Auto-land: `hoptell team autoland <team> --target <branch>[,<branch>] [--for 2h] [--count n]`
+  lets the lead land reviewed and tested work of one team run on those targets without asking
+  you, for at most 24 hours; `--off` revokes it at once (also a grant this Mac has not seen yet).
+  Each auto-landing is its own action, checked against the grant when it starts and again before
+  the move, and the owner's Telegram gets a notice instead of a card; a notice an older bridge
+  cannot take stays pending and never causes a move. Failed tests or a "changes" verdict go to
+  you as a normal request. Auto-land trusts the agents' verdicts and test report, does not bypass
+  any safety check, and given in a terminal is policy only.
+- Auto-land from Telegram: a landing card from an up-to-date lead has "Land this and auto-land
+  <team> for 2 h", which sends the decision and a grant signed by the bridge (that team run and
+  target, 2 hours, no count). The lead's hoptell keeps it only for the team's current run and
+  repository and only if it was given after the last `--off`, and Telegram shows whether it is on.
+  A card that a grant did not decide says why ("Why it wasn't auto-landed: ..."), and each
+  auto-landing gets its own message on Telegram. `/autoland` offers the teams of the last day's
+  requests and grants 2 hours from a confirmation; `/autoland off` sends a signed revocation to
+  every lead session seen, whose hoptell turns auto-land off for every team on that Mac and says
+  so on Telegram. This needs the bridge from this release.
+- Landing from Telegram: with an up-to-date bridge, `--request-approval` also sends the request
+  to your owner channel as one message (the patch kept inline up to 64 KiB, the whole record up
+  to 90,000 bytes). The bridge checks every digest itself and shows a card with Land, Reject and
+  Show diff (the frozen patch as a `.patch` file; a larger one is "too large to show here; review
+  it on the Mac"). Your tap is a signed decision for the lead's session only; the lead runs
+  `hoptell team apply L<n>`, which verifies it again against the pin your Mac trusts and lands it
+  or ends it as rejected. A tap counts only before the request expires, `apply` works for 15
+  minutes after the tap, the first decision wins, and the card shows how it ended. An older or
+  offline bridge gets "landing approval needs a bridge update; use hoptell team approve in a
+  terminal". This needs the bridge from this release.
+- Landing actions: every approval is one action with an id (`L1`, ...), a manifest written once,
+  and a state recorded with the landing's journal; ended actions keep a record through `team
+  down`. A decision expires after 15 minutes until it starts; once the target may have moved,
+  hoptell never moves it again under that action, and an unknown outcome stays blocked until
+  `--confirm`, or until you give it up with `--abandon <id>`, which moves and removes nothing. `team up` records the repository's enrolment for them; a team started with an
+  older hoptell lands nothing new until it is started again.
+- Landing, the journal: hoptell journals the candidate before it publishes its branch, and a
+  landing before the target moves, and records the landing before it deletes the candidate
+  branch or the worktree. An interrupted landing is finished by running the same command again.
+  The member's worktree and branch are removed only by that record, never by comparing patches;
+  `hoptell worktree remove` follows the same rule.
+- Landing, while one is pending: `team down` keeps the worktree of a member whose landing or
+  candidate is not resolved, `team land` still reaches it, and `team up` waits for it;
+  `hoptell worktree add` and `remove` refuse that member name.
+- Landing onto a moved target: when the target moved since the member started (another member
+  landed), `--prepare` re-bases the member's change onto it, but only when the two touch no
+  common path (a file that became a folder counts); otherwise it refuses and names the paths.
+  When preparation succeeds, test and review exactly `T..C`. hoptell still runs no merge and
+  resolves no conflicts.
+- `team up` warns when the lead is not online at the relay (the members' messages to it would
+  fail), when the team has no reviewer (its landings are then decided in a terminal with `team
+  land <member> --approve <T> <C>`), when a Codex member's hoptell MCP server belongs to another
+  hoptell install, and, once per repository, when Codex's `config.toml` marks neither the
+  repository nor a Codex member's folder trusted. hoptell never trusts a folder for you. `team
+  stop` and `team down` wait, within one time budget, for processes still working in the
+  worktree. `hoptell worktree add` says so when the name is not a member of the running team.
+- `hoptell worktree commit` commits a file replaced by a folder, or a folder replaced by a file,
+  in one commit, and refuses a nested repository (a folder holding a `.git`) anywhere it reads.
+- Sessions that wait: the injector of a `hoptell tmux` session normally looks at its pane every
+  15 seconds, or every 2 seconds while watching Codex's startup trust prompt. When the agent shows a prompt that needs you (a folder trust question, an approval, a
+  sign-in, an update) or its screen has not changed for 10 minutes while it works
+  (`HOPTELL_STALL_MINUTES`), `hoptell team status` shows it with the attach command, a team
+  member's lead gets one inbox message, and your Telegram owner channel gets a short note that
+  names the session but never shows its screen (at most one per session and kind every 5
+  minutes, and 20 such notes an hour, followed by one line saying notes are paused). Nothing is answered for you. The injector sends these through
+  a connection of its own, named after your member with `-c` and a random suffix; peer lists, the
+  bot and `@all` or `@<role>` sends leave it out.
+- Codex's folder trust from Telegram: for the folder trust question of Codex 0.165.0, right after
+  `hoptell tmux` started it in its folder (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto` or
+  `--dangerously-bypass-approvals-and-sandbox`), the owner channel gets a card with Trust folder
+  and Quit instead of the note, for at most 10 minutes. Your tap is signed by the bridge and
+  goes only to that session's injector, which presses only that option, only in that session's
+  terminal, while the same dialog is on the screen, nobody typed or scrolled there since the card
+  was made, and the tap is at most 2 minutes old. Trust is "1", a fresh look that shows Trust
+  selected, then Enter; Quit is "2". The first answer wins and is never tried twice, and the card
+  shows whether hoptell pressed it, pressed nothing, or may have pressed part of it. With no
+  result from the Mac within 3 minutes of the tap, the card says to look at the terminal; a late
+  result still replaces that. Only options whose keys were checked live on that Codex version
+  get a button; `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` shows and presses unchecked ones
+  too, and its card says it is in test mode. Other prompts, including Claude Code's own trust
+  question, stay notes. Limit: hoptell sees the screen in snapshots. If Codex was already past
+  its startup prompt before hoptell's first look and later shows text that looks the same, a tap
+  could type a stray "1" and Enter, or "2", into the session, and between its last look and the
+  key hoptell does not see the screen.
+- Fixed: after you pair Telegram again, the bridge no longer files an agent's "last talked" time
+  from the earlier pairing under the new one.
+
 ## 0.3.2 (2026-10-27)
 
 - Telegram and the Mini App now show session titles. An agent without an alias is labelled with

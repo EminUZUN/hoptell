@@ -71,7 +71,7 @@ test("adapters: the argument list for every CLI, mode and sandbox level matches 
 test("adapters: options map as the CLI names them; refused flags and extra directories never appear; the task is never an argument", () => {
   const opts = {
     codex: { cliOptions: { model: "gpt-5.5", effort: "max" } },
-    claude: { cliOptions: { model: "opus", effort: "minimal", allowedTools: ["Read", "Bash(git diff:*)"], disallowedTools: ["WebFetch"] }, limits: { budgetUsd: 2 } },
+    claude: { cliOptions: { model: "opus", effort: "xhigh", allowedTools: ["Read", "Bash(git diff:*)"], disallowedTools: ["WebFetch"] }, limits: { budgetUsd: 2 } },
     gemini: { cliOptions: { model: "gemini-3" } },
     agy: { cliOptions: { model: "m1" } },
   };
@@ -86,9 +86,9 @@ test("adapters: options map as the CLI names them; refused flags and extra direc
     else assert.match(p.args.at(-1), /^Call the hoptell read_task tool for your task\. When you are done, send the result to me-owner with send_message\.$/);
   }
   const codex = everyPlan(opts).find((p) => p.key === "codex/headless/read-only").args;
-  assert.deepEqual(codex.slice(codex.indexOf("-m"), codex.indexOf("-m") + 4), ["-m", "gpt-5.5", "-c", 'model_reasoning_effort="xhigh"']);
+  assert.deepEqual(codex.slice(codex.indexOf("-m"), codex.indexOf("-m") + 4), ["-m", "gpt-5.5", "-c", 'model_reasoning_effort="max"'], "max passes unchanged (0.164.0's models list it)");
   const claude = everyPlan(opts).find((p) => p.key === "claude/headless/workspace-write").args;
-  for (const pair of [["--max-budget-usd", "2"], ["--effort", "low"], ["--model", "opus"], ["--allowedTools", "Bash(git diff:*)"], ["--disallowedTools", "WebFetch"], ["--permission-prompts", "none"], ["--permission-mode", "acceptEdits"]]) {
+  for (const pair of [["--max-budget-usd", "2"], ["--effort", "xhigh"], ["--model", "opus"], ["--allowedTools", "Bash(git diff:*)"], ["--disallowedTools", "WebFetch"], ["--permission-prompts", "none"], ["--permission-mode", "acceptEdits"]]) {
     assert.ok(claude.some((w, i) => w === pair[0] && claude[i + 1] === pair[1]), pair.join(" "));
   }
   // The variadic options never take the positional prompt: a single-value option comes last.

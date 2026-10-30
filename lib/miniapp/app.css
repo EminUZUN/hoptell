@@ -188,6 +188,13 @@ body {
   border-bottom: 1px solid var(--line);
   padding: 8px 0;
 }
+.member {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+}
+.member .label {
+  margin: 0;
+}
 .qtext {
   white-space: pre-wrap;
   margin: 4px 0;

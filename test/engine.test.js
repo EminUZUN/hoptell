@@ -64,7 +64,10 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
       elicitation: "off",
       ownerChannel: true,
       agentsMax: 4,
+      stallMinutes: 10,
       notify: true,
+      taskDigest: null,
+      teamMember: null,
       pid: process.pid,
       hostname: "testhost",
       barriers: { wake: null, reader: null },
@@ -91,6 +94,16 @@ test("readSettings: every field, per-field problems, a deeply frozen copy, no en
     assert.match(bad.errors.agentsMax, /HOPTELL_AGENTS_MAX must be a whole number from 1 to 16/);
   }
   assert.equal(settingsFor({ HOPTELL_RECEIPTS: "OFF", HOPTELL_LEASE_MINUTES: "5" }).leaseMinutes, 5);
+  // HOPTELL_TASK (hoptell tmux --task): the stored task's digest; anything else is no task.
+  assert.equal(settingsFor({ HOPTELL_TASK: "a".repeat(64) }).taskDigest, "a".repeat(64));
+  assert.equal(settingsFor({ HOPTELL_TASK: "../task" }).taskDigest, null);
+  assert.deepEqual(settingsFor({ HOPTELL_TASK: "../task" }).warnings, ["HOPTELL_TASK is not a task digest; read_task is not offered"]);
+  // HOPTELL_TEAM_MEMBER (hoptell team up and restart): <role>:<team>; a value that does not
+  // parse still makes the session a team member.
+  assert.deepEqual(settingsFor({ HOPTELL_TEAM_MEMBER: "implementer:n4" }).teamMember, { role: "implementer", team: "n4" });
+  assert.equal(settingsFor({ HOPTELL_TEAM_MEMBER: "" }).teamMember, null);
+  assert.deepEqual(settingsFor({ HOPTELL_TEAM_MEMBER: "lead" }).teamMember, { role: null, team: null });
+  assert.deepEqual(settingsFor({ HOPTELL_TEAM_MEMBER: "lead" }).warnings, ["HOPTELL_TEAM_MEMBER is not <role>:<team>; this session is still served as a team member"]);
   const badRole = settingsFor({ HOPTELL_RELAY: "ws://x:1", HOPTELL_TOKEN: "t".repeat(20), HOPTELL_ROLES: "bad role" });
   assert.match(badRole.errors.relay, /role/);
   assert.equal(badRole.relay, null, "a bad role keeps the relay tools off, as before");

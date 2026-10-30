@@ -242,11 +242,13 @@ test("test barriers are read only in a source checkout; the package ships no tes
   const files = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).files;
   assert.ok(!files.some((f) => /^\.?\/?test(\/|$)/.test(f)), "test/ is not in the package");
   // Nothing else in the shipped code reads a barrier variable directly (lib/files.js only sets
-  // the reader's for its helper process).
+  // the reader's for its helper process; lib/worktrees.js sets the capture helper's only when a
+  // test passes a barrier to it, never from the environment).
   const shipped = (dir) => fs.readdirSync(path.join(ROOT, dir), { recursive: true }).filter((f) => /\.(m?js)$/.test(f)).map((f) => path.join(dir, f));
   for (const f of [...shipped("lib"), ...shipped("bin")]) {
     const src = fs.readFileSync(path.join(ROOT, f), "utf8");
     if (f === path.join("lib", "read-helper.mjs")) continue; // its environment comes only from lib/files.js
+    if (f === path.join("lib", "capture-helper.mjs")) continue; // its environment comes only from lib/worktrees.js
     assert.doesNotMatch(src.replace(/^\s*\/\/.*$/gm, ""), /env\.HOPTELL_[A-Z]+_TEST_BARRIER(?!\s*=[^=])/, f);
   }
 });

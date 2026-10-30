@@ -4,9 +4,12 @@
 // First the table itself (lib/ownertexts.js, with sample values), then a sweep of everything the
 // bridge sent in a scenario that reaches most of them. Agent-supplied text (questions, notes,
 // choices) is chosen so that it passes the same scan, and so is not stripped.
+import "./neutral-host.js"; // first: before any module reads the computer's name
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { IDENTITY, IDENTITY_LIMITS, TEXTS, UNDELIVERED_REASONS, ago } from "../lib/ownertexts.js";
+import { HOSTNAME } from "../lib/config.js";
+import { AUTOLAND_REFUSED_WHY, IDENTITY, IDENTITY_LIMITS, NOT_AUTO_WHY, PROMPT_WHY, TEXTS, UNDELIVERED_REASONS, WAIT_WHAT, ago } from "../lib/ownertexts.js";
+import { RESULT_WHY } from "../lib/promptcards.js";
 import { OWNER_CHAT, OWNER_USER, agent, bridgeOn, fakeTelegram, newKey, ownerRelay, paired, textProblems as problems, tmpHome, until } from "./owner-helpers.js";
 import { sleep } from "./helpers.js";
 
@@ -43,9 +46,59 @@ const call = (key, f) => {
     pendingPage: [SAMPLE.page, SAMPLE.pages],
     showButton: [SAMPLE.n],
     tooLong: [SAMPLE.len, SAMPLE.max],
+    landingCard: ["L7", SAMPLE.who],
+    landingCardResent: ["L7", SAMPLE.who],
+    landingWhat: ["n11", "Validate the settings"],
+    landingWhereCheckout: ["main", "app"],
+    landingWhereBranch: ["main", "app"],
+    landingWhereLinked: ["main", "app", "release"],
+    landingRepoIn: ["app", "work"],
+    landingTests: ["pass", 2],
+    landingUndelivered: ["L7", SAMPLE.who, "n11: Validate the settings", SAMPLE.reason],
+    landingReview: ["rev-1 approve"],
+    landingDeadline: ["10:15 UTC"],
+    landButton: ["L7"],
+    landingChoseLand: ["L7", SAMPLE.who, "n11: Validate the settings"],
+    landingChoseReject: ["L7", SAMPLE.who, "n11: Validate the settings"],
+    landingDecidedElsewhere: ["L7", SAMPLE.who, "n11: Validate the settings"],
+    landingExpired: ["L7", SAMPLE.who, "n11: Validate the settings"],
+    landingCancelled: ["L7", SAMPLE.who],
+    landingDiffName: ["L7"],
+    landingOutcome: ["L7", "blocked", "main"],
+    landAutoButton: ["n4"],
+    landingNotAuto: ["the tests failed, and a reviewer asked for changes"],
+    landingChoseLandAuto: ["L7", SAMPLE.who, "n11: Validate the settings", "n4"],
+    autolandOn: ["n4", "main", "2 h"],
+    autolandRefused: ["n4", AUTOLAND_REFUSED_WHY.stale],
+    autolandUnsent: [TEXTS.encryptionRequired],
+    autolandNotice: ["L9", "n4", "main", "landed", "1 h 20 min"],
+    autolandOff: ["lead", "n4, n5"],
+    autolandOffPending: [2],
+    autolandOffUnsent: [TEXTS.serverRefused],
+    autolandOffer: ["n4", "app", "main, release"],
+    autolandGrantSent: ["n4"],
+    waitPrompt: [SAMPLE.who, "Codex folder trust", "n4", "app"],
+    waitStall: [SAMPLE.who, 12, "n4", "app"],
+    promptCard: [SAMPLE.who, "app", "n4"],
+    promptCardResent: [SAMPLE.who, "app", "n4"],
+    promptDeadline: ["10:42 UTC"],
+    promptChose: [SAMPLE.who, "app", "Trust folder"],
+    promptExpired: [SAMPLE.who, "app"],
+    promptUndelivered: [SAMPLE.who, "app", "the hoptell server refused it"],
+    promptSent: ["Back to Agent Command Center"],
+    promptPending: ["app"],
+    promptCancelled: [SAMPLE.who, "app"],
+    promptDone: [SAMPLE.who, "app", "Trust folder"],
+    promptRefused: [SAMPLE.who, "app", "Quit", "changed"],
+    promptUnknown: [SAMPLE.who, "app", "Trust folder", "tmux"],
   }[key] ?? [SAMPLE.who];
   return f(...args);
 };
+
+
+test("the computer's name in these scenarios is the neutral stand-in, whatever the machine is called", () => {
+  assert.equal(HOSTNAME, "testhost");
+});
 
 test("the texts table: every bot text passes the scan, with sample values", () => {
   const keys = Object.keys(TEXTS);
@@ -57,6 +110,16 @@ test("the texts table: every bot text passes the scan, with sample values", () =
     assert.deepEqual(problems(text), [], `${k}: ${text}`);
   }
   for (const [k, f] of Object.entries(UNDELIVERED_REASONS)) assert.deepEqual(problems(f(SAMPLE.who)), [], k);
+  for (const [k, v] of [...Object.entries(NOT_AUTO_WHY), ...Object.entries(AUTOLAND_REFUSED_WHY), ...Object.entries(WAIT_WHAT)]) assert.deepEqual(problems(v), [], k);
+  // Every reason an answer was not (fully) pressed, as the owner reads it (lib/promptcards.js RESULT_WHY).
+  assert.deepEqual(Object.keys(PROMPT_WHY).sort(), [...RESULT_WHY].sort());
+  for (const why of RESULT_WHY) for (const x of [TEXTS.promptRefused(SAMPLE.who, "app", "Quit", why), TEXTS.promptUnknown(SAMPLE.who, "app", "Quit", why)]) assert.deepEqual(problems(x), [], x);
+  for (const x of [TEXTS.waitPrompt(SAMPLE.who, WAIT_WHAT.approval, null, null), TEXTS.waitStall(SAMPLE.who, 1, null, null)]) assert.deepEqual(problems(x), [], x);
+  for (const st of ["landed", "blocked", "rejected", "expired"]) assert.deepEqual(problems(TEXTS.autolandNotice("L9", "n4", "main", st, null)), [], st);
+  assert.ok(TEXTS.landAutoButton("a".repeat(32)).length <= 64, "the auto-land button stays short");
+  for (const x of [TEXTS.autolandOff("lead", ""), TEXTS.autolandOffPending(1)]) assert.deepEqual(problems(x), [], x);
+  assert.equal(TEXTS.autolandOffUnsent(TEXTS.serverRefused), "⚠️ Auto-land could not be turned off on one Mac: the hoptell server refused it. In a terminal there: hoptell team autoland <team> --off");
+  assert.equal(TEXTS.autolandUnsent(TEXTS.serverRefused), "⚠️ Auto-land was not turned on: the hoptell server refused it.");
   for (const [k, v] of Object.entries(IDENTITY)) {
     assert.deepEqual(problems(v), [], k);
     assert.ok(v.length <= IDENTITY_LIMITS[k], `${k}: ${v.length} > ${IDENTITY_LIMITS[k]}`);
@@ -69,8 +132,8 @@ test("the texts table: every bot text passes the scan, with sample values", () =
 
 // Static button labels must stay short enough for a phone; the alert texts fit Telegram's 200.
 const BUTTON_MAX = 32;
-const BUTTONS = ["cancelButton", "moreButton", "searchButton", "messageButton", "favButton", "unfavButton", "renameButton", "hideButton", "unhideButton", "sendButton", "sendRememberButton", "backButton", "nextButton", "appButton", "undoButton"];
-const ALERTS = ["earlierSetup", "peopleFull", "notSaved", "listOld", "undoChanged", "tapAgain", "buttonExpired", "shownTooOften", "noLongerOpen", "statusExpired", "statusCancelled", "statusUndelivered", "alreadyAnswered", "sentAck", "encryptionRequired", "encryptionPaused", "needsUpdate", "serverRefused", "serverUnreachable", "textOnly"];
+const BUTTONS = ["cancelButton", "moreButton", "searchButton", "messageButton", "favButton", "unfavButton", "renameButton", "hideButton", "unhideButton", "sendButton", "sendRememberButton", "backButton", "nextButton", "appButton", "undoButton", "autolandGrantButton"];
+const ALERTS = ["autolandOfferGone", "autolandOfferChanged", "earlierSetup", "peopleFull", "notSaved", "listOld", "undoChanged", "tapAgain", "buttonExpired", "shownTooOften", "noLongerOpen", "statusExpired", "statusCancelled", "statusUndelivered", "alreadyAnswered", "sentAck", "encryptionRequired", "encryptionPaused", "needsUpdate", "serverRefused", "serverUnreachable", "textOnly"];
 
 test("the texts table: button labels are short, alert texts fit 200 characters, placeholders 64", () => {
   for (const k of BUTTONS) assert.ok(TEXTS[k].length <= BUTTON_MAX, `${k}: ${TEXTS[k]}`);

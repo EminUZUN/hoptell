@@ -759,6 +759,11 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   const refused = await w.cli(["tmux", `${name}x`, "--", "true"], { HOPTELL_AUTH: "login", HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_PUSH: "" });
   assert.notEqual(refused.code, 0);
   assert.match(refused.stderr, /does not pass HOPTELL_CREDENTIAL_PASSPHRASE/);
+  // A launch prompt that points at read_task, without --task: a warning, not a refusal (this one is
+  // refused later, for its delivery mode).
+  const noTask = await w.cli(["tmux", `${name}y`, "--", "codex", "Call read_task first."], { HOPTELL_PUSH: "listener" });
+  assert.match(noTask.stderr, /warning: the agent's prompt mentions read_task, but without --task this session has no task to read/);
+  assert.match(noTask.stderr, /hoptell tmux uses tmux delivery/);
   assert.equal(fs.readFileSync(rootsOut, "utf8"), roots);
   // The protocol and profile choices reach the agent and the injector too.
   assert.match(env, /^HOPTELL_PROFILE=$/m);

@@ -240,6 +240,11 @@ async function profileOfRelay() {
   return profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null);
 }
 
+// The relay settings as they were before any relay was chosen. selectRelay starts from them on
+// every call, so a relay entry's namePrefix applies once however often a command chooses.
+const RELAY_KEYS = ["HOPTELL_RELAY", "HOPTELL_AUTH", "HOPTELL_TOKEN", "HOPTELL_PROFILE", "HOPTELL_NAME"];
+let relayBase = null;
+
 /**
  * Several relays (design 2.1): choose the relay for this command from --relay or the address's
  * @relay (they must agree), else the default, and point this process's settings at it.
@@ -261,6 +266,8 @@ async function selectRelay(addressAlias = null, given = undefined) {
   const e = r.relays.find((x) => x.alias === alias);
   if (!e) fail(`no relay "${alias}" in ${file}`, 2);
   if (e.tokenProblem) fail(`relay ${alias}: ${e.tokenProblem}`);
+  relayBase ??= Object.fromEntries(RELAY_KEYS.map((k) => [k, process.env[k]]));
+  const name = relayBase.HOPTELL_NAME;
   process.env.HOPTELL_RELAY = e.url;
   process.env.HOPTELL_AUTH = e.auth;
   if (e.auth === "token") process.env.HOPTELL_TOKEN = e.token;
@@ -268,11 +275,86 @@ async function selectRelay(addressAlias = null, given = undefined) {
   if (e.profile) process.env.HOPTELL_PROFILE = e.profile;
   else delete process.env.HOPTELL_PROFILE;
   if (e.name) process.env.HOPTELL_NAME = e.name;
-  else if (e.namePrefix && process.env.HOPTELL_NAME) process.env.HOPTELL_NAME = `${e.namePrefix}${process.env.HOPTELL_NAME}`.slice(0, 64);
+  else if (e.namePrefix && name) process.env.HOPTELL_NAME = `${e.namePrefix}${name}`.slice(0, 64);
+  else if (name === undefined) delete process.env.HOPTELL_NAME;
+  else process.env.HOPTELL_NAME = name;
   return { relays: r, entry: e, qualified: Boolean(flag || addressAlias) };
 }
 
-async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false } = {}) {
+/**
+ * Send `text` to `to` as this CLI's name (hoptell send, hoptell review request): the relay choice,
+ * the reply rule, the owner channel's guard and the contacts' encryption policy. Returns the line
+ * that describes the relay's answer. `die(message, code)` refuses (fail by default).
+ */
+async function sendText(to, text, { ttl, replyTo, relayFlag = null, die = fail, chosen = null } = {}) {
+  const { describeAck } = await import("../lib/client.js");
+  const at = /^(@?[A-Za-z0-9][A-Za-z0-9_-]{0,63})@([a-z0-9][a-z0-9-]{0,31})$/.exec(to);
+  if (at) to = at[1];
+  // `chosen` ({sel}): a relay chosen once for several sends (hoptell review request).
+  const sel = chosen ? chosen.sel : await selectRelay(at?.[2] ?? null, relayFlag);
+  if (sel && replyTo) {
+    // The same reply rule as agent sessions: the reference must have come through this relay.
+    const { checkReply, routesStore } = await import("../lib/routes.js");
+    const { profileKey } = await import("../lib/profiles.js");
+    const prof = (x) => {
+      try {
+        return profileKey(x.url, x.profile);
+      } catch {
+        return null;
+      }
+    };
+    try {
+      checkReply({ origins: routesStore(home()).lookup(replyTo), routeProfile: prof(sel.entry), target: to, qualified: sel.qualified, several: sel.relays.relays.length > 1, aliasOf: (p) => sel.relays.relays.find((x) => prof(x) === p)?.alias ?? null, aliases: sel.relays.relays.map((x) => x.alias) });
+    } catch (e) {
+      die(e.message, 2);
+    }
+  }
+  const c = await connect("send");
+  // To this relay's owner channel (design 7.3, 2.6): text by name, plaintext, to the own member.
+  const ownersig = await import("../lib/ownersig.js");
+  ownersig.armOwnerBackstop(home(), c);
+  let guarded;
+  try {
+    const policy = (await contactsOf()).currentPolicy();
+    guarded = ownersig.ownerSendGuard({ home: home(), client: c, to, policy: () => policy });
+  } catch (e) {
+    c.close();
+    die(e.message);
+  }
+  if (guarded) {
+    // For a person at a terminal (ownersig.OWNER_SEND_NOTE speaks to an agent: "your owner", ask_owner).
+    const line = `${describeAck(to, await c.send(to, text, ttl, replyTo, { toMember: guarded.toMember }), ttl, replyTo)}\nnote: the owner's Telegram chat may show this as a note; it is not shown if the session is hidden there or over the message limits.`;
+    c.close();
+    return line;
+  }
+  // The contacts' encryption policy (design 3.3, 4.3), as in agent sessions: the CLI sends
+  // plaintext only, so a contact (or a fan-out recipient) whose messages must be encrypted
+  // gets nothing, never plaintext.
+  // Fail closed: a managed policy file that is missing, unreadable or invalid sends nothing.
+  const { cliSendPolicy } = await import("../lib/mls/session.js");
+  const { sendPolicy } = await import("../lib/contacts.js");
+  const current = sendPolicy((await contactsOf()).currentPolicy());
+  if (current.refuse) {
+    c.close();
+    die(current.refuse);
+  }
+  let policy;
+  try {
+    policy = await cliSendPolicy({ doc: current.doc, client: c, to });
+  } catch (e) {
+    c.close();
+    die(`the encryption policy could not be checked (${e.message}); nothing was sent`);
+  }
+  if (policy.refuse) {
+    c.close();
+    die(policy.refuse);
+  }
+  const line = describeAck(to, await c.send(to, text, ttl, replyTo), ttl, replyTo) + (policy.note ? `\n(Not encrypted: ${policy.note.replace(/^not encrypted: /, "")}.)` : "");
+  c.close();
+  return line;
+}
+
+async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForName = false, replace = false, autoName = false } = {}) {
   checkPeerSettings(mode);
   await contactsOf();
   const { RelayClient } = await import("../lib/client.js");
@@ -280,7 +362,8 @@ async function connect(mode, onMessage, budgetMs = CONNECT_BUDGET_MS, { waitForN
   const roles = mode === "peer" ? parseRoles(process.env.HOPTELL_ROLES) : [];
   const protocol = parseProtocol(process.env.HOPTELL_PROTOCOL);
   const profile = protocol === 2 && process.env.HOPTELL_RELAY ? profileKey(process.env.HOPTELL_RELAY, process.env.HOPTELL_PROFILE || null) : null;
-  const name = cliName() ?? (protocol === 1 ? `${HOSTNAME}-cli` : null);
+  // `autoName`: the relay's automatic name (its member rule applies), never HOPTELL_NAME.
+  const name = (autoName ? null : cliName()) ?? (protocol === 1 ? `${HOSTNAME}-cli` : null);
   const signIn = String(process.env.HOPTELL_AUTH ?? "").trim().toLowerCase() === "login" ? await signInSource() : null;
   const c = new RelayClient({
     url: process.env.HOPTELL_RELAY,
@@ -1102,20 +1185,173 @@ try {
     case "tmux": {
       const sep = args.indexOf("--");
       const head = sep < 0 ? args : args.slice(0, sep);
-      if (sep < 0 || !(head.length === 1 || (head.length === 3 && head[1] === "--roles"))) {
-        fail("tmux needs a peer name, then -- and the agent's command\nusage: hoptell tmux <peer-name> [--roles a,b] -- <agent command...>", 2);
+      const { launch, TMUX_USAGE } = await import("../lib/tmux.js");
+      // The peer name first, then each option once, with its value.
+      const opts = {};
+      let bad = sep < 0 || head.length % 2 !== 1 || head[0].startsWith("-");
+      for (let i = 1; !bad && i < head.length; i += 2) {
+        if (!["--roles", "--cwd", "--task"].includes(head[i]) || head[i] in opts || head[i + 1].startsWith("--")) bad = true;
+        else opts[head[i]] = head[i + 1];
       }
-      const { launch } = await import("../lib/tmux.js");
+      if (bad) fail(`tmux needs a peer name, then -- and the agent's command\nusage: ${TMUX_USAGE}`, 2);
       // Once the checks pass, the home is classified first (a new install becomes managed): the
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
-      await launch(head[0], args.slice(sep + 1), head[2] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf() });
+      // A launch prompt (hoptell agents flags --lead) sends the agent to read_task, which only a
+      // session started with --task has.
+      if (!opts["--task"] && args.slice(sep + 1).some((w) => w.includes("read_task"))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
+      await launch(head[0], args.slice(sep + 1), opts["--roles"] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), cwd: opts["--cwd"] ?? null, task: opts["--task"] ?? null });
+      break;
+    }
+    case "worktree": {
+      // Implementer worktrees (design 8, topic 2).
+      const { worktreeCommand } = await import("../lib/worktrees.js");
+      const { inActiveTeam } = await import("../lib/teams.js");
+      await worktreeCommand({ args, home: home(), cwd: process.cwd(), fail, out: (l) => console.log(l), inTeam: (team, member) => inActiveTeam(home(), team, member) });
+      break;
+    }
+    case "team": {
+      const { teamCommand } = await import("../lib/teams.js");
+      // team up asks, after the start, whether the lead is online (a bounded listing; null when
+      // it cannot tell).
+      const leadOnline = async (lead) => {
+        // Only a default relay is checked: selectRelay would end this process on any other choice.
+        const relaysFile = process.env.HOPTELL_RELAYS || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "hoptell", "relays.json");
+        if (process.env.HOPTELL_RELAYS || fs.existsSync(relaysFile)) {
+          const { readRelaysFile } = await import("../lib/relays.js");
+          const r = readRelaysFile(relaysFile, { env: process.env, homedir: os.homedir() });
+          const e = r.relays.find((x) => x.alias === r.default);
+          if (!e || e.tokenProblem) return null;
+        }
+        await selectRelay(null, null);
+        // A send-only probe under the relay's automatic name: the relay leaves the caller's own name
+        // out of a listing, so HOPTELL_NAME set to the lead would make an online lead look offline.
+        const c = await connect("send", undefined, 5000, { autoName: true });
+        try {
+          if (c.name === lead) return null;
+          const peers = await Promise.race([c.list(), new Promise((r) => setTimeout(() => r(null), 5000).unref())]);
+          return peers ? peers.some((p) => p.name === lead && p.online) : null;
+        } finally {
+          c.close();
+        }
+      };
+      // The owner's bridge for a landing request or its outcome (design 8 addendum, option 3): a
+      // send-only connection under the relay's automatic name, as above; null without an owner
+      // channel, {problem, why} when the relay lists no statuses (why "relay"), the bridge is
+      // offline ("offline") or does not say it takes landing requests ("bridge").
+      const landingChannel = async () => {
+        const ownersig = await import("../lib/ownersig.js");
+        if (!Object.keys(ownersig.readTrusted(home()).realms).length) return null; // no owner channel: no relay is asked
+        await selectRelay(null, null);
+        const { bridgeCaps, bridgeTakesLandings } = await import("../lib/landings.js");
+        const c = await connect("send", undefined, 5000, { autoName: true });
+        try {
+          ownersig.armOwnerBackstop(home(), c);
+          const bridge = ownersig.ownerChannelNameFor(home(), c);
+          if (!bridge) {
+            c.close();
+            return null;
+          }
+          if (!c.caps?.includes("status")) {
+            c.close();
+            return { problem: "the relay lists no statuses", why: "relay" };
+          }
+          const peers = await Promise.race([c.list({ status: true }), new Promise((r) => setTimeout(() => r(null), 5000).unref())]);
+          const p = peers?.find((x) => x.name === bridge && x.online);
+          if (!p || !bridgeTakesLandings(p.status)) {
+            c.close();
+            return p ? { problem: "the bridge does not take landing requests", why: "bridge" } : { problem: "the bridge is not online", why: "offline" };
+          }
+          const policy = (await contactsOf()).currentPolicy();
+          const guard = ownersig.ownerSendGuard({ home: home(), client: c, to: bridge, policy: () => policy });
+          return { realm: c.realm.id, member: c.member.id, caps: bridgeCaps(p.status), send: (text, ttl) => c.send(bridge, text, ttl, undefined, { toMember: guard.toMember }), close: () => c.close() };
+        } catch (e) {
+          c.close();
+          return { problem: e.message };
+        }
+      };
+      await teamCommand({ args, home: home(), homedir: os.homedir(), env: { ...process.env }, fail, out: (l) => console.log(l), warn: (l) => console.error(l), isTTY: Boolean(process.stdin.isTTY), prepare: () => contactsOf(), deps: { leadOnline, landingChannel } });
+      break;
+    }
+    case "review": {
+      // The review queue of a team (design 8, 3.5): requests go out through the send path above.
+      const { reviewCommand } = await import("../lib/teams.js");
+      // One relay and one sender name for the whole batch, chosen when the first send runs.
+      let chosen = null;
+      await reviewCommand({
+        args,
+        home: home(),
+        fail,
+        out: (l) => console.log(l),
+        send: async (to, text) => {
+          chosen ??= { sel: await selectRelay(null, null) };
+          return sendText(to, text, {
+            chosen,
+            die: (m) => {
+              throw new Error(m);
+            },
+          });
+        },
+      });
+      break;
+    }
+    case "prompt-wait": {
+      // The agent's tmux window after the agent exited (lib/tmux.js agentCommand): a short wait
+      // while its prompt answer is carried out or its result is not reported yet.
+      const { reportSettled } = await import("../lib/promptexec.js");
+      if (args[0]) await reportSettled(home(), checkName(args[0]));
       break;
     }
     case "inject": {
       const { inject } = await import("../lib/tmux.js");
       await contactsOf(); // classify the home first, as every command that creates state does
-      await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice() });
+      const { readSettings } = await import("../lib/settings.js");
+      const st = readSettings({ env: process.env, homedir: os.homedir(), pid: process.pid, hostname: HOSTNAME });
+      for (const w of st.warnings.filter((x) => x.startsWith("HOPTELL_STALL_MINUTES"))) console.log(w);
+      // Where a waiting session is told (design 9, B): its lead (team members only) and the owner's
+      // bridge, through a control connection of the injector's own (lib/control.js).
+      let surface = {};
+      let control = null;
+      if (st.relay && st.relay.protocol === 2 && args[0]) {
+        const { createControl } = await import("../lib/control.js");
+        const { waitSurface } = await import("../lib/tmux.js");
+        const { RelayClient } = await import("../lib/client.js");
+        const { commitWelcome, profileKey } = await import("../lib/profiles.js");
+        const profile = profileKey(st.relay.url, st.relay.profile);
+        const signIn = st.relay.auth === "login" ? await signInSource() : null;
+        const client = ({ name, mode, reconnect, roles = [], waitWhenReplaced = true }) =>
+          new RelayClient({ url: st.relay.url, token: signIn ? null : st.relay.token, signIn, name, mode, reconnect, roles, waitWhenReplaced, require2: true, onWelcome: (w) => (w.realm ? commitWelcome(home(), profile, { realm: w.realm.id, member: w.member }) : undefined) });
+        const policy = (await contactsOf()).currentPolicy;
+        // The owner's answers to a prompt card come to the control connection (lib/promptexec.js),
+        // with the receiving connection's {name, member, realm}; a result not reported yet goes
+        // out again when it connects again.
+        let answers = null;
+        const onMessage = (m, confirm, me) => (answers ? answers.onMessage(m, confirm, me) : confirm());
+        control = createControl({ home: home(), name: args[0], client, policy: () => policy(), onMessage, onReady: () => answers?.flush({ force: true }), log: (l) => console.log(new Date().toISOString(), l) });
+        let team = null;
+        if (st.teamMember?.team) {
+          const { readState } = await import("../lib/teams.js");
+          try {
+            const s = readState(home(), st.teamMember.team);
+            if (s?.members.some((m) => m.name === args[0])) team = { team: s.team, lead: s.lead };
+          } catch {}
+        }
+        // Codex's startup folder trust on the owner's Telegram (design 9, C): only while the
+        // launch's gate is armed (lib/startgate.js), as a card from the control connection.
+        const { cardPublisher } = await import("../lib/promptflow.js");
+        const { promptAnswers, resultReport } = await import("../lib/promptexec.js");
+        const log = (l) => console.log(new Date().toISOString(), l);
+        surface = (gate, { ops, hold }) => {
+          answers = promptAnswers(home(), args[0], { gate, ops, hold, report: resultReport(args[0], { control, team }), log });
+          const cards = cardPublisher(home(), args[0], { control, gate, team: team?.team ?? null, profile: st.relay.profile ?? null, log });
+          return { ...waitSurface(home(), args[0], { control, team, folder: path.basename(process.cwd()), cards }), tick: () => answers.flush(), drain: () => answers.flush({ force: true }) };
+        };
+      }
+      try {
+        await inject(args[0], args[1], args[2], { home: home(), relay: relayChoice(), stallMinutes: st.stallMinutes, surface });
+      } finally {
+        control?.close(); // also a connect still in progress
+      }
       break;
     }
     case "list": {
@@ -1125,12 +1361,13 @@ try {
       const { formatPeers } = await import("../lib/client.js");
       // Grants can hide peers, so this says what is visible, not what exists.
       const none = sel && sel.relays.relays.length > 1 ? `No peers are visible on relay "${sel.entry.alias}".` : "No peers are visible on this relay.";
-      console.log(peers.length ? formatPeers(peers).join("\n") : none);
+      const rows = formatPeers(peers);
+      console.log(rows.length ? rows.join("\n") : none);
       c.close();
       break;
     }
     case "send": {
-      const { describeAck, parseRef, parseTtl } = await import("../lib/client.js");
+      const { parseRef, parseTtl } = await import("../lib/client.js");
       let ttl;
       let replyTo;
       let relayFlag = null;
@@ -1149,68 +1386,7 @@ try {
       if (rest[0] === "--") rest = rest.slice(1);
       let [to, ...words] = rest;
       if (!to || !words.length) fail("send needs a recipient and a message\nusage: hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>", 2);
-      const at = /^(@?[A-Za-z0-9][A-Za-z0-9_-]{0,63})@([a-z0-9][a-z0-9-]{0,31})$/.exec(to);
-      if (at) to = at[1];
-      const sel = await selectRelay(at?.[2] ?? null, relayFlag);
-      if (sel && replyTo) {
-        // The same reply rule as agent sessions: the reference must have come through this relay.
-        const { checkReply, routesStore } = await import("../lib/routes.js");
-        const { profileKey } = await import("../lib/profiles.js");
-        const prof = (x) => {
-          try {
-            return profileKey(x.url, x.profile);
-          } catch {
-            return null;
-          }
-        };
-        try {
-          checkReply({ origins: routesStore(home()).lookup(replyTo), routeProfile: prof(sel.entry), target: to, qualified: sel.qualified, several: sel.relays.relays.length > 1, aliasOf: (p) => sel.relays.relays.find((x) => prof(x) === p)?.alias ?? null, aliases: sel.relays.relays.map((x) => x.alias) });
-        } catch (e) {
-          fail(e.message, 2);
-        }
-      }
-      const c = await connect("send");
-      // To this relay's owner channel (design 7.3, 2.6): text by name, plaintext, to the own member.
-      const ownersig = await import("../lib/ownersig.js");
-      ownersig.armOwnerBackstop(home(), c);
-      let guarded;
-      try {
-        const policy = (await contactsOf()).currentPolicy();
-        guarded = ownersig.ownerSendGuard({ home: home(), client: c, to, policy: () => policy });
-      } catch (e) {
-        c.close();
-        fail(e.message);
-      }
-      if (guarded) {
-        // For a person at a terminal (ownersig.OWNER_SEND_NOTE speaks to an agent: "your owner", ask_owner).
-        console.log(`${describeAck(to, await c.send(to, words.join(" "), ttl, replyTo, { toMember: guarded.toMember }), ttl, replyTo)}\nnote: the owner's Telegram chat may show this as a note; it is not shown if the session is hidden there or over the message limits.`);
-        c.close();
-        break;
-      }
-      // The contacts' encryption policy (design 3.3, 4.3), as in agent sessions: the CLI sends
-      // plaintext only, so a contact (or a fan-out recipient) whose messages must be encrypted
-      // gets nothing, never plaintext.
-      // Fail closed: a managed policy file that is missing, unreadable or invalid sends nothing.
-      const { cliSendPolicy } = await import("../lib/mls/session.js");
-      const { sendPolicy } = await import("../lib/contacts.js");
-      const current = sendPolicy((await contactsOf()).currentPolicy());
-      if (current.refuse) {
-        c.close();
-        fail(current.refuse);
-      }
-      let policy;
-      try {
-        policy = await cliSendPolicy({ doc: current.doc, client: c, to });
-      } catch (e) {
-        c.close();
-        fail(`the encryption policy could not be checked (${e.message}); nothing was sent`);
-      }
-      if (policy.refuse) {
-        c.close();
-        fail(policy.refuse);
-      }
-      console.log(describeAck(to, await c.send(to, words.join(" "), ttl, replyTo), ttl, replyTo) + (policy.note ? `\n(Not encrypted: ${policy.note.replace(/^not encrypted: /, "")}.)` : ""));
-      c.close();
+      console.log(await sendText(to, words.join(" "), { ttl, replyTo, relayFlag }));
       break;
     }
     case "wait": {

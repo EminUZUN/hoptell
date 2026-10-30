@@ -304,3 +304,38 @@ test("page: a long list comes in pages; the page reads them all, once each row, 
   assert.equal(texts.filter((x) => x === "first").length, 1, "a row repeated across pages is shown once");
   assert.ok(texts.includes("second"));
 });
+
+test("page: the Teams tab shows each team as text only (hostile names stay text), with nothing to tap", async () => {
+  const dom = fakeDom();
+  const hostile = "<img src=x onerror=alert(1)>";
+  const answers = {
+    "POST session": { token: "t".repeat(43), expires_in: 900 },
+    "GET sessions": { sessions: [], counts: {} },
+    "GET teams": {
+      teams: [{ team: "n1", status: "partial", lead: `${hostile} (lead)`, machine: "mbp", members: [{ label: hostile, role: "implementer", cli: "codex", model: "gpt-5", effort: null, state: "in review", online: true }], more: 2, reviews: [{ member: hostile, waiting: ["rev"] }] }],
+      more: 1,
+    },
+  };
+  const calls = [];
+  const fetch = async (url, o) => {
+    const key = `${o.method} ${url.replace(/^api\//, "")}`;
+    calls.push(key);
+    return { status: 200, json: async () => answers[key] };
+  };
+  const win = { location: { hash: fragment("8.0") }, addEventListener: () => {}, TelegramWebviewProxy: { postEvent: () => {} } };
+  win.parent = win;
+  win.window = win;
+  const ctx = { window: win, document: dom.document, fetch, crypto: globalThis.crypto, btoa, setTimeout: (fn) => fn(), URLSearchParams, JSON, Object, Map, Number, String, Array, Uint8Array };
+  vm.runInNewContext(read("tg.js"), ctx);
+  vm.runInNewContext(read("app.js"), ctx);
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+  await settle();
+  dom.app.all().find((e) => e.textContent === "Teams").fire("click");
+  await settle();
+  assert.ok(calls.includes("GET teams"));
+  const texts = dom.app.text();
+  for (const line of [`Team n1 · led by ${hostile} (lead)`, "partly started · on mbp", hostile, "implementer · codex · model gpt-5", "in review · 🟢 online", "2 more not shown", `🔎 Review of ${hostile}'s work: waiting for rev`, "1 more team not shown.", "Read-only. Each team is shown as its lead session reports it; model and effort as set at launch."]) assert.ok(texts.includes(line), line);
+  const screen = dom.app.all().filter((e) => e.tag !== "nav" && !(e.className ?? "").startsWith("tab"));
+  assert.ok(!screen.some((e) => e.tag === "img"), "no element from a name");
+  assert.ok(!screen.some((e) => e.tag === "button" || Object.keys(e.listeners).length), "nothing to tap outside the tabs");
+});

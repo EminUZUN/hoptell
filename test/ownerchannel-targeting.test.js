@@ -41,7 +41,7 @@ test("commandOf: lower case, '-' to '_', 1-32 of [a-z0-9_], reserved words refus
   assert.equal(commandOf("my_bot"), "my_bot");
   assert.equal(commandOf("x".repeat(32)), "x".repeat(32));
   assert.equal(commandOf("x".repeat(33)), null);
-  for (const r of ["help", "start", "settings", "pending", "peers", "msg", "cancel", "HELP"]) assert.equal(commandOf(r), null, r);
+  for (const r of ["help", "start", "settings", "pending", "peers", "msg", "cancel", "team", "teams", "HELP"]) assert.equal(commandOf(r), null, r);
   assert.equal(commandOf("a.b"), null);
   assert.equal(commandOf(""), null);
 });
@@ -327,7 +327,7 @@ test("the menu: chat scope, static commands then one per agent; unchanged lists 
   await agent(t, s.url, s.tokens.me, "me-carol");
   await setPeople(s.home, ["me-alice", "me-Big-Bot"]);
   await s.bridge.menuCheck();
-  assert.deepEqual(lastMenu(s.tg), ["msg", "agents", "pending", "help", "alice", "big_bot"], "favourites only");
+  assert.deepEqual(lastMenu(s.tg), ["msg", "agents", "team", "pending", "help", "autoland", "alice", "big_bot"], "favourites only");
   assert.equal(menuCalls(s.tg).at(-1).params.commands.at(-1).description, "Message Big-Bot");
   await s.bridge.menuCheck();
   assert.equal(menuCalls(s.tg).length, 2, "the same list is not registered again");
@@ -356,7 +356,7 @@ test("collisions: Alice/alice and my-bot/my_bot get no command, also for 24 hour
   await agent(t, s.url, s.tokens.me, "me-carol");
   await setPeople(home, ["me-my_bot", "me-carol"]);
   await s.bridge.menuCheck();
-  assert.deepEqual(lastMenu(tg), ["msg", "agents", "pending", "help", "carol"]);
+  assert.deepEqual(lastMenu(tg), ["msg", "agents", "team", "pending", "help", "autoland", "carol"]);
   tg.say("/my_bot hi");
   await until(() => tg.texts().includes("/my_bot fits more than one agent right now. Pick one with /msg."));
   // One leaves: still ambiguous (the hold), also after a restart.
@@ -371,7 +371,7 @@ test("collisions: Alice/alice and my-bot/my_bot get no command, also for 24 hour
   // After the hold (24 h after it was last seen, plus the hourly renewal), only me-my_bot is left.
   clock.skew = MENU_HOLD_MS + 3600_000 + 1000;
   await bridge.menuCheck();
-  assert.deepEqual(lastMenu(tg), ["msg", "agents", "pending", "help", "carol", "my_bot"]);
+  assert.deepEqual(lastMenu(tg), ["msg", "agents", "team", "pending", "help", "autoland", "carol", "my_bot"]);
 });
 
 test("a colliding agent that comes online between two checks makes the command ambiguous at once; a failed refresh refuses", async (t) => {
@@ -422,7 +422,7 @@ test("the tracking bound fails closed: a full history blocks a colliding command
   await until(() => s.tg.texts().includes("I don't know /zed. Tap the menu button or send /help."));
 });
 
-test("at most 100 commands: the static four, then favourites by name", async (t) => {
+test("at most 100 commands: the static six, then favourites by name", async (t) => {
   const s = await setup(t);
   const names = Array.from({ length: 98 }, (_, i) => `me-a${String(i).padStart(3, "0")}`);
   for (const n of names) await agent(t, s.url, s.tokens.me, n);
@@ -430,8 +430,8 @@ test("at most 100 commands: the static four, then favourites by name", async (t)
   await s.bridge.menuCheck();
   const cmds = lastMenu(s.tg);
   assert.equal(cmds.length, 100);
-  assert.deepEqual(cmds.slice(4, 6), ["a000", "a001"]);
-  assert.equal(cmds.at(-1), "a095");
+  assert.deepEqual(cmds.slice(6, 8), ["a000", "a001"]);
+  assert.equal(cmds.at(-1), "a093");
 });
 
 test("the menu follows the pairing: unpaired, it is deleted; a failed deletion is kept and retried; a new chat gets its own", async (t) => {

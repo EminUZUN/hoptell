@@ -617,8 +617,8 @@ test("menu: a favourite named agents gets no command and /agents stays the stati
   await setPeople(s.home, ["me-agents", "me-zed"]);
   await s.bridge.menuCheck();
   const cmds = s.tg.calls("setMyCommands").at(-1).params.commands;
-  assert.deepEqual(cmds.map((c) => c.command), ["msg", "agents", "pending", "help", "zed"]);
-  assert.deepEqual(cmds.slice(0, 4).map((c) => c.description), ["Message an agent", "Your agents and favourites", "Questions waiting for you", "How this works"]);
+  assert.deepEqual(cmds.map((c) => c.command), ["msg", "agents", "team", "pending", "help", "autoland", "zed"]);
+  assert.deepEqual(cmds.slice(0, 5).map((c) => c.description), ["Message an agent", "Your agents and favourites", "Your agent teams", "Questions waiting for you", "How this works"]);
   zed.client.close();
   await sleep(200);
   await s.bridge.menuCheck();
@@ -699,16 +699,33 @@ test("a rename checks its name under the lock: a name taken meanwhile (by the CL
 });
 
 test("signals of an earlier owner are dropped, never written over the new owner's file", async (t) => {
-  const s = await setup(t);
+  // The re-pair lands exactly between the relay's confirmation of the owner's instruction and its
+  // last_talked signal (the "sent" point), as a slow relay under load would make it.
+  let home = null;
+  let armed = false;
+  const fault = (point) => {
+    if (point !== "sent" || !armed) return;
+    armed = false;
+    paired(home, { user: 777, chat: 777, id: "p_otherpairingxxxx" });
+  };
+  const s = await setup(t, { bridge: { fault } });
+  home = s.home;
   const alice = await agent(t, s.url, s.tokens.me, "me-alice");
+  const bob = await agent(t, s.url, s.tokens.me, "me-bob");
+  armed = true;
   s.tg.say("@alice hello");
-  await fromOwner(alice, "hello"); // a last_talked signal is pending now (written within a second)
-  paired(s.home, { user: 777, chat: 777, id: "p_otherpairingxxxx" });
+  await fromOwner(alice, "hello");
+  // The delivery can come before the relay's confirmation to the bridge: wait for the re-pair.
+  await until(() => !armed, 4000, "re-pair at sent");
   await setPeople(s.home, ["me-bob"], { fav: true }, { owner: 777 });
-  await sleep(1500);
+  // A signal of the new owner (bob's note), written in the next batch: alice's, of the earlier
+  // pairing, is never in it.
+  await bob.client.send("me-owner", "a note", 600, undefined, { toMember: ME });
+  await until(() => peopleOf(s.home, { owner: 777 })["me-bob"]?.last_talked, 4000, "the new owner's signal");
   const b = peopleOf(s.home, { owner: 777 });
   assert.equal(b["me-bob"].fav, true, "the new owner's preferences stay");
   assert.equal(b["me-alice"], undefined, "the old owner's signal is not in them");
+  assert.equal(peopleOf(s.home)["me-alice"], undefined, "nor written to the old owner's file after the re-pair");
 });
 
 test("host check: a re-pair while the host is being checked retires the send; nothing goes out under the new pairing", async (t) => {

@@ -64,6 +64,13 @@ process. None of this is sent to the relay.
   it when that hold ends; it is not written to the relay's database or logs. It also appears in
   other sessions' `list_peers` output, which their agent clients keep in their transcripts.
   `HOPTELL_TITLE=off` sends none.
+- Team summaries: a lead session (`hoptell team`) publishes a summary of the teams it leads as
+  its status: team names and states, member names, roles, CLIs, the model and effort each member
+  was started with, branch names, member states, and open review request ids with the reviewers
+  who have not answered. The relay keeps it in memory with the session's hold on its name, drops
+  it when that hold ends, and does not write it to its database or logs. It lists it only to
+  sessions of the same member that ask for it (your Telegram bridge), never to other members'
+  sessions or shared-token sessions, and never in `list_peers` output.
 - Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
 - For receivers on the current protocol, each delivered message also states how the sender
@@ -344,6 +351,25 @@ process. None of this is sent to the relay.
   `~/.hoptell/sessions/<name>.env` (under `$HOPTELL_HOME` when configured). The file is not
   encrypted by hoptell and is created with Unix mode 0600 in private directories. It remains
   after the session ends, until you delete it or launch another session with the same name.
+  With `--task <file>`, it also copies the task to `~/.hoptell/sessions/<name>.task`; that copy
+  remains after the session ends, until you delete it or launch the same name again.
+- Agent teams and implementers keep, under `~/.hoptell` (or `$HOPTELL_HOME`): `teams/<team>/`,
+  with `state.json` (the members' launch arguments, folders and branches, the process identities
+  of their sessions and of the supervisor, review requests and verdicts, landing journals and
+  landing history, recent events) and `tasks/` (a copy of each member's task);
+  `worktrees/<member>.json` (a worktree's registration: repository, folder, branch, base, recorded
+  commits) and `worktrees/sessions/<member>.json` (the process identities of the member's
+  session); `capabilities/` (what each agent CLI's `--help` and model lists showed, and when); and
+  your own role presets in `presets/roles.json`. Task copies and team history remain after the
+  sessions end. Files hoptell creates use private folders and files (0700/0600) and are not
+  encrypted by hoptell. Your own preset file has the permissions you give it.
+- `hoptell agents capabilities` (and `agents flags`) reads the agent CLIs' own local model caches:
+  Codex's `$CODEX_HOME/models_cache.json` (`~/.codex` by default) and Claude Code's
+  `~/.claude/cache/model-catalog/`. It only reads them and sends nothing.
+- `hoptell worktree` and `hoptell team` inspect your own local processes to tell whether a
+  member still runs: the process table, and the working folder of each of your processes (`lsof`
+  on macOS, `/proc` on Linux). What they read stays on the machine; a refusal names a process
+  (its id, command and start time).
 - The plugin's sensitive relay-token setting is stored in Claude Code's secure credential
   storage. Other settings may be stored differently by Claude Code. hoptell also reads
   environment variables and the first applicable settings file: `HOPTELL_ENV` if specified;
@@ -465,11 +491,14 @@ stores them on its servers, and anyone with the bot token can read new messages 
   bridge's updates to a question (answered, expired, cancelled); notes from your own agents (the
   agent's name and the note's text, up to 3,000 characters); the replies to `/pending` (the asking
   agents' names, question numbers, the start of each question and its age), `/agents` (how many
-  favourites you have and how many of your agents are online), `/msg` and `/help`; the bridge's
+  favourites you have and how many of your agents are online), `/team` (the team summaries your
+  own lead sessions publish: team names and states, member names, roles, CLIs, the model and
+  effort each was started with, branch names, member states and open review requests), `/msg` and
+  `/help`; the bridge's
   prompts and confirmations, which name the agent; the names of your own agents (as the relay
   confirms them, and the ones you saved) as button labels (at most 10 per list or page, also in
   search results) and in the bot's command menu for your paired chat (a command and a "Message
-  <name>" description per favourite, for up to 96 favourites whose names give a valid command that
+  <name>" description per favourite, for up to 95 favourites whose names give a valid command that
   no other agent's name shares); the names you give agents, in buttons, prompts, the details screen
   and menu descriptions; and on an agent's details screen and in a "now running on" question, the
   computer name the agent reported to the relay, and when you last talked with it. Bot API requests include the bot token,
@@ -569,7 +598,8 @@ operator turned it on.
 - When you open the app, your phone loads it from your hoptell server, not from Telegram.
   Everything the app shows and sends passes the server's HTTPS endpoint and the relay unencrypted
   by hoptell: your list of agents with their names, favourites and hidden marks,
-  the computer names, your drafts, and the start of each open question.
+  the computer names, your drafts, the start of each open question, and the team summaries your
+  lead sessions publish (as for `/team`).
 - To prove it is you, Telegram gives the app a signed note about you: your Telegram user id, first
   and last name, username, language, whether you have Premium, and a link to your profile photo.
   The app sends it to your bridge once when it opens; the HTTPS endpoint and the relay can read it.
@@ -624,6 +654,13 @@ the policies for any other providers or services you configure.
   tokens from the settings sources you used.
 - Spawned agent runs: stop live runs with `hoptell agents stop <run>`, then delete
   `~/.hoptell/agents/` (see "Spawned agent runs").
+- Agent teams and implementers: run `hoptell team down <team>` first (add `--keep-worktrees` to
+  keep the worktrees). Delete `~/.hoptell/teams/<team>/` only after `down` confirms every member
+  and the supervisor stopped and reports no pending candidate publication, candidate or landing;
+  resolve anything it reports first. `hoptell worktree remove` deletes a member's worktree record
+  and session record. Delete session task copies (`~/.hoptell/sessions/<name>.task`) only after
+  their sessions stop. Capability records (`~/.hoptell/capabilities/`) can be deleted; they are
+  rebuilt on the next capability check.
 - Owner channel: stop the bridge, run `hoptell telegram unpair --all` on the bridge machine and
   check its output (see "The owner channel over Telegram"); delete the remaining
   `owner-channel` directories on each machine, and clear the bot chat in Telegram for the copies
