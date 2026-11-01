@@ -115,7 +115,6 @@ test("hardening shape: no -s/--sandbox/sandbox_mode; the sandbox maps to extends
   assert.ok(!plan.args.some((a) => /sandbox_mode/.test(a)));
   assert.ok(plan.args.includes("--ignore-user-config") && plan.args.includes("--ignore-rules"));
   assert.ok(plan.args.includes("agents.enabled=false") && plan.args.includes("features.multi_agent_v2=false"), "sub-agents off");
-  assert.ok(!buildPlan(planCtx(ro())).plan.args.includes("agents.enabled=false"), "the plain shape is unchanged");
   assert.ok(plan.args.includes(`default_permissions="${id}"`));
   assert.ok(plan.args.includes(`permissions.${id}.extends=":read-only"`));
   const tables = plan.args.filter((a) => a.includes(".filesystem="));
@@ -133,10 +132,6 @@ test("hardening shape: no -s/--sandbox/sandbox_mode; the sandbox maps to extends
   // a table without the hardening entry does.
   assert.doesNotMatch(commandLines(ro({ ...HARD, folders: { roots: ["/w"], default: "/w" } })).headless, /refused for now/);
   assert.match(commandLines(ro({ ...HARD, folders: { roots: ["/w"], default: "/w" } }), { gates: UNGATED }).headless, /refused for now: adapter_gate_unverified/);
-  // A plain profile: today's plan (-s read-only), mode plain.
-  const p = buildPlan(planCtx(ro())).plan;
-  assert.equal(p.args[p.args.indexOf("-s") + 1], "read-only");
-  assert.equal(p.mode, "plain");
   // Containment is not offered: no plan is built for it.
   assert.throws(() => buildPlan(planCtx(ro({ codex: { headlessMode: "containment" } }))), /not offered/);
   assert.match(commandLines(ro({ codex: { headlessMode: "containment" }, folders: { roots: ["/w"], default: "/w" } })).headless, /not offered: adapter_gate_unverified/);

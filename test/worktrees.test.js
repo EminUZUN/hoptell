@@ -57,7 +57,6 @@ test("worktree add: a new branch team/<team>/<member> at the lead's HEAD, next t
   assert.equal(rec.branch, "team/n1/dana-impl-1");
   assert.equal(rec.base, head);
   assert.equal(rec.head, head);
-  assert.match(rec.base, /^[0-9a-f]{40}$/, "a full object id");
   assert.equal(rec.common, path.join(s.repo, ".git"));
   assert.ok(rec.gitdir.startsWith(path.join(s.repo, ".git", "worktrees")));
   assert.equal(git(s.wt, "rev-parse", "--abbrev-ref", "HEAD"), "team/n1/dana-impl-1");

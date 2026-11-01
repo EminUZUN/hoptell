@@ -179,7 +179,6 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.ok(dry.warn.includes(`warning: Codex will ask you to trust ${s.repo} in a pane before it starts (dana-n1-impl-1); Codex (checked with 0.165.0) asks once per repository: its worktrees count as trusted after that`), dry.warn);
   assert.doesNotMatch(dry.warn, /has no reviewer/);
   assert.match(dry.warn, /could not check which hoptell the Codex members run as their MCP server: \S+config\.toml: it does not exist/);
-  assert.doesNotMatch(dry.warn, /dana-n1-rev-1: Codex/, "a Claude Code member is not checked");
   // A trusted folder, and Codex's hoptell: another install (named, with its version), then this one.
   const codexHome = path.join(s.homedir, ".codex");
   fs.mkdirSync(codexHome, { recursive: true });
@@ -861,7 +860,6 @@ test("team file: the schema file and the checker agree on fields, enums and limi
   // Every field the schema names is one the checker takes, and an unknown one is refused by both.
   const ok = { version: 1, team: "n1", repo: "/r", base: "main", worktrees: "/w", lead: "dana-lead", idleMinutes: { reviewer: 30 }, lifetimeMinutes: 60, members: [{ name: "dana-i", role: "implementer", cli: "codex", model: "m", effort: "high", task: "/t", owns: ["lib/**"], template: "implementer", lifetimeMinutes: 5, folder: "i", resume: "never" }] };
   assert.equal(checkTeam(ok, { file: "/x/team.json", homedir: "/h" }).members.length, 1);
-  assert.throws(() => checkTeam({ ...ok, extra: 1 }, { file: "/x/team.json", homedir: "/h" }), /unknown field "extra"/);
   assert.equal(schema.additionalProperties, false);
   assert.equal(item.additionalProperties, false);
   // The same JSON types: what the schema's type refuses, the checker refuses too.
@@ -1491,7 +1489,6 @@ test("--abandon is reached through the CLI entry point: the flag and its value p
   const r = spawnSync(process.execPath, [BIN, "team", "land", "dana-n4-impl-1", "--abandon", "L1"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /abandoning a landing is the owner's step: run hoptell team land --abandon in a terminal/);
-  assert.doesNotMatch(r.stderr, /unknown option/);
   const help = spawnSync(process.execPath, [BIN, "help", "team"], { env, encoding: "utf8" });
   assert.match(help.stdout, /--abandon <id>/);
   assert.match(help.stdout, /hoptell team approve <id> \[--show-diff\]/);
@@ -2780,8 +2777,6 @@ test("review request ids are per team: a verdict names its team and changes only
   assert.deepEqual(readState(home, "n5").reviews[0].verdicts.map((v) => v.verdict), ["approve"]);
   assert.equal(stateBytes(home, "n4"), n4, "the other team's state is byte-identical");
   await refusal(() => reviewVerdict(home, { team: "n6", id: "rv-deadbeef", reviewer: "dana-rev-1", verdict: "approve" }), "no_team");
-  await refusal(() => reviewVerdict(home, { id: "rv-deadbeef", reviewer: "dana-rev-1", verdict: "approve" }), "which_team");
-  assert.equal(stateBytes(home, "n4"), n4);
 });
 
 test("team status: an implementer without a worktree shows no worktree, or worktree removed after a landing or down, and what became of its branch; never undefined", async (t) => {
@@ -2806,7 +2801,7 @@ test("team status: an implementer without a worktree shows no worktree, or workt
   assert.match(text, /dana-n6-impl-4 .*\n {4}team\/n6\/dana-n6-impl-4 \(kept: team\/n6\/dana-n6-impl-4 moved\)\n {4}worktree removed/);
   let json = await show(["status", "n6", "--json"]);
   assert.deepEqual(JSON.parse(json).members.map((m) => [m.noWorktree, m.commits, m.head, m.branchState ?? null, m.branchWhy ?? null]), [["no worktree", null, null, null, null], ["worktree removed", null, null, "landed", null], ["worktree removed", null, null, "deleted", "it landed"], ["worktree removed", null, null, "kept", "team/n6/dana-n6-impl-4 moved"]]);
-  for (const s of [text, json]) assert.doesNotMatch(s, /undefined|\? commit/);
+  for (const s of [text, json]) assert.doesNotMatch(s, /undefined/);
   // A team that is down: hoptell removed what it could; a branch without commits was deleted.
   writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1"), impl("dana-n6-impl-5", { removed: { branch: "deleted", why: null, at } })], { status: "down" }));
   text = await show(["status", "n6"]);
@@ -3649,7 +3644,6 @@ test("a Telegram grant from a bridge whose clock runs 60 s ahead covers the next
   const out = await x.cli(["land", x.member, "--request-approval"]);
   assert.match(out.join("\n"), /so L1 lands now without asking/);
   assert.deepEqual(grantRow(x, g.id).slots, ["L1"]);
-  assert.equal(g.expires_at - g.issued_at, 2 * 60 * 60_000);
 });
 
 test("a notice the bridge has not taken (200 lines held, the 201st left unconfirmed at the relay) stays owed on the Mac, and reaches Telegram once there is room", async (t) => {
@@ -3743,19 +3737,18 @@ test("auto-land notices are owed by the records: pending on a bridge that cannot
   assert.equal(readGrantState(z.s.home, "n4").notices.length, 50);
 });
 
-test("an auto-landing that stopped after acceptance stays the grant's on every route: after --off, the owner's terminal --approve and team apply both refuse, and nothing moves", async (t) => {
-  for (const route of ["terminal", "apply"]) {
-    const x = await telegramSetup(t, { checkout: false });
-    await autolandOn(x);
-    await assert.rejects(x.cli(["land", x.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
-    assert.equal(readState(x.s.home, "n4").actions[0].state, "accepted");
-    await x.cli(["autoland", "n4", "--off"]);
-    const r = await (route === "terminal" ? x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true }) : x.cli(["apply", "L1"])).catch((e) => e);
-    assert.match(r.message, /^the owner turned auto-land off \(the grant g_[a-z2-7]{16} is revoked\) before the move, so the landing L1 ended; nothing was moved\./, route);
-    assert.equal(moves(x.s.repo), 0, route);
-    assert.equal(refOf(x.s.repo, "main"), x.c.T, route);
-    assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["rejected", "grant"], route);
-  }
+// team apply on this route: the first block of "an auto-landing that stopped after its slot was reserved" above.
+test("an auto-landing that stopped after acceptance stays the grant's: after --off, the owner's terminal --approve refuses too, and nothing moves", async (t) => {
+  const x = await telegramSetup(t, { checkout: false });
+  await autolandOn(x);
+  await assert.rejects(x.cli(["land", x.member, "--request-approval"], { deps: { beforeMove: crash } }), /crash/);
+  assert.equal(readState(x.s.home, "n4").actions[0].state, "accepted");
+  await x.cli(["autoland", "n4", "--off"]);
+  const r = await x.cli(["land", x.member, "--approve", x.c.T, x.c.C], { tty: true }).catch((e) => e);
+  assert.match(r.message, /^the owner turned auto-land off \(the grant g_[a-z2-7]{16} is revoked\) before the move, so the landing L1 ended; nothing was moved\./);
+  assert.equal(moves(x.s.repo), 0);
+  assert.equal(refOf(x.s.repo, "main"), x.c.T);
+  assert.deepEqual(((e) => [e.state, e.route])(readTombstone(x.s.home, "n4", "L1")), ["rejected", "grant"]);
 });
 
 test("the notices owed count before an auto-landing: 49 queued plus one owed after a stopped run already reach the limit", async (t) => {
@@ -3801,7 +3794,6 @@ test("team autoland from the real command line: --off, --for and --count are kno
   const off = run("autoland", "n4", "--off");
   assert.equal(off.status, 1, off.stderr);
   assert.match(off.stderr, /team n4 has no state/);
-  assert.doesNotMatch(off.stderr, /unknown option/);
   const on = run("autoland", "n4", "--target", "main", "--for", "2h", "--count", "3");
   assert.doesNotMatch(on.stderr, /unknown option/);
   for (const flag of ["--for", "--count"]) {

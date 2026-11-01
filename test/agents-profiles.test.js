@@ -260,12 +260,12 @@ test("hoptell agents profiles and profile approve", async (t) => {
   r = await run("profile", "approve", "claude-helper", "--accept-read-risk");
   assert.equal(r.code, 2, r.stdout + r.stderr);
   assert.match(r.stderr, /--accept-read-risk applies only to codex profiles/);
-  assert.doesNotMatch(r.stdout, /WARNING:/);
+  assert.doesNotMatch(r.stdout, /^warning: /m);
   r = await run("profiles");
   assert.match(r.stdout, /claude-helper {2}not approved yet/);
   r = await run("profile", "approve", "claude-helper");
   assert.equal(r.code, 0, r.stderr);
-  assert.doesNotMatch(r.stdout, /WARNING:/);
+  assert.doesNotMatch(r.stdout, /^warning: /m);
   // Also refused once that profile is approved (not "Already approved").
   r = await run("profile", "approve", "claude-helper", "--accept-read-risk");
   assert.equal(r.code, 2, r.stdout + r.stderr);
@@ -280,7 +280,7 @@ test("hoptell agents profiles and profile approve", async (t) => {
   r = await run("profile", "approve", "codex-bad", "--accept-read-risk");
   assert.equal(r.code, 1);
   assert.match(r.stderr, /agent profile codex-bad is invalid/);
-  assert.doesNotMatch(r.stdout, /WARNING:/);
+  assert.doesNotMatch(r.stdout, /^warning: /m);
   // Codex profiles that can never run on this hoptell (workspace-write headless, tmux) are not
   // approved: refused before the warning, nothing recorded.
   for (const [id, over, why] of [
@@ -292,7 +292,7 @@ test("hoptell agents profiles and profile approve", async (t) => {
     assert.equal(r.code, 1, r.stdout + r.stderr);
     assert.match(r.stderr, new RegExp(`agent profile ${id} cannot run on this hoptell: `));
     assert.match(r.stderr, why);
-    assert.doesNotMatch(r.stdout, /WARNING:/);
+    assert.doesNotMatch(r.stdout, /^warning: /m);
     assert.equal(readApproved(w.home).profiles?.[id], undefined, `${id} is not approved`);
   }
   // A codex profile with a mode that can run is approved as before.

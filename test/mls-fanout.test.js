@@ -7,7 +7,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { ROOT } from "../lib/config.js";
 import { RelayClient } from "../lib/client.js";
@@ -967,47 +966,4 @@ test("retained send state: a failed or expired message releases its reservation;
 test("results: the tool text adds up, with the denominator", () => {
   const r = { copies: 5, candidates: 8, excluded: { first_contact: 2, not_encrypted: 1, unavailable: 0 }, states: { pending: 0, held: 1, accepted: 4, unavailable: 0, refused: 0, expired: 0 } };
   assert.equal(describeFanout("@reviewer", r), "Broadcast to @reviewer, encrypted (experimental, unreviewed): relay accepted 4 of 5 copies; 1 waits for a key decision by your user. Not included: 2 sessions need a first direct message (first-contact), 1 session cannot receive encrypted messages (not-encrypted). 8 sessions matched @reviewer.");
-});
-
-test("measurement: encryption per copy (1 KB, 1 MB), sealing 50 copies, and one save at the byte bound", { skip: noWasm }, async (t) => {
-  const driver = createOpenMlsDriver(WASM, { testOnlySuite: 0x004d });
-  const realm = "a".repeat(32);
-  const a = await driver.createDevice(credentialIdentity({ realm, member: `m_${"a".repeat(26)}`, device: newDeviceId() }));
-  const b = await driver.createDevice(credentialIdentity({ realm, member: `m_${"b".repeat(26)}`, device: newDeviceId() }));
-  const g = await a.createGroup(crypto.randomBytes(16));
-  await g.commit({ add: [await b.keyPackage({ lifetimeSeconds: 86400 })] });
-  await g.mergePending();
-  const time = async (fn, n) => {
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      const t0 = process.hrtime.bigint();
-      await fn();
-      out.push(Number(process.hrtime.bigint() - t0) / 1e6);
-    }
-    out.sort((x, y) => x - y);
-    return out[Math.floor(out.length / 2)];
-  };
-  const kb = crypto.randomBytes(1024);
-  const mb = crypto.randomBytes(1024 * 1024);
-  const p1k = await time(() => g.encrypt(kb, new Uint8Array()), 50);
-  const p1m = await time(() => g.encrypt(mb, new Uint8Array()), 5);
-  const fifty = await time(async () => {
-    for (let i = 0; i < 50; i++) await g.encrypt(kb, new Uint8Array());
-  }, 3);
-  // One save of a device record whose send state is at the byte bound (64 MiB counted, the
-  // actual bytes about half of it: bodies plus outbox entries at their reservations' size).
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-fanout-measure-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const w = await deviceRelay(t);
-  const store = deviceStore({ home: dir, profile: "relay-test", driver: createFakeDriver({ seed: "m" }), store: "file", passphrase: PASS, keychainBackend: null, machine: "m", now: w.clock.now, own: ownFor(memoryContacts(), dir, "relay-test") });
-  await store.enroll(await w.client("alice"));
-  const body = b64(crypto.randomBytes(190_000));
-  const save = await store.transact(async (ctx) => {
-    ctx.rec.e2ee = { logical: {} };
-    for (let i = 0; retained(ctx.rec.e2ee).bytes < LIMITS.retainedBytes - 600_000; i++) ctx.rec.e2ee.logical[crypto.randomUUID()] = { content: body, peer: "p", target: "t", state: "sent", created: 0, expires: 1, reserve: frameBound(142_500) };
-    const t0 = process.hrtime.bigint();
-    await ctx.save();
-    return Number(process.hrtime.bigint() - t0) / 1e6;
-  });
-  t.diagnostic(`OpenMLS suite 0x004D, ${process.platform}-${process.arch}, Node ${process.version}: encrypt 1 KB p50 ${p1k.toFixed(2)} ms, 1 MB p50 ${p1m.toFixed(1)} ms; 50 copies of 1 KB ${fifty.toFixed(1)} ms; one save at the byte bound ${save.toFixed(0)} ms`);
 });

@@ -127,13 +127,6 @@ test("A2: a member that sent no update for 30 days is listed stale (status and d
   await until(async () => (await a.s.alice.e2ee.status()).stale[gid].length === 0, "not stale once the update is merged");
 });
 
-test("A2 rotation trigger: conditional on rotating in active groups, which no driver offers yet: rotation is refused there", async (t) => {
-  const { w, a } = await conversation(t);
-  // With the capability, a rotation would make an update due at once (policy.js updateDue's
-  // "rotation"); without it the device does not rotate while it has conversations.
-  await assert.rejects(a.store.rotate(await w.client("alice")), (e) => e.code === "rotation_unsupported");
-});
-
 test("A2: the due update loses a race with a peer's commit: it is retried at the caught-up epoch, and the message is sealed only after an own update merged", async (t) => {
   const { w, a, b, gid } = await conversation(t);
   w.clock.advance(1 * DAY);

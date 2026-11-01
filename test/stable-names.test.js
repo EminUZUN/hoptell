@@ -386,7 +386,7 @@ test("client: a relay with no room for more tickets: an automatic name, not aske
 
 // ---- new clients on old relays ----------------------------------------------------------------
 
-const BASELINE = "53690a4";
+const BASELINE = "e6611b5"; // 0.3.2 on main, before name tickets
 
 /** The relay of BASELINE (before name tickets) from the git history, or null when unavailable. */
 async function oldRelay(t) {

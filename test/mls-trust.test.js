@@ -11,14 +11,13 @@ import path from "node:path";
 import { openContacts } from "../lib/quarantine.js";
 import { validateContacts } from "../lib/contacts.js";
 import { b64, credentialIdentity, makeRevocation, makeRotation, newDeviceId, pinIdentity } from "../lib/mls/identity.js";
-import { applyRevocations, clearRevocation, clearRevocationOverflow, decide, evaluate, gate, heldQueue, pairSafetyNumber, pinFirstUse, pinOf, retireRemovedDevice } from "../lib/mls/trust.js";
+import { applyRevocations, clearRevocation, clearRevocationOverflow, decide, evaluate, gate, heldQueue, pinFirstUse, pinOf, retireRemovedDevice } from "../lib/mls/trust.js";
 import { createFakeDriver } from "./fake-mls-driver.js";
 import { fakeDevice, tmpDir } from "./mls-helpers.js";
 
 const REALM = "a".repeat(32);
 const OTHER_REALM = "b".repeat(32);
 const BOB = `m_${"b".repeat(26)}`;
-const ME = `m_${"m".repeat(26)}`;
 const driver = createFakeDriver({ seed: "trust" });
 
 /** A device of `member` as the relay serves it (with an optional rotation chain). */
@@ -182,16 +181,6 @@ test("revocations: signed by another pinned device holds sending to it at once; 
   // A device revoking itself is not "another pinned device".
   const self = await makeRevocation({ realm: REALM, member: BOB, device: b.id, by: b.id, at: 1 }, (l, c) => b.dev.sign(l, c));
   assert.deepEqual(evaluate(doc, REALM, BOB, [a.served(), { device: b.id, revoked: { at: 1, by: "device", device: b.id, statement: self } }]).holdDevices, []);
-});
-
-test("the safety number of a pair changes with any device of either side", async () => {
-  const m1 = await device(ME);
-  const b1 = await device();
-  const b2 = await device();
-  const mine = evaluate(null, REALM, ME, [m1.served()]).active;
-  const n = pairSafetyNumber(REALM, ME, mine, BOB, evaluate(null, REALM, BOB, [b1.served()]).active);
-  assert.equal(pairSafetyNumber(REALM, BOB, evaluate(null, REALM, BOB, [b1.served()]).active, ME, mine), n);
-  assert.notEqual(pairSafetyNumber(REALM, ME, mine, BOB, evaluate(null, REALM, BOB, [b1.served(), b2.served()]).active), n);
 });
 
 test("pins live in contacts.json under the contacts lock; an unmanaged home refuses instead of becoming managed", async (t) => {

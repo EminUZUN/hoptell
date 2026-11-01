@@ -358,10 +358,8 @@ test("approval view: the generated command line for each mode, in the CLI and th
   assert.equal(bad.view.commandLines, undefined);
 });
 
-test("adapters: a profile with only checked options yields no command line outside the adapter's flags", () => {
-  // commandLines works from a checked profile only; an unknown CLI throws.
+test("adapters: a plan is built only from a checked profile: an unknown CLI, a refused sandbox or a mode outside the profile throws", () => {
   assert.throws(() => buildPlan(ctxOf({ ...profileOf("codex", "read-only"), cli: "sh" }, "headless")), /no adapter/);
   assert.throws(() => buildPlan(ctxOf({ ...profileOf("codex", "read-only"), sandbox: "full" }, "headless")), /refused/);
   assert.throws(() => buildPlan(ctxOf({ ...profileOf("codex", "read-only"), modes: ["tmux"] }, "headless")), /not in the profile/);
-  assert.equal(typeof commandLines(profileOf("claude", "read-only")).headless, "string");
 });

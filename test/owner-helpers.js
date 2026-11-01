@@ -324,7 +324,6 @@ export const peopleOf = (home, { member = ME, owner = OWNER_USER } = {}) => read
 
 export const pinOf = (key, name = "me-owner") => ({ name, keys: [{ id: sig.keyIdOf(key.pub), pub: key.pub }] });
 export const newKey = () => sig.newKey();
-export const randomId = () => crypto.randomUUID();
 
 // ---- owner-visible texts (design 7.3, section 1; 7.4, section 7) ----
 

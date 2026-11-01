@@ -1,8 +1,7 @@
 // Device signatures (design 3.2 v2.2, amendments-3.5-prep A3), experimental: rotate, revoke and
 // migrate check the driver's signing capability (driver.signing) before any local or relay
-// mutation. With the real default driver (the OpenMLS binding, which has no SignWithLabel yet) all
-// three refuse, change no file and send no frame; with the capability (the fake driver) they
-// work, and a migrate interrupted after its retire step recovers.
+// mutation. Without the capability all three refuse, change no file and send no frame; with it
+// they work, and a migrate interrupted after its retire step recovers.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -54,10 +53,8 @@ function homeOn(t, w, name, env) {
   return h;
 }
 
-test("A3: the OpenMLS driver reports its signing capability; the fake driver has it (or not, by option)", () => {
-  if (built) assert.equal(createOpenMlsDriver(WASM).signing, typeof createRequire(import.meta.url)(WASM).Device.prototype.sign_with_label === "function");
-  assert.equal(createFakeDriver().signing, true);
-  assert.equal(createFakeDriver({ signing: false }).signing, false);
+test("A3: the OpenMLS driver reports its binding's signing capability", { skip: built ? false : `the OpenMLS WASM binding is not built (${WASM})` }, () => {
+  assert.equal(createOpenMlsDriver(WASM).signing, typeof createRequire(import.meta.url)(WASM).Device.prototype.sign_with_label === "function");
 });
 
 /**

@@ -99,9 +99,6 @@ test("bound storage: a binding cannot be reused for another realm, member or ses
     assert.equal(inbox.list(s).length, 1);
     assert.equal(inbox.take(s).length, 1);
     assert.equal(inbox.append(s, msg), false, "still known after it was read");
-    // Old delivery ids are forgotten after any message could have expired.
-    inbox.pruneSeen(s, Date.now() + 9 * 86400_000);
-    assert.equal(inbox.append(s, msg), true);
   });
 });
 

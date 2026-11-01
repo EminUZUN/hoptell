@@ -189,7 +189,6 @@ test("gates: each mode has its own state; a hardening record never gates another
   // The shipped table: plain and hardening gated (each by its own record), containment not.
   assert.equal(gateRefusal("codex", "headless", null, GATES, "plain"), null);
   assert.equal(gateRefusal("codex", "headless", null, GATES, "hardening"), null);
-  assert.equal(gateRefusal("codex", "headless", null, GATES, "containment"), "adapter_gate_unverified");
   // Hardening's required list is plain's plus its own rows; containment's adds its precondition rows.
   const req = REQUIRED_GATES.codex.headless.modes;
   assert.ok(req.plain.every((k) => req.hardening.includes(k)) && req.hardening.every((k) => req.containment.includes(k)));

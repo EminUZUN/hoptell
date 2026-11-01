@@ -135,7 +135,6 @@ test("one read over both relays: labeled senders, one composite receipt, acknowl
   const dave = peer("work", "dave");
   await carol.ready();
   await dave.ready();
-  await until(async () => /alice@lab/.test(textOf(await c.call("list_peers"))) || true);
   await carol.send("alice", "from lab");
   await dave.send("alice", "from work");
   let out = "";

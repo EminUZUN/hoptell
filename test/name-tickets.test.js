@@ -285,7 +285,7 @@ test("relay: the ticket limit gives an ordinary welcome with ticket_limit", asyn
 
 // ---- old clients on a relay with tickets ------------------------------------------------------
 
-const BASELINE = "53690a4";
+const BASELINE = "e6611b5"; // 0.3.2 on main, before name tickets
 
 /** The client of BASELINE (before name tickets) from the git history, or null when unavailable. */
 function oldRelease(t) {

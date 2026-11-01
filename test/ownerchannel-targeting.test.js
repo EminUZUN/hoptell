@@ -464,7 +464,7 @@ test("the menu follows the pairing: unpaired, it is deleted; a failed deletion i
 
 // ---- Bot API details --------------------------------------------------------------------------------
 
-test("every text has no link preview and no parse_mode; replies use reply_parameters; a long answered edit is cut to 4096", async (t) => {
+test("every text has no link preview and no parse_mode; replies use reply_parameters; an answered edit does not repeat the answer and stays under 4096", async (t) => {
   const s = await setup(t);
   const alice = await agent(t, s.url, s.tokens.me, "me-alice");
   await alice.ask("q".repeat(3000));
