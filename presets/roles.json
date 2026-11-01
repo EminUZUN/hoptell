@@ -21,10 +21,10 @@
     },
     "claude": {
       "reviewer": {
-        "flags": ["--permission-mode", "plan"],
+        "flags": ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default"],
         "effort": "high",
         "source": "https://code.claude.com/docs/en/best-practices",
-        "checked": "2026-10-27"
+        "checked": "2026-11-01"
       },
       "implementer": {
         "flags": ["--permission-mode", "acceptEdits"],

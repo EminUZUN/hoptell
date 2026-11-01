@@ -159,7 +159,7 @@ test("recipes: tmux targets name the exact session, with =", () => {
   }
 });
 
-test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only, Claude Code and agy start in plan mode", () => {
+test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only, Claude Code without editing tools, agy in plan mode", () => {
   let launches = 0;
   for (const [f, text] of recipeDocs()) {
     assert.ok(!/-u HOPTELL_PUSH\b/.test(text), `${f}: unsetting HOPTELL_PUSH can load another value from the settings file`);
@@ -177,7 +177,8 @@ test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only, Clau
         assert.ok(!/--effort|accept-edits|--mode auto|server:hoptell|--channels/.test(agent), `${f}: ${line}`);
       }
       if (/^claude\b/.test(agent)) {
-        assert.match(agent, /--permission-mode plan\b/, `${f}: ${line}`);
+        // Default mode without editing tools: plan mode runs only read-only tools, so every reply would ask.
+        assert.match(agent, /^claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,\S+ --disallowedTools Edit,Write,NotebookEdit --permission-mode default\b/, `${f}: ${line}`);
         assert.ok(!/server:hoptell|--channels|dangerously|bypassPermissions|acceptEdits/.test(agent), `${f}: ${line}`);
       }
     }

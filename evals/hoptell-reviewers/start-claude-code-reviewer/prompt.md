@@ -1,5 +1,5 @@
 ---
-description: 'A Claude Code reviewer for a source review starts in plan mode, without a hoptell channel flag, through hoptell tmux.'
+description: 'A Claude Code reviewer for a source review starts without editing tools in default mode, without a hoptell channel flag, through hoptell tmux.'
 tags: [reviewers, trigger, behaviour]
 max_turns: 12
 timeout_seconds: 300

@@ -625,7 +625,7 @@ For separate teams, run separate relays. A relay is a single small process.
 hoptell tmux alice-planner  --roles planner  -- claude
 hoptell tmux alice-codex-1  --roles backend  -- codex
 hoptell tmux alice-codex-2  --roles backend  -- codex
-hoptell tmux alice-reviewer --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
+hoptell tmux alice-reviewer --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task --disallowedTools Edit,Write,NotebookEdit --permission-mode default "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
 ```
 
 Then tell the planner: *"split the task, send backend work to @backend, and send the result to
@@ -1141,7 +1141,7 @@ that use them:
 
 | Command | Skill | What it does |
 | --- | --- | --- |
-| `/hoptell:reviewers [count] [codex\|claude\|agy] [model] [effort]` | `hoptell-reviewers` | start reviewers: Codex read-only, Claude Code or agy in plan mode |
+| `/hoptell:reviewers [count] [codex\|claude\|agy] [model] [effort]` | `hoptell-reviewers` | start reviewers: Codex read-only, Claude Code without editing tools, agy in plan mode |
 | `/hoptell:review <file> [name or @reviewer]` | `hoptell-reviewers` | send a snapshot and collect the verdicts |
 | `/hoptell:ask-owner <question>` | `hoptell-owner-channel` | ask you over the owner channel |
 | `/hoptell:peers` | `hoptell-safe-ops` | list peers and explain name problems |
@@ -1160,7 +1160,7 @@ below). With the shipped presets that is:
 
 ```sh
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
@@ -1169,8 +1169,11 @@ The quoted prompt is your instruction to the reviewer, so review requests from y
 them; a reviewer started without such a prompt asks you whether it may review.
 
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
-Plan mode suits a source review: Claude Code's usual tool permissions still apply, and it is not
-an OS sandbox. Give agy its prompt with `--start`, not `-i`: agy 1.4.12 acts on an `-i` prompt,
+Claude Code reviews with the hoptell messaging tools allowed and without its file-editing tools
+(`--disallowedTools Edit,Write,NotebookEdit`), in default mode: plan mode runs only tools marked
+read-only, so every reply would ask. Your Claude Code permission rules decide each shell command:
+one no rule allows asks first, and Claude Code runs some read-only commands without asking. It is
+not an OS sandbox. Give agy its prompt with `--start`, not `-i`: agy 1.4.12 acts on an `-i` prompt,
 tools included, while its folder trust dialog still waits, and `hoptell tmux` types the `--start`
 text once agy's input box shows (it warns about `-i`). The text is one line of at most 16 KiB:
 printable ASCII, Latin letters and common punctuation, which the injector can check on screen, and
@@ -1181,7 +1184,7 @@ Claude Code folds a paste over 800 characters without its length, so `--start` f
 at most 800 characters. In plan mode agy reads and plans, and
 `--dangerously-skip-permissions` stops it from asking about each tool. Plan mode is agy's own rule,
 and in hoptell's test (agy 1.4.8) `--sandbox` did not keep writes in the folder or block the
-network, so an agy reviewer is limited by policy, like Claude Code in plan mode. hoptell does not
+network, so an agy reviewer is limited by policy, like a Claude Code reviewer. hoptell does not
 offer agy for edits. Do not add a hoptell channel flag; `hoptell tmux` supplies tmux delivery. Set
 `HOPTELL_PUSH=tmux` for the command: unsetting it can load a conflicting value from your settings
 file. With a member token, names must be `<member>` or start with `<member>-`; other names are

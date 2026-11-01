@@ -82,7 +82,7 @@ function fakeClis(root) {
   fs.mkdirSync(bin, { recursive: true });
   const help = {
     codex: "Usage: codex [OPTIONS] [PROMPT]\n  -c, --config <key=value>\n  -m, --model <MODEL>\n  -s, --sandbox <SANDBOX_MODE>  [possible values: read-only, workspace-write, danger-full-access]\n  -a, --ask-for-approval <APPROVAL_POLICY>  [possible values: untrusted, on-request, never]\n",
-    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n  --allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow\n',
+    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n  --allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow\n  --disallowedTools, --disallowed-tools <tools...>  Comma or space-separated list of tool names to deny\n',
   };
   const version = { codex: "codex-cli 0.164.0", claude: "2.1.311 (Claude Code)" };
   for (const cli of ["codex", "claude"]) {
@@ -169,7 +169,7 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.match(dry.out, /hoptell worktree add dana-n1-impl-1 --team n1 --cli codex --owns 'lib\/\*\*'/);
   assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-impl-1 --roles implementer,n1 --cwd ${s.root}/repo-wt/dana-n1-impl-1 --task \\S+impl.md -- codex -s workspace-write -a never`));
   // The hoptell messaging tools without a prompt: one argument, before a single-value option.
-  assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \\S+ --task \\S+rev\\.md -- claude --permission-mode plan --effort high --allowedTools ${MEMBER_ALLOWED_TOOLS} --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt`));
+  assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \\S+ --task \\S+rev\\.md -- claude --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high --allowedTools ${MEMBER_ALLOWED_TOOLS} --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt`));
   assert.match(dry.out, /read your task with the hoptell read_task tool/);
   assert.match(dry.warn, /dana-n1-impl-1 \(codex\) gets write access to its worktree/);
   assert.match(dry.out, /Dry run: nothing was started/);
@@ -266,7 +266,7 @@ test("a Claude Code member's --allowedTools: the hoptell messaging tools, one ar
     // The words after it: options with their values, then the prompt alone at the end.
     assert.deepEqual(c.argv.slice(-3, -1), ["--append-system-prompt", c.argv.at(-2)]);
     assert.match(c.argv.at(-1), /read_task/);
-    assert.ok(!c.warnings.some((w) => w.includes("allowedTools")), c.warnings.join("\n"));
+    assert.ok(!c.warnings.some((w) => /\ballowedTools/.test(w)), c.warnings.join("\n"));
     if (session?.mode !== "resume") assert.equal(claudeFreshProblem(c.argv.slice(1), { built: c.built, name: m.name }), null, c.line);
   }
   // Without --append-system-prompt: before --session-id still; with no option left, no flag.
@@ -2745,7 +2745,10 @@ test("decision 6: a team member's MCP server leaves out ask_owner and spawn_agen
   assert.deepEqual(MEMBER_HIDDEN, ["ask_owner", "spawn_agent"]);
   for (const role of ["implementer", "reviewer"]) {
     const c = await serve({ role, team: "n4" });
-    assert.deepEqual((await c.listTools()).tools.map((x) => x.name), ["list_peers", "send_message", "read_inbox", "list_agents"], role);
+    const listed = (await c.listTools()).tools;
+    assert.deepEqual(listed.map((x) => x.name), ["list_peers", "send_message", "read_inbox", "list_agents"], role);
+    // Marked read-only, so Claude Code's plan mode runs them; send_message is not.
+    assert.deepEqual(listed.filter((x) => x.annotations?.readOnlyHint === true).map((x) => x.name), ["list_peers"], role);
     for (const name of MEMBER_HIDDEN) {
       const r = await c.callTool({ name, arguments: { question: "may I push?" } });
       assert.equal(r.isError, true);

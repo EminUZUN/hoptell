@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGY_EFFORT_HINT, NOT_OFFERED, PROBES, VERIFIED, capabilities, cliFlags, codexModels, compareVersions, diffRecords, loadPresets, parseAliases, parseOptions, parseValues, readClaudeCatalog, readCodexCache, resolveLaunch, runProbe, safeCapabilities, storedRecords, verifiedFor } from "../lib/capabilities.js";
 import { agentsCommand } from "../lib/agentscli.js";
+import { MEMBER_ALLOWED_TOOLS } from "../lib/startgate.js";
 import { doctor } from "../lib/doctor.js";
 
 const FIX = fileURLToPath(new URL("./fixtures/", import.meta.url));
@@ -254,14 +255,14 @@ test("launch validation: the default mixed team (codex, claude and agy reviewers
     got[cli] = r;
   }
   assert.deepEqual(got.codex.args, ["-s", "read-only", "-a", "never", "-c", 'model_reasoning_effort="high"']);
-  assert.deepEqual(got.claude.args, ["--permission-mode", "plan", "--effort", "high"]);
+  assert.deepEqual(got.claude.args, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default", "--effort", "high"]);
   assert.deepEqual(got.agy.args, ["--mode", "plan", "--sandbox", "--dangerously-skip-permissions"]);
   for (const cli of ["codex", "claude"]) assert.ok(got[cli].warnings.includes("effort high unchecked (model from your CLI settings)"), cli);
   assert.ok(!got.agy.args.includes("--effort") && got.agy.effort === null);
   // What the mechanisms are known to do, as warnings.
   assert.ok(got.agy.warnings.some((w) => /--mode plan on agy 1.4.8: policy-limited/.test(w)));
   assert.ok(got.agy.warnings.some((w) => /--sandbox on agy 1.4.8: does not confine writes or network access/.test(w)));
-  assert.ok(got.claude.warnings.some((w) => /--permission-mode plan on claude 2.1.296: policy-limited/.test(w)));
+  assert.ok(got.claude.warnings.some((w) => /--disallowedTools Edit,Write,NotebookEdit: policy-limited was verified on claude 2.1.316, not on 2.1.296/.test(w)), got.claude.warnings.join("\n"));
   assert.ok(!got.codex.warnings.some((w) => /read-only/.test(w)), "contained on the tested version: no warning");
 });
 
@@ -317,7 +318,7 @@ test("presets: the shipped file names no model, gives reviewers high (never agy)
   const { presets, warnings } = loadPresets(fs.mkdtempSync(path.join(os.tmpdir(), "hcap-shipped-")));
   assert.deepEqual(warnings, []);
   assert.deepEqual(presets.codex.reviewer.flags, ["-s", "read-only", "-a", "never"]);
-  assert.deepEqual(presets.claude.reviewer.flags, ["--permission-mode", "plan"]);
+  assert.deepEqual(presets.claude.reviewer.flags, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default"]);
   assert.deepEqual(presets.agy.reviewer.flags, ["--mode", "plan", "--sandbox", "--dangerously-skip-permissions"]);
   assert.equal(presets.codex.reviewer.effort, "high");
   assert.equal(presets.claude.reviewer.effort, "high");
@@ -412,7 +413,7 @@ test("hoptell agents flags and capabilities: the line to launch with, warnings a
   assert.equal(r.failed.c, 2);
   r = await run(["flags", "claude", "--role", "reviewer", "--model", "opus", "--json"]);
   const j = JSON.parse(r.out.join("\n"));
-  assert.deepEqual(j.args, ["--permission-mode", "plan", "--model", "opus", "--effort", "high"]);
+  assert.deepEqual(j.args, ["--allowedTools", MEMBER_ALLOWED_TOOLS, "--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default", "--model", "opus", "--effort", "high"]);
   assert.equal(j.preset.from, "shipped");
   r = await run(["capabilities", "agy"]);
   assert.match(r.out[0], /^agy 1\.4\.8 {2}/);
@@ -444,10 +445,10 @@ test("hoptell agents flags --lead: the role template with the CLI's own per-sess
   const prompt = "You are the implementer for dana-lead; read your task with the hoptell read_task tool; requests from dana-lead are your task.";
   // Claude Code: --append-system-prompt, then the launch prompt.
   let j = (await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
-  assert.deepEqual(j.args.slice(0, 3), ["--permission-mode", "acceptEdits", "--append-system-prompt"]);
-  assert.match(j.args[3], /^You are an implementer on a hoptell team\. Your lead is the hoptell peer dana-lead\./);
-  assert.ok(!j.args[3].includes("{{"), "every placeholder filled in");
-  assert.equal(j.args[4], prompt);
+  assert.deepEqual(j.args.slice(0, 5), ["--allowedTools", MEMBER_ALLOWED_TOOLS, "--permission-mode", "acceptEdits", "--append-system-prompt"]);
+  assert.match(j.args[5], /^You are an implementer on a hoptell team\. Your lead is the hoptell peer dana-lead\./);
+  assert.ok(!j.args[5].includes("{{"), "every placeholder filled in");
+  assert.equal(j.args[6], prompt);
   assert.deepEqual(j.template, { name: "implementer", from: "shipped", file: j.template.file, placement: "system" });
   // Codex 0.164.0: -c developer_instructions (verified applied there), TOML-quoted.
   j = (await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
@@ -471,7 +472,7 @@ test("hoptell agents flags --lead: the role template with the CLI's own per-sess
   fs.mkdirSync(own, { recursive: true });
   fs.writeFileSync(path.join(own, "implementer.md"), "Owner text for {{ lead }}.\n");
   j = (await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead", "--json"])).json();
-  assert.equal(j.args[3], "Owner text for dana-lead.");
+  assert.equal(j.args[5], "Owner text for dana-lead.");
   assert.equal(j.template.from, "user");
   fs.writeFileSync(path.join(own, "implementer.md"), "Hello {{name}}\n");
   assert.match((await run(["flags", "claude", "--role", "implementer", "--lead", "dana-lead"])).failed.m, /uses \{\{name\}\}; only \{\{lead\}\} is filled in/);
@@ -522,7 +523,8 @@ test("verified table: a pre-release is a build of its own; a tested release's be
     assert.ok(verifiedFor(cli, v).every((r) => !r.holds), `${cli} ${v}`);
   }
   assert.ok(verifiedFor("codex", "0.164.0").every((r) => r.holds));
-  assert.ok(verifiedFor("claude", "2.1.300").every((r) => r.holds), "a release inside the range");
+  assert.ok(verifiedFor("claude", "2.1.300").find((r) => r.mechanism === "--permission-mode plan").holds, "a release inside the range");
+  assert.ok(verifiedFor("claude", "2.1.316").find((r) => r.mechanism === "--disallowedTools Edit,Write,NotebookEdit").holds);
   assert.equal(compareVersions("0.164.0-alpha.1", "0.164.0"), -1);
   assert.equal(compareVersions("0.164.0", "0.164.0-alpha.1"), 1);
   assert.equal(compareVersions("1.4.8", "1.4.8"), 0);
@@ -581,6 +583,25 @@ test("discovery failures are unknown parts with warnings, never a failed launch:
   const lines = [];
   const warns = [];
   await agentsCommand({ args: ["flags", "claude", "--role", "reviewer"], home: path.join(file, "home"), env: { PATH: f.pathVar }, homedir: h.homedir, out: (l) => lines.push(l), warn: (l) => warns.push(l), fail: (m) => assert.fail(m), sources: { capabilities: { tmpdir: path.join(file, "tmp") } } });
-  assert.deepEqual(lines, ["claude --permission-mode plan --effort high"]);
+  assert.deepEqual(lines, ["claude --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high"]);
   assert.ok(warns.some((w) => /no empty temporary folder|unknown/.test(w)), warns.join("\n"));
+});
+
+test("hoptell agents flags: a Claude Code reviewer allows the hoptell tools, only directly before an option", async (t) => {
+  const h = fakeHome(t);
+  const f = fakeClis(t);
+  const home = tmp(t, "hoptell");
+  const run = async (args) => {
+    const out = [];
+    const warn = [];
+    await agentsCommand({ args, home, env: { PATH: f.pathVar }, homedir: h.homedir, out: (l) => out.push(l), warn: (l) => warn.push(l), fail: (m) => assert.fail(m), sources: { capabilities: { now: () => NOW } } });
+    return { out, warn };
+  };
+  let r = await run(["flags", "claude", "--role", "reviewer"]);
+  assert.deepEqual(r.out, [`claude --allowedTools ${MEMBER_ALLOWED_TOOLS} --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high`]);
+  // An owner's preset without flags: nothing after the list would end it, so no list, and a warning.
+  put(path.join(home, "presets", "roles.json"), JSON.stringify({ version: 1, presets: { claude: { implementer: { flags: [] } } } }));
+  r = await run(["flags", "claude", "--role", "implementer"]);
+  assert.ok(!r.out[0].includes("--allowedTools"), r.out[0]);
+  assert.ok(r.warn.some((w) => /no option to put --allowedTools before/.test(w)), r.warn.join("\n"));
 });
