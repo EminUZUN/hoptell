@@ -15,7 +15,7 @@ import { BIN } from "../lib/config.js";
 import { missingValue, unknownFlag } from "../lib/clihelp.js";
 import { relayDiscovery } from "../lib/login.js";
 import { telegramCommand } from "../lib/ownerchannelcli.js";
-import { TEAM_SWITCHES, TEAM_VALUE_OPTIONS } from "../lib/teams.js";
+import { TEAM_SUB_OPTIONS, TEAM_SWITCHES, TEAM_VALUE_OPTIONS, teamCommand } from "../lib/teams.js";
 
 const freePort = () =>
   new Promise((resolve) => {
@@ -92,6 +92,37 @@ test("hoptell team: the CLI's option check knows every option the team command r
     const r = spawnSync(process.execPath, [BIN, "team", "restart", "dana-n1-impl-1", flag], { env: { ...process.env, HOPTELL_HOME: home, HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-only-pass" }, encoding: "utf8" });
     fs.rmSync(home, { recursive: true, force: true });
     assert.doesNotMatch(r.stderr, /unknown option/, flag);
+  }
+});
+
+test("hoptell team: each command refuses an option it does not read before acting (team down --dry-run stopped the team)", async () => {
+  const all = [...TEAM_SWITCHES, ...TEAM_VALUE_OPTIONS];
+  assert.deepEqual([...new Set(Object.values(TEAM_SUB_OPTIONS).flat())].sort(), [...all].sort());
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-teamopt-"));
+  try {
+    for (const [sub, own] of Object.entries(TEAM_SUB_OPTIONS)) {
+      for (const flag of all.filter((f) => !own.includes(f))) {
+        const args = [sub, "x", flag, ...(TEAM_VALUE_OPTIONS.includes(flag) ? ["v"] : [])];
+        let failed = null;
+        await assert.rejects(teamCommand({ args, home, homedir: home, env: {}, out: () => {}, warn: () => {}, fail: (m, c = 1) => { failed = { m, c }; throw new Error("fail"); } }));
+        assert.deepEqual(failed, { m: `team ${sub} does not take ${flag}; nothing was done\n${failed?.m.split("\n").slice(1).join("\n")}`, c: 2 }, `${sub} ${flag}`);
+      }
+    }
+    const r = spawnSync(process.execPath, [BIN, "team", "down", "n1", "--dry-run"], { env: { ...process.env, HOPTELL_HOME: home, HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-only-pass" }, encoding: "utf8" });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /team down does not take --dry-run; nothing was done/);
+    // A value option takes the next word only when it is not an option, as the commands read it:
+    // a value that hides an option cannot slip that option past the check.
+    const run = async (args) => {
+      let failed = null;
+      await assert.rejects(teamCommand({ args, home, homedir: home, env: {}, out: () => {}, warn: () => {}, fail: (m) => { failed = m; throw new Error("fail"); } }));
+      return failed;
+    };
+    assert.match(await run(["land", "x", "--discard", "-m", "-m", "--dry-run"]), /^team land does not take --dry-run; nothing was done/);
+    assert.match(await run(["land", "x", "--target", "main", "-m", "--json"]), /^team land does not take --json/);
+    assert.match(await run(["land", "x", "--approve", "--yes", "c"]), /^team land does not take --yes/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
