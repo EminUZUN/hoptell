@@ -2820,7 +2820,7 @@ test("review queue: a request names a member's recorded commits and the team's r
   assert.match(r.review.id, /^rv-[0-9a-f]{8}$/);
   assert.deepEqual([r.review.member, r.review.base, r.review.head, r.review.reviewers], [x.member, x.base, x.c2, ["dana-n9-rev-1", "dana-n9-rev-2"]]);
   assert.deepEqual(sent.map((m) => m.to), ["dana-n9-rev-1", "dana-n9-rev-2"]);
-  assert.equal(sent[0].text, `Review request ${r.review.id} from dana-lead (team n9): review dana-n9-impl-1's commits ${x.base}..${x.c2} on team/n9/dana-n9-impl-1; read them with: git -C ${x.s.repo} diff --no-ext-diff --no-textconv ${x.base} ${x.c2} . Your verdict is for ${x.c2} only. Reply to dana-lead with approve or changes and your findings; dana-lead records your verdict.`);
+  assert.equal(sent[0].text, `Review request ${r.review.id} from dana-lead (team n9): review dana-n9-impl-1's commits ${x.base}..${x.c2} on team/n9/dana-n9-impl-1; read them with the hoptell read_diff tool (base ${x.base}, head ${x.c2}), or without it with: git -C ${x.s.repo} diff --no-ext-diff --no-textconv ${x.base} ${x.c2} . Your verdict is for ${x.c2} only. Reply to dana-lead with approve or changes and your findings; dana-lead records your verdict.`);
   assert.deepEqual(readState(x.home, "n9").reviews, [{ ...r.review }]);
   // Commit to commit inside the worktree, to one reviewer named; a send that fails keeps the request.
   const failing = async (to) => {
@@ -2865,7 +2865,7 @@ test("review queue: a request names a member's recorded commits and the team's r
   sent.length = 0;
   const cr = await req({ base: T, head: C });
   assert.deepEqual([cr.review.member, cr.review.base, cr.review.head], [x.member, T, C]);
-  assert.match(sent[0].text, new RegExp(`review dana-n9-impl-1's commits ${T}\\.\\.${C} on team/n9/land \\(the candidate of dana-n9-impl-1 for main\\); read them with: git -C \\S+ diff --no-ext-diff --no-textconv ${T} ${C} \\. `));
+  assert.match(sent[0].text, new RegExp(`review dana-n9-impl-1's commits ${T}\\.\\.${C} on team/n9/land \\(the candidate of dana-n9-impl-1 for main\\); read them with the hoptell read_diff tool \\(base ${T}, head ${C}\\), or without it with: git -C \\S+ diff --no-ext-diff --no-textconv ${T} ${C} \\. `));
   const unknown = /is not a commit hoptell recorded in a worktree of team n9 with \w+ before it, nor the candidate of team n9 on its target commit/;
   const before = readState(x.home, "n9").reviews.length;
   await refusal(() => req({ base: T, head: "c".repeat(40) }), "unknown_commit", unknown);
@@ -2947,11 +2947,12 @@ test("hoptell review: the command line checks its arguments; a request reaches a
   assert.match(bad.stderr, /dana-n9-rev-2 was not asked/);
 });
 
-test("review request: reviewers are told git diff --no-ext-diff --no-textconv; the exact command it prints runs no diff program or textconv filter of the repository", async (t) => {
+test("review request: reviewers are told the read_diff tool, or git diff --no-ext-diff --no-textconv; the exact command it prints runs no diff program or textconv filter of the repository", async (t) => {
   const x = await reviewSetup(t);
   const sent = [];
   await reviewRequest(x.home, { team: "n9", base: x.base, head: x.c2 }, { send: async (to, text) => (sent.push(text), "sent") });
-  const cmd = /read them with: (.*) \. Your verdict/.exec(sent[0])[1];
+  assert.match(sent[0], new RegExp(`read them with the hoptell read_diff tool \\(base ${x.base}, head ${x.c2}\\)`));
+  const cmd = /or without it with: (.*) \. Your verdict/.exec(sent[0])[1];
   assert.equal(cmd, reviewDiff(x.s.repo, x.base, x.c2));
   // The repository now selects an external diff program and a textconv filter (set after the
   // worktree add, which refuses them). Each leaves a mark in the canary file when it runs.

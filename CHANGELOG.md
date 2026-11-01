@@ -43,6 +43,14 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   still has a snapshot's sha256, the `snapshot --check` step as a read-only tool. Claude Code
   members and reviewers get it allowed with the messaging tools, so a review needs no shell
   prompt. Runs, hosted and HTTP sessions do not offer it.
+- `read_diff`: a session started with `hoptell mcp` shows the commits and the diff between two
+  commits of the repository around its folder, read-only, through hoptell's own git: no
+  configured hooks, filters, diff programs, signature checks or replacement objects are used, and a
+  repository whose configuration could run a program, or with grafts or alternates, is refused.
+  Claude Code members and reviewers get it allowed, and review requests name it, so a reviewer
+  reads a change without a git prompt in its pane.
+  Allowing `git diff` in Claude Code instead is not safe: options such as `--submodule=diff`,
+  `--ext-diff` or signature checks run programs a permission rule cannot tell apart.
 - `/hoptell:reviewers` now supports agy and optional model and effort arguments
   (`[count] [codex|claude|agy] [model] [effort]`); the `hoptell-reviewers` skill takes each
   launch's flags from `hoptell agents flags`.
@@ -54,7 +62,8 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   commit; the lead commits their changes with `hoptell worktree commit` and takes the patch for
   review from `hoptell worktree diff`. These commands run git with no global configuration and no
   hook, filter, textconv or external diff, commit through plumbing that applies no filter, and
-  refuse a repository whose config sets anything outside a short allow list. They need Git 2.43
+  refuse a repository whose config sets anything outside a short allow list (a partial clone's
+  promisor remote too, from which git would fetch). They need Git 2.43
   or later. The commands that run git (`add`, `commit`, `diff`, `remove`) refuse while any
   implementer of the repository is running, whatever its CLI, or while any other process of
   yours works in a member's worktree: stop the implementer (or let it quit) before you commit or

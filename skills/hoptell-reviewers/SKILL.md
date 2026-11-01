@@ -47,7 +47,7 @@ presets this gives:
 
 ```sh
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__plugin_hoptell_hoptell__read_diff,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot,mcp__hoptell__read_diff --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
@@ -66,15 +66,15 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles
   planning. Plan mode is agy's own rule and `--sandbox` confines neither writes nor the network:
   policy limits an agy reviewer, as with Claude Code. Never start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
   registration, which the user sets up once (see hoptell's README).
-- Run the command from the project folder. The reviewer starts there.
+- Run it from the project folder, where the reviewer starts.
 - `env -u TMUX -u TMUX_PANE` matters when this session runs inside tmux: otherwise the launcher
-  switches the user's tmux client to the new session.
+  switches the user's tmux client to the session.
 - Set `HOPTELL_PUSH=tmux` for this command. Unsetting it can load a conflicting value from the
   settings file, and the launcher refuses any value other than `tmux`.
 - From an agent's shell there is no terminal, so the launcher cannot attach. It starts the tmux
   session `hoptell-<name>` in the background and exits with 0. The lines "open terminal failed:
-  not a terminal" and "session ... is running; attach with ..." are expected. Do not run the
-  command again: the second run fails because the session already exists.
+  not a terminal" and "session ... is running; attach with ..." are expected. Do not run it
+  again: a second run fails, as the session exists.
 - For cleanup later in a long task, note the tmux session id after creation:
   `tmux display-message -p -t '=hoptell-<name>' '#{session_id}'`.
 
@@ -155,11 +155,11 @@ base and a head commit, and a verdict holds for that head only.
    ```
 
    Do not send the same request again with `send_message`. Outside a team, send one yourself that
-   names both commit ids and the command
+   names both commit ids, the `read_diff` tool and, for a reviewer without it, the command
    `git -C <repo> diff --no-ext-diff --no-textconv <base> <head>`.
-3. Reviewers read the range with exactly that command, read-only, and reply with approve or
-   changes and findings. Never give them a plain `git diff`: the repository's configuration
-   could run a diff program or textconv filter.
+3. Reviewers read the range with `read_diff` (git runs no configured program for it) or that
+   command, and reply with approve or changes and findings. Never a plain
+   `git diff`: the repository's configuration could run a diff program or filter.
 4. Record each reply you read, as the reviewer gave it:
    `hoptell review verdict --team <team> <request> <reviewer> approve|changes`. hoptell does not read verdicts
    out of messages; you record what the reviewer replied. Never record a verdict for a reviewer

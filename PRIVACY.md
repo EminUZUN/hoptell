@@ -407,6 +407,11 @@ envelope containing the supplied file path, byte count, request id, SHA-256 and 
 `--check` prints a comparison result and does not print file content. These commands do not
 save a snapshot or send it to the relay; the caller decides whether to send the output.
 
+The MCP server's `read_diff` tool, in a session started with `hoptell mcp`, runs git on the
+repository around the session's folder and returns the commits and the diff between two commits
+to that session's agent only. It sends nothing to the relay, and the agent's AI provider
+processes what it returns, as with any file the agent reads.
+
 The MCP server's file tools are disabled by default. When you configure approved local folders,
 send_file can read a selected regular UTF-8 file from those folders and send its captured
 content, a relative file label, byte count, SHA-256 digest, review request id and review request

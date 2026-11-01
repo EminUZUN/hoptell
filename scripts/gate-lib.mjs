@@ -146,6 +146,7 @@ export const GROUPS = {
       "lib/promptexec.js",
       "lib/promptflow.js",
       "lib/prompts.js",
+      "lib/readdiff.js",
       "lib/realm.js",
       "lib/records.js",
       "lib/relays.js",

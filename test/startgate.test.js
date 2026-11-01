@@ -560,7 +560,7 @@ test("arming Claude Code and agy: a fresh launch of a recorded version; their ow
   // Claude Code's fresh rules.
   // A team member's --allowedTools: exactly the list hoptell builds, before another option.
   const V = MEMBER_ALLOWED_TOOLS;
-  assert.deepEqual(V.split(","), ["mcp__plugin_hoptell_hoptell__", "mcp__hoptell__"].flatMap((p) => [...RUN_TOOLS, "check_snapshot"].map((x) => p + x)), "lib/mcp.js RUN_TOOLS and check_snapshot under both ids");
+  assert.deepEqual(V.split(","), ["mcp__plugin_hoptell_hoptell__", "mcp__hoptell__"].flatMap((p) => [...RUN_TOOLS, "check_snapshot", "read_diff"].map((x) => p + x)), "lib/mcp.js RUN_TOOLS, check_snapshot and read_diff under both ids");
   assert.doesNotMatch(V, /send_file|send_review_set|send_transfer|ask_owner|spawn_agent|_agent|\*/);
   for (const ok of [["--allowedTools", V, "--session-id", UUID, "Read your task."], [`--allowedTools=${V}`, "--append-system-prompt", "Be brief.", "Read your task."]]) assert.equal(claudeFreshProblem(ok, { built: { session_id: UUID } }), null, ok.join(" "));
   for (const x of [["--allowedTools", "Bash", "--model", "x"], ["--allowedTools", `${V},Bash`, "--model", "x"], ["--allowedTools", `${V},mcp__hoptell__send_file`, "--model", "x"], ["--allowedTools", V.split(",").slice(1).join(","), "--model", "x"], ["--allowedTools", V, "Read your task."], ["--allowedTools", V]]) assert.equal(claudeFreshProblem(x), "an --allowedTools list hoptell did not build", x.join(" "));
