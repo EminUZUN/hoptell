@@ -143,7 +143,7 @@ test("a prompt card: the folder's name and a fixed warning, one button per optio
   assert.equal(drops("prompt_result_not_own"), 0);
 });
 
-test("Claude Code and agy cards: the CLI named, the folder the dialog shows, and what the trust covers for its kind; Quit only without the test switch, both under it", async (t) => {
+test("Claude Code and agy cards: the CLI named, the folder the dialog shows, and what the trust covers for its kind; both buttons, with or without the test switch", async (t) => {
   const s = await setup(t);
   const at = (m) => new Date(m.expires_at).toISOString().slice(11, 16);
   const deadline = (m) => `Answer by ${at(m)} UTC. hoptell presses only the key you choose, and only while the prompt on the Mac is still the same.`;
@@ -152,6 +152,9 @@ test("Claude Code and agy cards: the CLI named, the folder the dialog shows, and
     [{ name: "claude", version: "2.1.314", kind: "repo", folder: "/Users/x/app", root: "/Users/x/app" }, "Claude Code asks whether to trust the folder app", "Trusting lets Claude Code use this repository's project settings, hooks and MCP servers. Claude Code records the trust for the repository: app."],
     [{ name: "claude", version: "2.1.314", kind: "repo-member", folder: "/Users/x/app-wt/impl-1", root: "/Users/x/app" }, "Claude Code asks whether to trust the folder impl-1", "Trusting lets Claude Code use this repository's project settings, hooks and MCP servers. Claude Code records the trust for the repository's main folder, app, which then covers its worktrees and subfolders."],
     [{ name: "agy", version: "1.4.11", kind: "folder", folder: "/Users/x/app", root: "/Users/x/app" }, "agy asks whether to trust the folder app", "Trusting lets agy load this folder's project hooks, agents and MCP servers. agy's global MCP servers already run. agy records the trust for this folder: app."],
+    // A version the row was not recorded on: the card says which one it was.
+    [{ name: "agy", version: "1.4.12", kind: "folder", folder: "/Users/x/app", root: "/Users/x/app" }, "agy asks whether to trust the folder app", "Trusting lets agy load this folder's project hooks, agents and MCP servers. agy's global MCP servers already run. agy records the trust for this folder: app.\nagy 1.4.12: hoptell checked this dialog on 1.4.11; the screen matches it exactly."],
+    [{ name: "claude", version: "2.1.320", kind: "folder", folder: "/Users/x/app", root: "/Users/x/app" }, "Claude Code asks whether to trust the folder app", "Trusting lets Claude Code use this folder's project settings, hooks and MCP servers. Claude Code records the trust for this folder: app.\nClaude Code 2.1.320: hoptell checked this dialog on 2.1.314; the screen matches it exactly."],
   ];
   for (const [i, [c, head, warning]] of cases.entries()) {
     for (const untested of [false, true]) {
@@ -162,10 +165,10 @@ test("Claude Code and agy cards: the CLI named, the folder the dialog shows, and
       await until(() => promptCards(s.tg).length === n + 1, 4000, "the card");
       const card = promptCards(s.tg).at(-1);
       const who = m.session.slice(3);
-      assert.equal(card.params.text, `🔐 A session on your Mac reports that ${who} is waiting: ${head} (team n4).\n\n${warning}\n${untested ? "Test mode: these keys are not yet checked live.\n" : ""}${deadline(m)}`);
+      assert.equal(card.params.text, `🔐 A session on your Mac reports that ${who} is waiting: ${head} (team n4).\n\n${warning}\n${deadline(m)}`, "every option checked live: no test-mode line, switch or not");
       assert.deepEqual(textProblems(card.params.text), []);
       const labels = card.params.reply_markup.inline_keyboard.map((x) => x[0].text);
-      assert.deepEqual(labels, untested ? m.options.map((o) => o.label) : ["Quit"], c.name);
+      assert.deepEqual(labels, m.options.map((o) => o.label), c.name);
       // Answered, so the next card is not over the open cards a session may have.
       const answers = s.got.filter((x) => x.from === "me-owner").length;
       s.tg.press(card, 0);
@@ -177,7 +180,10 @@ test("Claude Code and agy cards: the CLI named, the folder the dialog shows, and
   assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a", kind: "home" }, cli: { name: "claude", path: "/x/claude", version: "2.1.314" }, subtype: "claude-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), "scope");
   assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a" }, cli: { name: "claude", path: "/x/claude", version: "2.1.314" }, subtype: "claude-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), "scope", "a kind for Claude Code");
   assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a", kind: "folder" }, cli: { name: "claude", path: "/x/claude", version: "2.1.314" }, subtype: "codex-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), "subtype");
-  assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a", kind: "folder" }, cli: { name: "claude", path: "/x/claude", version: "2.1.312" }, subtype: "claude-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), "options", "a version the table was not recorded on");
+  // A version the table was not recorded on: its options are the row's; no version that could be verified: none.
+  assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a", kind: "folder" }, cli: { name: "claude", path: "/x/claude", version: "2.1.312" }, subtype: "claude-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), null, "a version the table was not recorded on");
+  assert.equal(manifestProblem(manifestFor({ scope: { root: "/a", folder: "/a", kind: "folder" }, cli: { name: "claude", path: "/x/claude", version: "2.1" }, subtype: "claude-startup-trust", options: answerableOptions("2.1.314", "claude")[0].map((o) => ({ ...o })) })), "options", "not a version");
+  assert.deepEqual(answerableOptions("2.1", "claude"), []);
 });
 
 test("no result from the Mac: RESULT_WAIT after the answer went out the card says so, once; a late real result still replaces it, once", async (t) => {
@@ -308,10 +314,11 @@ test("prompt requests the bridge refuses: malformed, not from the control name i
   await s.ask(manifestFor({ session: "me-carol" }));
   await until(() => drops("prompt_hidden") === 1, 4000, "hidden");
   assert.equal(promptCards(s.tg).length, 2, "only the good ones");
-  // A launch under the test switch: its card says so.
+  // A launch under the test switch: its card says so only for an option not checked live, and
+  // every option in the table is checked live now.
   await s.ask(manifestFor({ untested: true }));
   await until(() => promptCards(s.tg).length === 3, 4000, "the test mode card");
-  assert.match(promptCards(s.tg)[2].params.text, /\nTest mode: these keys are not yet checked live\.\n/);
+  assert.doesNotMatch(promptCards(s.tg)[2].params.text, /Test mode/);
   assert.doesNotMatch(promptCards(s.tg)[0].params.text, /Test mode/);
   // The deadline passes before the tap: the card closes, nothing is sent.
   const card = promptCards(s.tg)[0];

@@ -1265,10 +1265,10 @@ started them fresh in their folder. Claude Code may have `--permission-mode`, `-
 `--sandbox`, `--dangerously-skip-permissions` and `-i` with the prompt. Anything else, a resumed
 conversation, a wrapper in front of the CLI (`env`, a shell, `npx`) or a launch in your home
 folder gets the note. A team member's launch must be, word for word, the line `team up` built for
-it. Neither CLI shows digits, so the buttons are the rows. Quit is Esc for both, checked live.
-Trust is not checked live yet, so it shows only in test mode: for Claude Code it is Down (only
-from "No, exit", the row selected at the start), a fresh look with "Yes, I trust this folder"
-selected, then Enter; for agy, whose "Yes" is selected at the start, a fresh look, then Enter.
+it. Neither CLI shows digits, so the buttons are the rows. Quit is Esc for both. Trust for Claude
+Code is Down (only from "No, exit", the row selected at the start), a fresh look with "Yes, I
+trust this folder" selected, then Enter; for agy, whose "Yes" is selected at the start, a fresh
+look, then Enter. Both options of both CLIs were checked live.
 The card says what the trust covers. Claude Code records it under the repository's main folder,
 so trusting from a worktree or a subfolder covers the whole repository and its worktrees; agy
 records the folder it shows, and starts its own global MCP servers before it asks.
@@ -1276,6 +1276,14 @@ hoptell sees the screen in snapshots, so if Codex was already past its startup p
 hoptell's first look and later shows text that looks the same, a tap could type a stray "1" and
 Enter, or "2", into the session; and between its last look and the key, hoptell does not see the
 screen at all. Showing the buttons authorizes nothing: only your tap sends keys.
+
+**Other versions.** The versions above are the ones hoptell's captures were made on. Codex, Claude
+Code and agy update often, so any other version gets the same card when its dialog matches a
+captured one exactly: every row, in order, with the same words, the same options and the footer
+at the bottom. The card then names the version and the one hoptell checked, for example "agy
+1.4.12: hoptell checked this dialog on 1.4.11; the screen matches it exactly." A version whose
+dialog reads or looks different gets the note, and you answer it in its terminal. A tap still
+counts as done only when hoptell sees it take.
 
 **The review.** Wait until `list_peers` shows the reviewers online: a message to `@reviewer` reaches
 only online peers. Then follow the steps in [Replies and file reviews](#replies-and-file-reviews):

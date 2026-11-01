@@ -98,7 +98,20 @@ test("promptState recognizes empty prompts of Claude Code, Codex and Antigravity
     [`${E}[39m❯\u00a0${E}[38:2::255:255:255mdraft${E}[0m`, 2, "typed"],
     [`${E}[39m❯\u00a0${E}[38;2;1;2;3;2mplaceholder${E}[0m`, 2, "empty"],
     [`${E}[39m❯\u00a0${E}[38;9mx`, 2, "unknown"],
-    [`${E}[39m❯\u00a0${E}]8;;https://example.com${E}\\link`, 2, "unknown"],
+    // Antigravity's grey placeholders (agy 1.4.12, captured in plan, accept-edits and auto mode).
+    ...["Plan mode: research & plan only", "Accept-edits mode: file edits auto-approved", "Auto mode: edits & safe commands auto-approved"]
+      .map((p) => [`${E}[94m>${E}[39m ${E}[90m${p} (shift+tab to cycle)${E}[39m`, 2, "empty"]),
+    [`${E}[94m>${E}[39m ${E}[90m${E}[48:5:1;58:2::1:2:3mPlan mode: x (shift+tab to cycle)${E}[39m`, 2, "empty"], // backgrounds keep grey
+    [`${E}[94m>${E}[39m Plan mode: research & plan only (shift+tab to cycle)`, 2, "typed"], // its words, typed
+    [`${E}[94m>${E}[39m ${E}[90mmy grey draft${E}[39m`, 2, "typed"], // grey, not its shape
+    [`${E}[94m>${E}[39m draft ${E}[90mPlan mode: x (shift+tab to cycle)${E}[39m`, 8, "typed"],
+    [`${E}[94m>${E}[39m ${E}[90mPlan mode: x (shift+tab to cycle)${E}[39m draft`, 2, "typed"],
+    ...["38;5;1", "38;2;255;255;255", "38:5:1", "38:2::255:255:255", "37", "39", "0"]
+      .map((c) => [`${E}[94m>${E}[39m ${E}[90m${E}[${c}mPlan mode: x (shift+tab to cycle)${E}[39m`, 2, "typed"]), // grey ended
+    [`${E}[39m❯\u00a0${E}[90mPlan mode: x (shift+tab to cycle)${E}[0m`, 2, "typed"], // not after Claude Code's glyph
+    [`${E}[1m›${E}[0m ${E}[90mPlan mode: x (shift+tab to cycle)${E}[0m`, 2, "typed"], // nor Codex's
+    [`${E}[90m> Plan mode: x (shift+tab to cycle)${E}[39m`, 2, "typed"], // a grey glyph is not Antigravity's
+    [`${E}[94m>${E}[39m ${E}[90mPlan mode: x (shift+tab to cycle)${E}[39m`, 12, "unknown"], // cursor not after the glyph
   ];
   for (const [line, x, want] of cases) assert.equal(promptState(line, x), want, JSON.stringify(line));
   // The whole input: Claude Code and Antigravity need their separator right below the prompt
@@ -110,6 +123,18 @@ test("promptState recognizes empty prompts of Claude Code, Codex and Antigravity
   assert.equal(inputEmpty(rule, claude, rule, 2, W), true, "Claude Code: the prompt row between two full-width rules");
   assert.equal(inputEmpty(`${E}[38;5;244m${rule}${E}[0m`, claude, `${E}[2m${rule}${E}[0m   `, 2, W), true, "colored rules");
   assert.equal(inputEmpty(rule, `${E}[94m>${E}[39m`, rule, 2, W), true, "Antigravity");
+  const agyPlan = `${E}[94m>${E}[39m ${E}[90mPlan mode: research & plan only (shift+tab to cycle)${E}[39m`;
+  assert.equal(inputEmpty(`${E}[90m${rule}`, agyPlan, `${E}[90m${rule}`, 2, W), true, "Antigravity in plan mode, as captured");
+  assert.equal(inputEmpty(rule, agyPlan, "  second draft line", 2, W), false, "Antigravity: a second draft row");
+  // Claude Code 2.1.314 started with -n (a team member) names the session in the rule above.
+  const named = `${"─".repeat(W - 16)} emin-n8-rev-1 ─`;
+  assert.equal(named.length, W);
+  assert.equal(inputEmpty(`${E}[38;5;244m${named}`, claude, `${E}[38;5;244m${rule}`, 2, W), true, "a named session");
+  for (const above of [`${"─".repeat(W - 15)} emin-n8-rev-1 `, `${"─".repeat(W - 17)} emin-n8-rev-1 ─x`, `${"─".repeat(W - 20)} emin─n8-rev-1 ─────`, `${"─".repeat(W - 16)}  min-n8-rev-1 ─`, `${"─".repeat(10)} ${"x".repeat(W - 13)} ─`.slice(0, W - 5), ` ${named.slice(1)}`, `${"─".repeat(W - 11)} 你好世界 ─`, `${"─".repeat(8)} ${"e\u0301".repeat(15)} ─`]) {
+    assert.equal(inputEmpty(above, claude, rule, 2, W), false, `above: ${JSON.stringify(above)}`);
+  }
+  assert.equal(inputEmpty(rule, claude, named, 2, W), false, "only the rule above may carry the name");
+  assert.equal(inputEmpty(`${"─".repeat(W - 14)} my review 2 ─`, claude, rule, 2, W), true, "a label with spaces in it");
   for (const below of ["", "   ", "  rm -rf build", `  ${rule.slice(2)}`, "────", `${rule.slice(1)} x`]) {
     assert.equal(inputEmpty(rule, claude, below, 2, W), false, `below: ${JSON.stringify(below)}`);
   }

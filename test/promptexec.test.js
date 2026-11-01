@@ -485,17 +485,17 @@ test("a record left \"attempting\" by an injector that stopped becomes unknown/i
 
 const gateWhy = (w) => readLaunch(w.home, "me-alice")?.gate;
 
-test("Claude Code and agy Quit: Esc only, checked live (no test switch needed); the agent's end is the evidence", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+test("Claude Code and agy without the test switch: Quit is Esc only, Trust its keys, both checked live; the agent's end or its input box is the evidence", { skip: !hasTmux && "tmux not installed" }, async (t) => {
   for (const cli of ["claude", "agy"]) {
     const w = await world(t, { cli, untested: false });
     const quit = w.manifest.options.find((o) => o.action === "quit");
     await w.answer(w.envelope(quit.key));
     assert.deepEqual(outcome(w), [["key Escape", "QUIT"], "done", null], cli);
     assert.deepEqual(w.gate.offs, ["answered"]);
-    // Trust is not checked live yet: without the test switch it is refused, nothing pressed.
+    // Trust was checked live too: pressed without the test switch.
     const v = await world(t, { cli, untested: false });
     await v.answer(v.envelope(v.manifest.options.find((o) => o.action === "trust").key));
-    assert.deepEqual(outcome(v), [[], "refused", "changed"], cli);
+    assert.deepEqual(outcome(v), [cli === "claude" ? ["key Down", "key Enter", "TRUSTED"] : ["key Enter", "TRUSTED"], "done", null], cli);
   }
 });
 

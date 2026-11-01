@@ -78,7 +78,7 @@ test("the executable, its version and the folder Codex asks about", (t) => {
   assert.equal(trustRootOf(plain, { envPath: "" }), null, "no git: not told");
 });
 
-test("arming: only a launch of Codex on a recorded version, run by the path that was asked; anything else is off and unchanged", (t) => {
+test("arming: only a launch of Codex on a verified version, run by the path that was asked; anything else is off and unchanged", (t) => {
   const dir = tmp(t);
   const { bin, file } = fakeCodex(dir);
   const env = { PATH: [bin, process.env.PATH].join(path.delimiter), HOME: os.tmpdir() };
@@ -92,8 +92,9 @@ test("arming: only a launch of Codex on a recorded version, run by the path that
   assert.deepEqual(off(["gemini"]), ["off", "not codex, claude or agy"]);
   assert.deepEqual(off(["env", "codex"]), ["off", "not codex, claude or agy"], "a wrapper in front: off, whatever follows");
   assert.deepEqual(off(["codex"], { PATH: path.join(dir, "none") }), ["off", "codex not found"]);
+  // A version the table was not recorded on arms all the same (the screen must match exactly).
   const other = fakeCodex(path.join(dir, "o"), "0.166.0");
-  assert.deepEqual(off([other.file]), ["off", "version not recorded"]);
+  assert.equal(launchGate([other.file], { folder: dir, env }).gate.state, "armed");
   fs.writeFileSync(other.file, "#!/bin/sh\necho something else\n", { mode: 0o755 });
   assert.deepEqual(off([other.file]), ["off", "version unknown"]);
   assert.deepEqual(launchGate(["codex"], { folder: dir, env, root: () => null }).gate.why, "folder unknown");
@@ -266,7 +267,7 @@ test("two injectors claiming one launch at the same moment, in separate processe
   }
 });
 
-const TRUST = (dir, { selected = 1, folder = dir } = {}) => ["  Folder access", `  ${folder}`, "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.", "", `${selected === 1 ? "›" : " "} 1. Trust and continue`, `${selected === 2 ? "›" : " "} 2. Quit`, "", "  enter continue · esc quit", ""].join("\n");
+const TRUST = (dir, { selected = 1, folder = dir } = {}) => ["  Folder access", `  ${folder}`, "", "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code", "  automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.", "", `${selected === 1 ? "›" : " "} 1. Trust and continue`, `${selected === 2 ? "›" : " "} 2. Quit`, "", "  enter continue · esc quit", ""].join("\n");
 const readOf = (screen, inputShown = false) => ({ screen, inputShown, prompt: classifyPrompt(screen, { cli: "codex", version: "0.165.0" }) });
 
 test("the startup gate as continuity: armed only while every read since the launch showed the same trust dialog, with no gap; anything else ends it for good", (t) => {
@@ -361,7 +362,7 @@ test("the startup gate as continuity: armed only while every read since the laun
 // Codex's worktree variant (live capture codex-0.165.0-trust-worktree-w200): the launch folder,
 // the note, then the repository root, the folder Codex trusts and the record's `root`.
 const WORKTREE = (folder, root, { selected = 1, note = "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:" } = {}) =>
-  ["", "  Folder access", `  ${folder}`, "", `  ${note}`, `  ${root}`, "", "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.", "", `${selected === 1 ? "›" : " "} 1. Trust and continue`, `${selected === 2 ? "›" : " "} 2. Quit`, "", "  enter continue · esc quit", ""].join("\n");
+  ["", "  Folder access", `  ${folder}`, "", `  ${note}`, `  ${root}`, "", "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code", "  automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.", "", `${selected === 1 ? "›" : " "} 1. Trust and continue`, `${selected === 2 ? "›" : " "} 2. Quit`, "", "  enter continue · esc quit", ""].join("\n");
 
 test("the startup gate with Codex's worktree variant: armed only when the repository root it names is the launch's root", (t) => {
   const home = tmp(t);
@@ -551,9 +552,9 @@ test("arming Claude Code and agy: a fresh launch of a recorded version; their ow
     return r.gate.state === "off" ? r.gate.why : "armed";
   };
   assert.equal(off(["claude"], { folder: env.HOME }), "the home folder (Claude Code trusts it for the session only)");
-  // A version the table was not recorded on (2.1.312 shows the same dialog: display-only).
-  fs.writeFileSync(c.file, "#!/bin/sh\necho '2.1.312 (Claude Code)'\n", { mode: 0o755 });
-  assert.equal(off(["claude"]), "version not recorded");
+  // A version the table was not recorded on (2.1.312 shows the same dialog): armed all the same.
+  fs.writeFileSync(c.file, "#!/bin/sh\n[ \"$1\" = --version ] && echo '2.1.312 (Claude Code)' && exit 0\nexec sleep 60\n", { mode: 0o755 });
+  assert.equal(off(["claude"]), "armed");
   fs.writeFileSync(c.file, "#!/bin/sh\n[ \"$1\" = --version ] && echo '2.1.314 (Claude Code)' && exit 0\nexec sleep 60\n", { mode: 0o755 });
   // Claude Code's fresh rules.
   for (const ok of [[], ["--permission-mode", "acceptEdits"], ["--permission-mode=manual", "--model", "opus", "--effort", "high"], ["--append-system-prompt", "Be brief.", "Review what me-lead sends."], ["-n", "me-alice"], ["--name=me-alice"]]) assert.equal(claudeFreshProblem(ok, { name: "me-alice" }), null, ok.join(" "));
@@ -658,6 +659,10 @@ test("the gate over a Claude Code and an agy launch: the dialog naming the launc
     const launch = (o = {}) => relaunch(home, "me-alice", { cli: { name: cli, path: `/x/${cli}`, version }, root: folder, scope: "folder", gate: { state: "armed", why: null, at: 1 }, folder, tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST, ...o });
     let r = launch();
     let g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
+    // agy 1.4.12 draws its sign-in splash for a moment before the dialog: still drawing (Claude
+    // Code has none: the same screen turns its gate off).
+    const splash = ["", "     ▄▀▀▄", "    ▀▀▀▀▀▀", "   ▀▀▀▀▀▀▀▀", "  ▄▀▀    ▀▀▄", " ▄▀▀      ▀▀▄", "", " Welcome to the Antigravity CLI. You are currently not signed in.", "", " ⣷  Signing in...", ""].join("\n");
+    if (cli === "agy") g.observe({ screen: splash, inputShown: false, prompt: classifyPrompt(splash, { cli, version }) });
     g.observe(first);
     g.observe(read(moved));
     assert.deepEqual([g.armed(), g.cli(), g.version()], [true, cli, version], cli);
@@ -668,6 +673,17 @@ test("the gate over a Claude Code and an agy launch: the dialog naming the launc
     g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
     g.observe(first);
     assert.equal(readLaunch(home, "me-alice").gate.why, "startup not observed", cli);
+    // The splash with any other row, or on another CLI: not still drawing.
+    for (const other of [`${splash}\n Opened /tmp/x`, splash.replace(" Welcome to the Antigravity CLI. You are currently not signed in.", "")]) {
+      r = launch();
+      g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
+      g.observe({ screen: other, inputShown: false, prompt: null });
+      assert.equal(readLaunch(home, "me-alice").gate.why, "startup not observed", cli);
+    }
+    r = launch();
+    g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
+    g.observe({ screen: splash, inputShown: false, prompt: null });
+    assert.equal(readLaunch(home, "me-alice").gate.state, cli === "agy" ? "armed" : "off", cli);
   }
 });
 

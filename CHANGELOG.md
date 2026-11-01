@@ -212,7 +212,7 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
 - Claude Code's and agy's folder trust from Telegram too: Claude Code 2.1.314 and agy 1.4.11,
   started fresh by `hoptell tmux` or `hoptell team up` / `team restart` in their folder, get a
   card like Codex's. Neither shows digits, so the buttons are the rows. Quit is Esc for both,
-  checked live; Trust is not checked live yet and shows only in test mode. Claude Code's Trust is
+  and both options of both CLIs were checked live. Claude Code's Trust is
   Down (from "No, exit" only), a fresh look with "Yes, I trust this folder" selected, then Enter;
   agy's is a fresh look, then Enter. The card says what the trust covers: Claude Code records it
   for the repository's main folder, so from a worktree or subfolder it covers the whole
@@ -220,6 +220,10 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   conversation, a wrapper in front of the CLI (`env`, a shell), or any flag outside the fresh
   rules gets the note. A team member's launch is matched word for word against the line
   `team up` built for it.
+- Folder trust cards for other versions: Codex, Claude Code and agy update often, so a version
+  the captures were not made on gets the same card when its dialog matches a captured one
+  exactly, and the card names both versions. A dialog that reads or looks different gets the
+  note.
 - A Telegram answer to a folder trust prompt (Codex, Claude Code or agy) now counts as done only
   when hoptell sees it take within 5 seconds of the last key: after Trust, the agent's empty
   input; after Quit, the agent's end. Otherwise the card says hoptell may have pressed it and to

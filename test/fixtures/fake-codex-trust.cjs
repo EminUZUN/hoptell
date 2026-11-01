@@ -27,12 +27,13 @@ if (root) {
   rows.splice(0, rows.findIndex((r) => r.startsWith("  Trust this folder?")), ...wt.slice(0, note + 1), `  ${root}`, "");
 }
 let selected = mode === "start-on-2" || mode === "foreign-after-one" ? 2 : 1;
-let folderRows = folder ? [`  ${folder}`, ""] : null;
+let folderRows = folder ? [`  ${folder}`] : null;
 const note = (line) => fs.appendFileSync(log, `${line}\n`);
 
 function draw() {
   const out = rows.map((r) => r);
-  if (folderRows) out.splice(2, 2, ...folderRows);
+  // The folder's rows (one, or wrapped over several) up to the blank row below them.
+  if (folderRows) out.splice(2, out.indexOf("", 2) - 2, ...folderRows);
   const i = out.findIndex((r) => /^(› | {2})1\. /.test(r));
   out[i] = `${selected === 1 ? "›" : " "} 1. Trust and continue`;
   out[i + 1] = `${selected === 2 ? "›" : " "} 2. Quit`;
@@ -78,7 +79,7 @@ if (ctl && ctl !== "-") {
     try {
       const m = fs.readFileSync(ctl, "utf8").match(/^redraw (.+)$/m);
       if (m && !folderRows) {
-        folderRows = [`  ${m[1]}`, ""];
+        folderRows = [`  ${m[1]}`];
         draw();
       }
     } catch {}

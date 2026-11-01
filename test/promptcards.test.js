@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { canonicalize } from "../lib/jcs.js";
 import * as sig from "../lib/ownersig.js";
-import { CARD_MS, answerText, answerableOptions, executableOptions, homeIdOf, manifestDigest, manifestProblem, parseAnswer, parsePromptRequest, promptRequestText } from "../lib/promptcards.js";
+import { CARD_MS, answerText, answerableOptions, executableOptions, homeIdOf, manifestDigest, manifestProblem, parseAnswer, parsePromptRequest, promptRequestText, recordedOn } from "../lib/promptcards.js";
 
 const ME = "m_mmmmmmmmmmmmmmmmmmmmmmmmmm";
 const REALM = "a".repeat(32);
@@ -47,7 +47,11 @@ test("the manifest: every field exact; options only as the prompt table has them
   assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[2].map((o) => ({ ...o })), untested: false })).map((o) => o.label), ["Trust folder", "Quit"]);
   assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[3].map((o) => ({ ...o })), untested: false })).map((o) => o.label), ["Trust folder", "Back to Agent Command Center"]);
   assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[2].map((o) => ({ ...o })), untested: true })).map((o) => o.label), ["Trust folder", "Quit"]);
-  assert.deepEqual(answerableOptions("0.166.0"), []);
+  // Any verified version takes the rows' options (its screen must match a row exactly); anything
+  // that is not a version takes none. recordedOn names the versions the rows were captured on.
+  assert.deepEqual(answerableOptions("0.166.0"), answerableOptions("0.165.0"));
+  for (const v of [null, "", "0.166", "v0.166.0", "0.166.0-beta", "latest"]) assert.deepEqual(answerableOptions(v), [], String(v));
+  assert.deepEqual([recordedOn("codex"), recordedOn("claude"), recordedOn("agy"), recordedOn("gemini")], [["0.165.0"], ["2.1.314"], ["1.4.11"], []]);
   const bad = {
     fields: { extra: 1 },
     realm: { realm: "x" },
@@ -77,7 +81,8 @@ test("the manifest: every field exact; options only as the prompt table has them
   assert.deepEqual(executableOptions(unchecked).map((o) => o.label), ["Quit"], "an option not checked live is not pressed");
   assert.deepEqual(executableOptions({ ...unchecked, untested: true }).map((o) => o.label), ["Trust folder", "Quit"], "unless the launch's test switch is on");
   assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[1].map((o) => ({ ...o })) })).map((o) => o.label), ["Trust folder", "Back to Agent Command Center"]);
-  assert.equal(manifestProblem(sampleManifest({ cli: { name: "codex", path: "/x/codex", version: "0.166.0" } })), "options", "an unrecorded version has no answerable options");
+  assert.equal(manifestProblem(sampleManifest({ cli: { name: "codex", path: "/x/codex", version: "0.166.0" } })), null, "an unrecorded version: the rows' options");
+  assert.equal(manifestProblem(sampleManifest({ cli: { name: "codex", path: "/x/codex", version: "0.166" } })), "options", "not a version: no answerable options");
   assert.equal(manifestProblem(null), "fields");
   // The key sequences and live marks are the table's: a single-digit Trust, or Trust or Quit marked not live, is refused.
   const [trust, quit] = answerableOptions("0.165.0")[0];
