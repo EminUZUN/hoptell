@@ -8,7 +8,7 @@ import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { processInfo, startedAtMs } from "../lib/host.js";
-import { hookSessionLabel } from "../lib/wake.js";
+import { hookSessionLabel, hooksSnippet } from "../lib/wake.js";
 import { readSessionEvents } from "../lib/sessionevents.js";
 import { COALESCE_MS, HELD_NOTICE, NOTICE } from "../lib/notices.js";
 import { sleep, world } from "./helpers.js";
@@ -75,6 +75,17 @@ const inboxFiles = (w, name) => {
     return [];
   }
 };
+
+test("hoptell hooks prints the plugin's hooks: the same events, commands and options", () => {
+  const plugin = JSON.parse(fs.readFileSync(new URL("../hooks/hooks.json", import.meta.url), "utf8")).hooks;
+  const printed = hooksSnippet("node", null).hooks;
+  assert.deepEqual(Object.keys(printed).sort(), Object.keys(plugin).sort());
+  for (const [event, [{ hooks: [p] }]] of Object.entries(plugin)) {
+    const [{ hooks: [h] }] = printed[event];
+    assert.equal(h.args.at(-1), p.args.at(-1), event);
+    assert.deepEqual({ ...h, command: undefined, args: undefined }, { ...p, command: undefined, args: undefined }, event);
+  }
+});
 
 test("hook delivery: verified at startup, one fixed notice per batch, messages stay in the inbox", { skip: !supported }, async (t) => {
   const w = await world();
