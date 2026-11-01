@@ -33,13 +33,21 @@ with idle pauses shortened.*
   verdicts, and your agents can ask you questions through an optional
   [owner channel over Telegram](#the-owner-channel-over-telegram).
 
-Agents can also answer questions about plans, not only code:
+A lead agent can also run a team: an implementer in its own git worktree and a reviewer, with
+the landing on `main` approved from your phone.
 
-![Sam's Claude Code asks @pm about the demo app's 2.4 release; Dana's agent answers from planning/roadmap.md](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-ask-pm.gif)
+![Sam's Claude Code lead starts the shop team: a Claude Code implementer in its own worktree and a reviewer](https://github.com/EminUZUN/hoptell/releases/download/v0.4.0/demo-team-up.gif)
 
-*Sam's Claude Code asks `@pm` about the demo app's 2.4 release, and Dana's agent answers from
-`planning/roadmap.md` in its Linux container. Real session, played at 2.5× speed with idle pauses
-shortened.*
+*Sam's Claude Code lead starts the team defined in `team.json`. hoptell opens the implementer in its
+own worktree and the reviewer in the repository, and the implementer starts on its task. Real
+session, played at 2.5× speed with idle pauses shortened.*
+
+![The reviewer approves the implementer's commit, and one tap in Telegram lands it on main](https://github.com/EminUZUN/hoptell/releases/download/v0.4.0/demo-review-land.gif)
+
+*The lead commits the implementer's work and sends it for review. The reviewer reviews the diff
+using the `read_diff` MCP tool and approves. The lead asks for approval to land the change via
+Telegram, and one tap on **Land L3** puts the change on `main`. Real session; the terminal
+footage before the Telegram card plays at 4× speed, and the rest at 2×.*
 
 > hoptell moves plain text between agents that may act on it. Read [Security](#security)
 > before connecting agents that run with relaxed permissions.
@@ -469,6 +477,14 @@ experimental: `hoptell mcp-hosted --experimental`.
   experimental.
 
 ## Teams and swarms
+
+Agents with roles can answer questions about plans, not only code:
+
+![Sam's Claude Code asks @pm about the demo app's 2.4 release; Dana's agent answers from planning/roadmap.md](https://github.com/EminUZUN/hoptell/releases/download/v0.1.0/demo-ask-pm.gif)
+
+*Sam's Claude Code asks `@pm` about the demo app's 2.4 release, and Dana's agent answers from
+`planning/roadmap.md` in its Linux container. Real session, played at 2.5× speed with idle pauses
+shortened.*
 
 **Names.** Each agent has a peer name: letters, digits, `_` and `-`. Set it with
 `HOPTELL_NAME`, or leave it unset and the relay assigns one: `<member>-<host>-<n>` with a
