@@ -1627,6 +1627,10 @@ try {
       break;
     }
     case "doctor": {
+      // Classify the home first, as every command that creates state does (doctor's relay check
+      // pins the relay profile): otherwise a new install would look like an earlier one. A home
+      // whose contacts cannot be opened is still checked; doctor reports the problem.
+      await contactsOf().catch(() => {});
       const { doctor, terminalMarks } = await import("../lib/doctor.js");
       process.exitCode = (await doctor(process.env, console.log, { relayCheck: args.includes("--relay-check"), fix: args.includes("--fix"), homedir: os.homedir(), marks: terminalMarks(process.stdout, process.env) })) ? 1 : 0;
       break;

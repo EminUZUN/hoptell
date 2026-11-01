@@ -52,6 +52,14 @@ test("a new install holds back unknown senders until the owner decides; the agen
   assert.ok(await until(async () => /Your user's contacts held these messages/.test(await bob.call("read_inbox"))));
 });
 
+test("a new install whose first command is doctor is managed too", async (t) => {
+  const w = await world({ fresh: true });
+  t.after(() => w.close());
+  const first = await w.cli(["doctor"], ON);
+  assert.match(first.stdout, /contacts: managed/, first.stdout);
+  assert.match((await w.cli(["contacts"], ON)).stdout, /managed \(default: ask/);
+});
+
 test("allow adds a grant (later messages flow); block deletes and drops later ones", async (t) => {
   const w = await world({ fresh: true });
   t.after(() => w.close());
