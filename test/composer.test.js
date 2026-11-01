@@ -22,7 +22,7 @@ async function until(fn, ms = 8000) {
   return false;
 }
 
-async function setup(t, { labJoin = true, withDefault = true, workJoin = true, env: extra = {}, beforeStart = null } = {}) {
+async function setup(t, { labJoin = true, withDefault = true, workJoin = true, env: extra = {}, beforeStart = null, engineOptions = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-comp-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = existingInstall(path.join(dir, "home"));
@@ -37,7 +37,7 @@ async function setup(t, { labJoin = true, withDefault = true, workJoin = true, e
   const env = { HOPTELL_HOME: home, HOPTELL_NAME: "alice", HOPTELL_PUSH: "listener", HOPTELL_RECEIPTS: "on", HOPTELL_RELAYS: file, T_WORK: tokens.work, T_LAB: tokens.lab, ...extra };
   const settings = readSettings({ env, homedir: dir, pid: process.pid, hostname: "testhost" });
   const relays = readRelaysFile(file, { env, homedir: dir });
-  const c = createComposer(settings, relays, { keepAlive: true });
+  const c = createComposer(settings, relays, { keepAlive: true, engineOptions });
   t.after(() => c.stop());
   beforeStart?.(c, home);
   await c.start();
@@ -801,4 +801,26 @@ test("contacts: a message held on a non-default relay wakes a wait once and is l
   assert.ok((await c.noticeList()).some((f) => /^held:lab\/q_[a-z2-7]{16}\//.test(f)));
   assert.match(textOf(await c.call("wait_for_message", { timeout_seconds: 1 })), /^Wait ended without returning messages \(limit: 1s\)\./);
   assert.match(textOf(await c.call("read_inbox")), /hoptell contacts show q_/);
+});
+
+test("a composed read: a request read and left without a reply tells its sender on its own relay, once; a reply by name tells nothing", async (t) => {
+  let stillSince = null;
+  const { c, peer } = await setup(t, { engineOptions: { turnSignals: () => ({ stillSince }), unansweredTiming: { quietMs: 300, checkMs: 20 } } });
+  const bob = peer("lab", "bob");
+  await bob.ready();
+  const ack = await bob.send("alice", "please review");
+  let got = "";
+  assert.ok(await until(async () => /please review/.test((got += textOf(await c.call("read_inbox", {}))))));
+  stillSince = Date.now();
+  assert.ok(await until(() => bob.got.some((m) => /automated notice, not a reply from alice/.test(m.text))));
+  const notice = bob.got.find((m) => /automated notice/.test(m.text));
+  assert.equal(notice.reply_to, ack.message_id);
+  // A second request answered with name@relay: nothing more.
+  await bob.send("alice", "second");
+  const receipt = got.match(/Receipt: (\S+)/)[1];
+  got = textOf(await c.call("read_inbox", { ack: receipt }));
+  assert.ok(await until(async () => /second/.test((got += textOf(await c.call("read_inbox", {}))))));
+  await c.call("send_message", { to: "bob@lab", message: "on it" });
+  await sleep(600);
+  assert.equal(bob.got.filter((m) => /automated notice/.test(m.text)).length, 1);
 });

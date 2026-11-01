@@ -584,3 +584,27 @@ test("startedAtMs: a session's start time from processInfo, on this platform and
   assert.equal(startedAtMs("not a time"), null);
   assert.equal(startedAtMs(undefined), null);
 });
+
+test("Stop hook: records when the current conversation's turn ended, for lib/unanswered.js; another conversation records nothing; prints nothing", { skip: !supported }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const host = await fakeClaude(w, t);
+  await host.sessionStart({ session_id: "conv-s" });
+  const run = async (input) => {
+    const from = host.events.length;
+    host.send({ op: "hook", cmd: "hook-stop", input: { hook_event_name: "Stop", stop_hook_active: false, ...input } });
+    return host.next((e) => e.ev === "hook", 10000, from);
+  };
+  const turns = () => fs.readdirSync(path.join(w.home, "wake")).filter((n) => n.endsWith(".turn.json"));
+  const other = await run({ session_id: "conv-other" });
+  assert.deepEqual([other.code, other.stdout ?? "", other.stderr], [0, "", ""]);
+  assert.deepEqual(turns(), []);
+  const before = Date.now();
+  const r = await run({ session_id: "conv-s" });
+  assert.deepEqual([r.code, r.stdout ?? "", r.stderr], [0, "", ""]);
+  assert.equal(turns().length, 1);
+  const rec = JSON.parse(fs.readFileSync(path.join(w.home, "wake", turns()[0]), "utf8"));
+  const reg = JSON.parse(fs.readFileSync(path.join(w.home, "wake", turns()[0].replace(".turn.json", ".reg.json")), "utf8"));
+  assert.deepEqual([rec.session_id, rec.epoch], ["conv-s", reg.epoch]);
+  assert.ok(rec.at >= before && rec.at <= Date.now());
+});

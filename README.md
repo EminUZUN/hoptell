@@ -833,6 +833,17 @@ the option. Relays before 0.2.0 do not provide references, and older client rend
 these fields. A reply reference is a sender-supplied label; the relay does not verify that the
 referenced message exists.
 
+**A request read without a reply.** When a session reads a request (a message that is not
+itself a reply, sent by name or to `@<role>`) and its turn ends without any message back to
+the sender by name, its MCP server sends the sender one automated notice, as a reply to the
+request: who read it, when, and that no reply came. So a sender is not left waiting on an
+agent that declined, stopped, or waits on its user. A turn has ended when a `hoptell tmux`
+pane's screen has not changed for a minute, or 30 seconds after Claude Code's `Stop` hook ran
+(hook and channel delivery). Listener sessions and sessions with the role `lead` do not send
+it: a lead waits on its user as part of a team's work. Owner-channel messages, `@all`,
+command-line sends without a reply destination and hoptell's own notices are never answered
+this way.
+
 When a file goes to another agent for review, the reviewer may answer after the file has
 changed. To know which version a suggestion refers to:
 
@@ -1231,7 +1242,8 @@ The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you
 shows a prompt that needs you (a folder trust question, an approval, a sign-in, an update) or its
 screen has not changed for 10 minutes while it works (`HOPTELL_STALL_MINUTES`), `hoptell team
 status` shows it, for example `waiting for you: Codex folder trust (P3, 2 min)`, with the attach
-command. A team member's lead gets one inbox message about it, and your Telegram owner channel
+command. A team member's lead gets one inbox message about it, which asks the lead to tell you
+and not to look into the member's pane itself, and your Telegram owner channel
 gets a short note that names the session but never shows its screen: at most one per session and
 kind every 5 minutes, and 20 such notes an hour, followed by one line saying notes are paused. The injector sends these through a connection of its
 own, named after your member with `-c` and a random suffix. If the relay cannot be reached when
@@ -2462,7 +2474,7 @@ hoptell's job is to put text from one agent in front of another agent. Plan for 
 - **Connects** by WebSocket to the relay you configure. Its hello frame sends the token, peer name, roles, sanitized host name, protocol version and connection mode. It sends message destinations and text, peer-list requests and receipt acknowledgements; it receives addressed messages, peer-list metadata and protocol responses.
 - **Stores** incoming MCP messages durably (synced to disk) before acknowledging receipt to the relay. It creates private directories (0700) and files (0600): with a current relay in the session's folder under `~/.hoptell/v2/` (see [PRIVACY.md](PRIVACY.md)), with earlier relays under `~/.hoptell/inbox/<name>/` (both under `$HOPTELL_HOME` when configured). With receipts, files are deleted when the agent acknowledges them; otherwise they are consumed and deleted by `read_inbox`, `wait_for_message` or `hoptell listen`. Recovering abandoned claims checks whether the claiming process still runs (process id, start time and boot).
 - **Inspects** the processes that started it with `ps -o ppid=,uid=,lstart=,args= -p <pid>` to find the Claude Code process that started it and check its channel flags, and reads the boot identifier (`/proc/sys/kernel/random/boot_id` on Linux, `sysctl -n kern.boottime` on macOS) and process start times to tell processes apart. This check is skipped when `HOPTELL_PUSH` chooses `channel`, `tmux` or `listener`.
-- **For hook delivery**, uses private files in `~/.hoptell/wake/` (0700/0600; under `$HOPTELL_HOME` when configured), keyed by the Claude Code process: a small counter file that Claude Code watches, a registration written by the `SessionStart` hook (process identity, session id and a random value), the MCP server's record (its process identity, peer name and current request) and the hook's last acknowledgement. Unless `HOPTELL_TITLE_AUTO=off`, a title file holds the session's custom Claude Code name and session id. They contain no message text, sender, relay URL, token, prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed. Claude Code executes the `hook-session-start`, `hook-user-prompt-submit` and `hook-file-changed` CLI commands with your OS permissions. These commands load normal hoptell settings, perform the local process inspection described above, and read and write wake files; they do not open inbox message or transcript files.
+- **For hook delivery**, uses private files in `~/.hoptell/wake/` (0700/0600; under `$HOPTELL_HOME` when configured), keyed by the Claude Code process: a small counter file that Claude Code watches, a registration written by the `SessionStart` hook (process identity, session id and a random value), the MCP server's record (its process identity, peer name and current request) and the hook's last acknowledgement. Unless `HOPTELL_TITLE_AUTO=off`, a title file holds the session's custom Claude Code name and session id. A turn file, written by the `Stop` hook, holds when the last turn ended, with the session id and the registration's random value. They contain no message text, sender, relay URL, token, prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed. Claude Code executes the `hook-session-start`, `hook-user-prompt-submit`, `hook-stop` and `hook-file-changed` CLI commands with your OS permissions. These commands load normal hoptell settings, perform the local process inspection described above, and read and write wake files; they do not open inbox message or transcript files.
 - **Tells agents** in its instructions how to capture file snapshots with the local CLI and check them before applying suggestions. The MCP server does not execute these snapshot commands. An agent or user must run the CLI under their own permissions; the CLI loads its normal settings before capturing or checking the selected file.
 - **File tools** are disabled by default. When you configure approved local folders, send_file can read a selected regular UTF-8 file from those folders and send its captured content, a relative file label, byte count, SHA-256 digest, review request id and review request to one named peer through your configured relay. The receiving agent's AI provider may process that content. Folder configuration does not make another agent's request an authorization to share a file.
 - **The file tools start** a bundled Node helper on the same machine to perform checked file reads. They do not run a shell, download software, execute project code or make additional network connections. The helper uses the MCP server's OS permissions; configuring folders does not inherit an AI agent's separate filesystem sandbox.

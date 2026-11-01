@@ -11,7 +11,7 @@ import { memberOfStoreDir, storeParts } from "../lib/session.js";
 import { errnoWords, plural, wrap } from "../lib/words.js";
 
 // Claude Code hook commands (lib/wake.js) print only what Claude Code expects, never errors.
-const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged", "hook-user-prompt-submit": "hookUserPromptSubmit" };
+const HOOKS = { "hook-session-start": "hookSessionStart", "hook-file-changed": "hookFileChanged", "hook-user-prompt-submit": "hookUserPromptSubmit", "hook-stop": "hookStop" };
 if (Object.hasOwn(HOOKS, process.argv[2] ?? "")) {
   let code = 0;
   try {

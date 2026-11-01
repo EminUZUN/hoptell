@@ -169,7 +169,7 @@ test("the surfaces: one lead notice per occurrence with the attach command (team
   const team = waitSurface(home, "me-alice", { control, team: { team: "n4", lead: "me-lead" }, folder: "app", now: () => NOW });
   const rec = occurrence(home, "me-alice", { kind: "prompt", subtype: "codex-startup-trust", actionable: false, since: NOW });
   team.start(rec);
-  assert.deepEqual(told, [{ to: "me-lead", text: `hoptell: automated notice, not a user message. me-alice (team n4) needs a look: Codex folder trust (${rec.id}). Attach: tmux attach -t '=hoptell-me-alice'` }]);
+  assert.deepEqual(told, [{ to: "me-lead", text: `hoptell: automated notice, not a user message. me-alice (team n4) needs your user: Codex folder trust (${rec.id}). Only your user can act on it: tell them, with the command that opens it: tmux attach -t '=hoptell-me-alice'. Do not read or type in its pane yourself.` }]);
   assert.deepEqual([notes.length, notes[0].session, notes[0].team, notes[0].folder, notes[0].nonce], [1, "me-alice", "n4", "app", rec.nonce]);
   // A repaint makes a new occurrence of the same kind within 5 minutes: the lead hears of it, the owner not.
   team.start(occurrence(home, "me-alice", { kind: "prompt", subtype: "codex-startup-trust", actionable: false, since: NOW }));
@@ -201,7 +201,7 @@ test("the surfaces: what the relay could not take is sent again while the occurr
   assert.deepEqual([told.length, notes.length], [1, 1]);
   assert.equal(notes[0].nonce, rec.nonce, "the same occurrence, so the bridge shows it once");
   assert.equal(notes[0].minutes, 0);
-  assert.match(told[0].text, new RegExp(`needs a look: .*\\(${rec.id}\\)`));
+  assert.match(told[0].text, new RegExp(`needs your user: .*\\(${rec.id}\\)`));
   // Charged once: the budget holds one note, not one per try.
   assert.equal(JSON.parse(fs.readFileSync(`${home}/v2/waits/budget.json`, "utf8")).sent.length, 1);
   // Nothing more is owed.

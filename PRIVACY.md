@@ -364,6 +364,12 @@ process. None of this is sent to the relay.
   `HOPTELL_TITLE_AUTO` off removes it. Other copies of a title: Claude Code's own transcripts and
   session files (hoptell does not write them), the relay's memory, and other sessions'
   `list_peers` output in their transcripts.
+- Turn ends from Claude Code: the plugin's `Stop` hook writes `<key>.turn.json` in
+  `~/.hoptell/wake/` (0600) with the session id, the registration's random value and the time
+  the turn ended, nothing else. The MCP server reads it to tell a peer that its request was read
+  and not answered (see "A request read without a reply" in the README). That notice names
+  the session, the request's reference and the time it was read; it never includes message or
+  screen text.
 - `hoptell tmux` writes any configured relay URL, token, delivery setting and approved
   snapshot folder settings to
   `~/.hoptell/sessions/<name>.env` (under `$HOPTELL_HOME` when configured). The file is not

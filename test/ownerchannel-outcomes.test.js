@@ -131,6 +131,46 @@ test("a refused send replaces the success steps: no `Sent to`, no answered card,
   assert.equal(tg.sent.filter((x) => x.method === "answerCallbackQuery").at(-1).params.text, "Your answer couldn't be delivered, so this question is closed.");
 });
 
+test("an instruction or answer the relay only queued (the agent is offline or busy): the owner is told, under their message; a delivered one says nothing", async (t) => {
+  const { url, tokens } = await ownerRelay(t);
+  const home = tmpHome(t);
+  paired(home);
+  const tg = fakeTelegram();
+  const queue = new Set();
+  const factory = (o) => {
+    const c = new RelayClient(o);
+    const send = c.send.bind(c);
+    c.send = async (to, ...rest) => {
+      const ack = await send(to, ...rest);
+      return queue.has(to) ? { ...ack, state: "queued" } : ack;
+    };
+    return c;
+  };
+  const { bridge } = bridgeOn(t, { home, telegram: tg.client(), url, token: tokens.me, key: newKey(), clientFactory: factory });
+  await until(() => bridge.leading(), 4000, "leader");
+  const alice = await agent(t, url, tokens.me, "me-alice");
+  tg.say("@me-alice first");
+  await until(() => alice.got.some((m) => m.from === "me-owner"), 4000, "delivered");
+  await until(() => tg.calls("setMessageReaction").length === 1, 4000, "👍");
+  assert.equal(tg.texts().some((x) => x.startsWith("⏳")), false, "delivered: no note");
+  queue.add("me-alice");
+  tg.say("@me-alice second");
+  const note = "⏳ alice is offline or busy right now. Your message is kept, and alice gets it when it is back.";
+  await until(() => tg.texts().includes(note), 4000, "queued note");
+  const sent = tg.sent.find((x) => x.method === "sendMessage" && x.params.text === note);
+  assert.ok(Number.isSafeInteger(sent.params.reply_parameters?.message_id), "under the owner's message");
+  await until(() => tg.calls("setMessageReaction").length === 2, 4000, "👍 still follows");
+  // A reply to the note goes to that agent, as a reply to the instruction would.
+  tg.say("third", { reply: tg.replyTo(sent) });
+  await until(() => alice.got.filter((m) => m.from === "me-owner").length === 3, 4000, "reply to the note forwarded");
+  // An answer to a question, queued: told too.
+  const q = await alice.ask("Reply?");
+  await until(() => tg.cards().length === 1, 4000, "card");
+  tg.say("my reply", { reply: tg.replyTo(tg.cards()[0]) });
+  await until(() => tg.texts().filter((x) => x === note).length === 2, 4000, "queued answer note");
+  await until(() => bridge.state().questions[q].status === "answered", 4000, "answered");
+});
+
 test("a card Telegram refuses for good (400, 403) closes Q as undeliverable and sends exactly one status; a retryable error keeps the card pending", async (t) => {
   const { url, tokens } = await ownerRelay(t);
   const home = tmpHome(t);

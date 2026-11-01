@@ -30,6 +30,10 @@ A good reply names:
 `based_on` is the reviewer's statement, not proof of what the model read. The check compares
 today's bytes with the digest. It does not validate the reply.
 
+If a reviewer reads the request and its turn ends without a reply to you, its hoptell sends you
+one automated notice that says so, as a reply to the request. The reviewer may have declined,
+or it may wait on its user. Look at its pane, or send it a follow-up; do not keep waiting.
+
 ## Several reviewers
 
 - Send to `@reviewer` to reach every online reviewer at once, or to each name for a fixed set.

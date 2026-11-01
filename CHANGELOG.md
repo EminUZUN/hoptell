@@ -28,6 +28,17 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   `send_message`, so a reviewer could not reply unattended. Your Claude Code permission rules
   still decide each shell command; it is not an OS sandbox. The MCP server marks `list_peers` and
   `read_task` as read-only.
+- A request read without a reply: when a session reads a peer's request and its turn ends with
+  no message back to that sender, the sender gets one automated notice, as a reply, saying
+  who read it and when. A Codex reviewer that declined a request in its own pane, without
+  replying, left its sender waiting with no sign. A turn's end is a minute without a change on
+  a `hoptell tmux` pane's screen, or Claude Code's new `Stop` hook (restart Claude Code
+  sessions to load it). A lead does not send it.
+- A team member waiting at a prompt: its lead's message now says that only the user can act on
+  it and that the lead tells the user, not that the member "needs a look". A lead read the
+  member's pane itself, and each look was a prompt of its own.
+- The Telegram bridge says when the relay only kept an instruction or answer because the agent
+  is offline or busy, so a quiet agent is not mistaken for one that ignores you.
 - `check_snapshot`: a session started with `hoptell mcp` checks whether a file in its own folder
   still has a snapshot's sha256, the `snapshot --check` step as a read-only tool. Claude Code
   members and reviewers get it allowed with the messaging tools, so a review needs no shell
@@ -271,6 +282,9 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
 - The injector wakes agy in plan, accept-edits and auto mode: agy draws those modes' placeholder
   in grey, not dim, and an agy reviewer's empty input was taken for a draft. The same fix makes a
   Trust answered on Telegram count as done for agy in those modes.
+- The injector submits its notice in a short Claude Code pane: Claude Code shows only the last
+  rows of a long draft there, with its prompt mark on the first row it shows, and the notice was
+  left typed but not sent.
 - `team evidence`: each `--command` is one quoted command (the help said `<command>...`); a
   command left unquoted is refused with how to quote it.
 - The waiting-session watch takes the agent's CLI from the launch record when the record names
