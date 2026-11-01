@@ -168,7 +168,10 @@ export function fakeTelegram({ webhook = "" } = {}) {
   return t;
 }
 
-/** A relay with the owner's member "me" (names me-*) and another member "bob". */
+/**
+ * A relay with the owner's member "me" (names me-*) and another member "bob". stop() takes it
+ * down (an outage: nothing listens on its port), start() brings it back on the same port.
+ */
 export async function ownerRelay(t, { ownerApp = false, appLimits = {} } = {}) {
   const tokens = { me: fakeToken(), bob: fakeToken() };
   let stateDir = null;
@@ -176,9 +179,29 @@ export async function ownerRelay(t, { ownerApp = false, appLimits = {} } = {}) {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-owner-relay-"));
     t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
   }
-  const relay = await startRelay({ host: "127.0.0.1", port: 0, members: [{ name: "me", id: ME, token: tokens.me }, { name: "bob", id: BOB, token: tokens.bob }], realm: { id: REALM, name: "local" }, ...(ownerApp ? { ownerApp: { stateDir, limits: appLimits } } : {}), log: () => {} });
-  t.after(() => relay.close());
-  return { relay, tokens, stateDir, url: `ws://127.0.0.1:${relay.port}`, http: `http://127.0.0.1:${relay.port}` };
+  const options = { host: "127.0.0.1", port: 0, members: [{ name: "me", id: ME, token: tokens.me }, { name: "bob", id: BOB, token: tokens.bob }], realm: { id: REALM, name: "local" }, ...(ownerApp ? { ownerApp: { stateDir, limits: appLimits } } : {}), log: () => {} };
+  const relay = await startRelay(options);
+  let up = relay;
+  const closing = [];
+  t.after(() => Promise.all([up?.close(), ...closing]));
+  const r = {
+    relay,
+    tokens,
+    stateDir,
+    url: `ws://127.0.0.1:${relay.port}`,
+    http: `http://127.0.0.1:${relay.port}`,
+    async stop() {
+      // It stops listening at once; its close() also waits for connections still closing.
+      const was = up;
+      up = null;
+      if (was) closing.push(was.close());
+    },
+    async start() {
+      up ??= await startRelay({ ...options, port: relay.port });
+      r.relay = up;
+    },
+  };
+  return r;
 }
 
 /** Turn the app on (or off, or rotate it) as the CLI does, with the bridge stopped. */

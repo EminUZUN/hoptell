@@ -3,9 +3,13 @@
 // prompt-screens.json) and acts as Codex 0.165.0's source does (tui/src/onboarding/
 // trust_directory.rs): "1" only selects Trust, "2" quits at once, Enter acts on the selected row.
 // Every key it gets is appended to the log file (argv[2]), one per line, with what it did.
-// argv[3] ("normal", "start-on-2", "one-selects-two" or "foreign-after-one") changes what it shows
-// or does, for the refusal tests: "foreign-after-one" starts on Quit, and "1" shows another
-// program's approval prompt for a moment, then the dialog again with Trust selected. A line "redraw <folder>" in the
+// A Trust then shows Codex's empty input (its prompt glyph and dim placeholder), as Codex does once
+// the folder is trusted; a Quit exits.
+// argv[3] ("normal", "start-on-2", "one-selects-two", "foreign-after-one", "trust-exits" or
+// "enter-ignored") changes what it shows or does, for the refusal and settle tests:
+// "foreign-after-one" starts on Quit, and "1" shows another program's approval prompt for a
+// moment, then the dialog again with Trust selected; "trust-exits" exits after a Trust instead of
+// showing its input; "enter-ignored" logs an Enter and does nothing. A line "redraw <folder>" in the
 // control file (argv[4]) redraws with another folder (the screen changed between the card and the
 // tap). argv[5], when given, is the folder the dialog names from the start (a real launch's).
 // argv[6], when given, is a repository root: the dialog is then the worktree variant (live
@@ -37,6 +41,11 @@ function draw() {
 
 function done(word) {
   note(word);
+  if (word === "TRUSTED" && mode !== "trust-exits") {
+    // The input, empty: the cursor right after "› ", the placeholder dim.
+    process.stdout.write(`\x1b[2J\x1b[H${word}\r\n\r\n› \x1b[2mAsk Codex to do anything\x1b[0m\x1b[3;3H`);
+    return;
+  }
   process.stdout.write(`\x1b[2J\x1b[H${word}\r\n`);
   setTimeout(() => process.exit(0), 50);
 }
@@ -57,6 +66,7 @@ process.stdin.on("data", (b) => {
       return done("QUIT");
     } else if (ch === "\r") {
       note("key Enter");
+      if (mode === "enter-ignored") continue;
       return done(selected === 1 ? "TRUSTED" : "QUIT");
     } else {
       note(`key ${JSON.stringify(ch)}`);

@@ -191,7 +191,8 @@ started.
 Reviewers started by `hoptell team up` (team reviewers) are different: their role is
 `reviewer,<team>`, so `@<team>` reaches the whole team and `@reviewer` every reviewer. Stop,
 restart and end them only with `hoptell team stop <name>`, `hoptell team restart <name>` and
-`hoptell team down <team>`, which act on the session hoptell recorded. The team's supervisor ends a
+`hoptell team down <team>`, which act on the session hoptell recorded. Team reviewers restart
+fresh unless the team file sets `"resume": "auto"`. The team's supervisor ends a
 team reviewer that stayed idle for the team file's `idleMinutes`, and tells this session. Team
 files, landing and implementers are in the `hoptell-implementers` skill.
 

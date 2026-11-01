@@ -57,7 +57,7 @@ test("the manifest: every field exact; options only as the prompt table has them
     team: { team: "Bad Team" },
     session: { session: "" },
     scope: { scope: { root: "relative", folder: "/x" } },
-    cli: { cli: { name: "claude", path: "/x/claude", version: "0.165.0" } },
+    cli: { cli: { name: "gemini", path: "/x/gemini", version: "0.165.0" } },
     host: { host: { pid: 1, start: "s", uid: 501, boot: "b" } },
     tmux: { tmux: { socket: "/s", session: "3", pane: "%7" } },
     subtype: { subtype: "approval" },

@@ -5,7 +5,7 @@
 Upgrade note: this release changes the relay protocol (capability `status`). Upgrade the relay
 and the Telegram bridge, restart the bridge, and restart lead sessions. With an older relay
 nothing is published; with an older bridge `/team` is an unknown command. The Telegram cards
-for landing, auto-land and Codex's folder trust need the bridge from this release too. An older
+for landing, auto-land and the folder trust of Codex, Claude Code and agy need the bridge from this release too. An older
 relay still sends `@all` and `@<role>` messages to the injectors' own connections (below), and
 hoptell before 0.4.0 lists those connections in `list_peers`. A session started with `hoptell
 tmux` before the upgrade keeps its old injector, which does not watch for prompts; start it again.
@@ -58,6 +58,26 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   recorded, never on a name, and send no signal when that process cannot be confirmed; a team is
   down only when every stop is confirmed. `down` removes only clean worktrees and branches with
   nothing unlanded, and names what it keeps. See "Agent teams" in the README.
+- `hoptell team restart <member> [--fresh | --resume]` stops a member that still runs and then
+  starts it. It starts nothing if that stop is not confirmed, or while a process still runs in
+  the member's worktree. It continues the member's
+  conversation when the team file's new `resume` field is `auto` (the default for implementers;
+  reviewers default to `never`) and hoptell can tie the conversation to the member's last launch
+  and folder; otherwise it starts fresh, says why, and tells the member it remembers nothing of
+  before. Claude Code members start with `--session-id` and `-n <member>` and resume with
+  `--resume` when hoptell's Claude Code hooks recorded the session starts of exactly one Claude
+  Code process under the member's name since its launch; otherwise they restart fresh. Codex
+  members resume with `codex resume <id>`, with the id that Codex sends to the member's hoptell MCP
+  server, checked against Codex's session file. agy members always restart fresh. `--resume`
+  refuses instead of starting fresh; a resumed CLI that quits within 10 seconds with an error
+  status is started once more, fresh. A resume warns when the CLI's version changed, and for
+  Claude Code when the role template changed (only `--fresh` applies it). `team down` forgets the
+  conversations.
+- Contained implementers ship switched off. `team up` and `team restart` check whether a Codex
+  implementer's launch could count as contained (kept out of the repository's git metadata), so
+  that `hoptell worktree commit` could leave it running. No Codex version has passed hoptell's
+  tests yet, so every member is uncontained, starts as before, and must stop before a commit.
+  `team status` shows each implementer's state and the first check that failed.
 - Team members' hoptell MCP servers leave out `ask_owner` and `spawn_agent` and refuse direct
   calls to them; owner questions and new agents go through the lead. `team up` and `team restart`
   set `HOPTELL_TEAM_MEMBER` in the session's environment. This is a policy, not a security boundary: a
@@ -160,7 +180,7 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
 - `hoptell worktree commit` commits a file replaced by a folder, or a folder replaced by a file,
   in one commit, and refuses a nested repository (a folder holding a `.git`) anywhere it reads.
 - Sessions that wait: the injector of a `hoptell tmux` session normally looks at its pane every
-  15 seconds, or every 2 seconds while watching Codex's startup trust prompt. When the agent shows a prompt that needs you (a folder trust question, an approval, a
+  15 seconds, or every 2 seconds while watching an agent's startup trust prompt. When the agent shows a prompt that needs you (a folder trust question, an approval, a
   sign-in, an update) or its screen has not changed for 10 minutes while it works
   (`HOPTELL_STALL_MINUTES`), `hoptell team status` shows it with the attach command, a team
   member's lead gets one inbox message, and your Telegram owner channel gets a short note that
@@ -185,13 +205,59 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   result from the Mac within 3 minutes of the tap, the card says to look at the terminal; a late
   result still replaces that. Only options whose keys were checked live on that Codex version
   get a button; `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` shows and presses unchecked ones
-  too, and its card says it is in test mode. Other prompts, including Claude Code's own trust
-  question, stay notes. Limit: hoptell sees the screen in snapshots. If Codex was already past
+  too, and its card says it is in test mode. Other prompts stay notes. Limit: hoptell sees the screen in snapshots. If Codex was already past
   its startup prompt before hoptell's first look and later shows text that looks the same, a tap
   could type a stray "1" and Enter, or "2", into the session, and between its last look and the
   key hoptell does not see the screen.
+- Claude Code's and agy's folder trust from Telegram too: Claude Code 2.1.314 and agy 1.4.11,
+  started fresh by `hoptell tmux` or `hoptell team up` / `team restart` in their folder, get a
+  card like Codex's. Neither shows digits, so the buttons are the rows. Quit is Esc for both,
+  checked live; Trust is not checked live yet and shows only in test mode. Claude Code's Trust is
+  Down (from "No, exit" only), a fresh look with "Yes, I trust this folder" selected, then Enter;
+  agy's is a fresh look, then Enter. The card says what the trust covers: Claude Code records it
+  for the repository's main folder, so from a worktree or subfolder it covers the whole
+  repository; agy records the folder it shows. A launch in your home folder, a resumed
+  conversation, a wrapper in front of the CLI (`env`, a shell), or any flag outside the fresh
+  rules gets the note. A team member's launch is matched word for word against the line
+  `team up` built for it.
+- A Telegram answer to a folder trust prompt (Codex, Claude Code or agy) now counts as done only
+  when hoptell sees it take within 5 seconds of the last key: after Trust, the agent's empty
+  input; after Quit, the agent's end. Otherwise the card says hoptell may have pressed it and to
+  look at the terminal, with what it saw: the prompt still there, the agent ended after Trust,
+  still running after Quit, or nothing it could read. Claude Code drops an Enter that comes as
+  its dialog draws, so a key sent is not a key taken.
+- The waiting-session watch takes the agent's CLI from the launch record when the record names
+  it (a launch the start gate resolved), not from tmux's name for the pane's program: for Claude Code installed as `~/.local/bin/claude`,
+  a link to a file named by its version, that name is `2.1.314`.
+- Fixed: a waiting session's lead message, Telegram note and folder trust card are no longer
+  lost when the relay cannot be reached as the prompt appears, or the bridge is not back on it
+  yet after a relay restart (a network drop during `team up` left Codex members at their trust
+  prompt with no card). The injector tries again every 15
+  seconds while the prompt is still on the screen. A delayed card is made only if the startup
+  gate and the card's 10-minute limit still allow it, and closes at the latest 12 minutes after
+  the launch; otherwise the note goes instead. A prompt that is gone by then is not reported. A
+  card or note that may already have arrived goes again as the same one, which the bridge shows
+  once; the lead's message may arrive twice after a lost connection. A credential the relay
+  refuses is not tried again.
+- Fixed: `hoptell team status` no longer names an implementer's branch as if it still existed
+  after its worktree was removed: it shows `(deleted: it landed)`, `(deleted: it had no
+  commits)` or `(kept: <why>)` next to it.
+- The README's example swarm starts its reviewer with a launch prompt that names the session
+  whose review requests are its task, as the `hoptell-reviewers` skill does. Without one, a
+  reviewer asks you before it reviews a peer's request.
 - Fixed: after you pair Telegram again, the bridge no longer files an agent's "last talked" time
   from the earlier pairing under the new one.
+- Kept names: a Claude Code session without `HOPTELL_NAME` can keep its automatic name when its
+  MCP server restarts in the same Claude Code process and the recorded session events identify
+  one conversation. It also keeps the name after a relay restart.
+  The relay (capability `name-ticket`) gives the name a random ticket, which the MCP server keeps
+  in `~/.hoptell/names/`. While the ticket is valid (7 days after its last use), other sessions
+  get other automatic names, and a protocol-1 client asking for that name is refused. This needs
+  the relay from this release and hoptell's Claude Code hooks. When hoptell cannot tell for sure
+  that a start continues the same conversation, the session takes a new automatic name as
+  before, and `list_peers` says why once. `hoptell doctor` shows for each running session
+  whether its name is kept. With an older relay nothing changes. A relay rolled back to an older
+  release costs one reconnect, after which the session takes a new automatic name.
 
 ## 0.3.2 (2026-10-27)
 

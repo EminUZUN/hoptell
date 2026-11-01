@@ -11,8 +11,9 @@ import { BIN } from "../lib/config.js";
 import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { currentBoot, parseLsofCwds, processCwds, processCwdsScan, processIdentity, processTable } from "../lib/host.js";
 import { withLock } from "../lib/locks.js";
-import { addWorktree, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberState, processIn, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
+import { addWorktree, bindContainedCodex, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberContainment, memberState, processIn, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
 import { sleep } from "./helpers.js";
+import { MECHANISM } from "../lib/contain.js";
 
 // Git for setting up the test repositories: no system or global configuration of the developer's.
 const gitEnv = { PATH: process.env.PATH, HOME: os.tmpdir(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", LC_ALL: "C" };
@@ -415,6 +416,83 @@ function explain(home, member, st) {
 }
 
 const startAs = (home, rec, pid) => startMemberSession(home, rec, () => ({ sessionId: "$7", pane: "%9", pid: String(pid) }));
+
+test("a commit leaves a running member alone only while its launch counted as contained, a VERIFIED row holds and the rechecks pass; a failed recheck makes it uncontained for good", async (t) => {
+  const s = setup(t);
+  await add(s, { cli: "claude" });
+  const codex = await addWorktree(s.home, { repo: s.repo, member: "dana-impl-2", team: "n1", cli: "codex" });
+  const p = paneProcess(t);
+  const contained = { contained: true, set: "B", version: "0.165.0", why: null, at: new Date().toISOString(), recheck: { set: "B" } };
+  await startMemberSession(s.home, codex, () => ({ sessionId: "$7", pane: "%9", pid: String(p.pid) }), { containment: contained });
+  assert.deepEqual(memberContainment(s.home, "dana-impl-2"), contained);
+  fs.writeFileSync(path.join(s.wt, "lib", "x.js"), "changed\n");
+  fs.writeFileSync(path.join(codex.path, "lib", "x.js"), "codex change\n");
+  const table = [{ cli: "codex", mechanism: MECHANISM.B, class: "contained", min: "0.165.0", max: "0.165.0", checked: "2026-10-30", evidence: "test" }];
+  const seen = [];
+  const passing = { verified: table, recheck: (home, m, rec) => (seen.push([m, rec.containment.set]), { ok: true }) };
+  // The shipped table holds no row: the member counts as uncontained, and the commit refuses.
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }), "member_running", /dana-impl-2 \(codex\) is still running/);
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { containment: { recheck: passing.recheck } }), "member_running");
+  assert.deepEqual(seen, [], "no recheck without a VERIFIED row");
+  // With a row and passing rechecks: the commits run, the member's own says it is running.
+  const one = await commitWorktree(s.home, "dana-impl-1", { message: "m" }, { containment: passing });
+  assert.equal(one.running, false);
+  const two = await commitWorktree(s.home, "dana-impl-2", { message: "m" }, { containment: passing });
+  assert.equal(two.running, true);
+  assert.ok(seen.length >= 4 && seen.every(([m, set]) => m === "dana-impl-2" && set === "B"), "checked again before the branch moved");
+  // Another process in its worktree is not the member's session: the commit waits for it.
+  const stray = { cwds: () => [{ pid: 600, cwd: path.join(codex.path, "lib"), command: "sh" }] };
+  await refusal(() => commitWorktree(s.home, "dana-impl-1", { message: "m" }, { procs: stray, containment: passing }), "member_running", /process 600 \(sh\) runs in its worktree/);
+  // Every other command still waits for it to stop.
+  await refusal(() => diffWorktree(s.home, "dana-impl-1"), "member_running");
+  await refusal(() => removeWorktree(s.home, "dana-impl-1"), "member_running");
+  // A failed recheck refuses with its reason and records the member as uncontained.
+  fs.writeFileSync(path.join(codex.path, "lib", "x.js"), "again\n");
+  const failing = { verified: table, recheck: () => ({ ok: false, why: "row X: process 7 (sh) runs outside the sandbox" }) };
+  await refusal(() => commitWorktree(s.home, "dana-impl-2", { message: "m" }, { containment: failing }), "member_running", /It no longer counts as contained \(row X: process 7 \(sh\) runs outside the sandbox\)/);
+  assert.deepEqual(memberContainment(s.home, "dana-impl-2"), { ...contained, contained: false, why: "recheck: row X: process 7 (sh) runs outside the sandbox" });
+  await refusal(() => commitWorktree(s.home, "dana-impl-2", { message: "m" }, { containment: passing }), "member_running");
+  await p.stop();
+});
+
+test("a contained member's codex process is recorded once, after it started; one that cannot be told apart makes the member uncontained", async (t) => {
+  const s = setup(t);
+  const rec = await add(s);
+  const argv = ["/usr/bin/env", "codex", "-a", "never"];
+  const contained = { contained: true, set: "B", version: "0.165.0", why: null, at: new Date().toISOString(), recheck: { set: "B", argv, codex: null } };
+  await startMemberSession(s.home, rec, () => ({ sessionId: "$7", pane: "%9", pid: String(process.pid) }), { containment: contained });
+  const root = JSON.parse(fs.readFileSync(path.join(s.home, "worktrees", "sessions", "dana-impl-1.json"), "utf8")).root;
+  const table = () => new Map([[700, { ppid: root.pid }], [701, { ppid: 700 }]]);
+  const procs = { table, commandLine: (pid) => (pid === 700 ? argv : null), state: () => "same", identity: (pid) => ({ pid, start: "s7", uid: 501, boot: "b" }) };
+  assert.equal(bindContainedCodex(s.home, "nobody-1").ok, false);
+  assert.deepEqual(bindContainedCodex(s.home, "dana-impl-1", procs), { ok: true });
+  assert.deepEqual(memberContainment(s.home, "dana-impl-1").recheck.codex, { pid: 700, start: "s7", uid: 501, boot: "b" });
+  // Once only: a later call never moves it to another process.
+  assert.match(bindContainedCodex(s.home, "dana-impl-1", { ...procs, commandLine: (pid) => (pid === 701 ? argv : null) }).why, /recorded already/);
+  assert.equal(memberContainment(s.home, "dana-impl-1").recheck.codex.pid, 700);
+  // Two processes with the command line: not told apart, uncontained for good.
+  const c = memberContainment(s.home, "dana-impl-1");
+  const file = path.join(s.home, "worktrees", "sessions", "dana-impl-1.json");
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), containment: { ...c, recheck: { ...c.recheck, codex: null } } }));
+  assert.match(bindContainedCodex(s.home, "dana-impl-1", { ...procs, commandLine: (pid) => (pid === root.pid ? null : argv) }).why, /^2 processes of the member run the codex command line/);
+  assert.deepEqual([memberContainment(s.home, "dana-impl-1").contained, memberContainment(s.home, "dana-impl-1").why], [false, "row P: 2 processes of the member run the codex command line"]);
+  assert.match(bindContainedCodex(s.home, "dana-impl-1", procs).why, /did not count as contained/);
+});
+
+test("a member's containment record: only the documented shape is read; anything else makes the session record unreadable", async (t) => {
+  const s = setup(t);
+  const rec = await add(s);
+  const file = path.join(s.home, "worktrees", "sessions", "dana-impl-1.json");
+  await startMemberSession(s.home, rec, () => ({ sessionId: "$7", pane: "%9", pid: String(process.pid) }));
+  assert.equal(memberContainment(s.home, "dana-impl-1"), null, "absent: uncontained");
+  const good = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const containment of [{ contained: true, set: null, version: "1", why: null, at: "x", recheck: {} }, { contained: false, set: "C", version: null, why: null, at: "x", recheck: null }, { contained: false, set: null, version: null, why: null, at: "x", recheck: null, extra: 1 }, "yes"]) {
+    fs.writeFileSync(file, JSON.stringify({ ...good, containment }));
+    assert.equal(memberState(s.home, "dana-impl-1").state, "unknown", JSON.stringify(containment));
+  }
+  fs.writeFileSync(file, JSON.stringify({ ...good, containment: { contained: false, set: null, version: null, why: "row V: none", at: "x", recheck: null } }));
+  assert.equal(memberContainment(s.home, "dana-impl-1").why, "row V: none");
+});
 
 test("worktree commands refuse while any member of the repository runs, whatever its CLI, before any git runs", async (t) => {
   const s = setup(t);

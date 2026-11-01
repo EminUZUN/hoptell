@@ -208,7 +208,7 @@ test("leadStatus: the teams this session leads that are not down; states from th
       "n1",
       [
         memberRow("dana-impl-1", "implementer", 1, { cli: "codex", model: "gpt-5", effort: "high", branch: "team/n1/dana-impl-1" }),
-        memberRow("dana-impl-2", "implementer", 2),
+        memberRow("dana-impl-2", "implementer", 2, { branch: "team/n1/dana-impl-2", removed: { branch: "deleted", why: null, at: new Date(0).toISOString() } }),
         memberRow("dana-rev-1", "reviewer", 3),
         memberRow("dana-rev-2", "reviewer", 4),
         memberRow("dana-rev-3", "reviewer", 5), // its process is gone
@@ -234,6 +234,7 @@ test("leadStatus: the teams this session leads that are not down; states from th
   assert.deepEqual(states, { "dana-impl-1": "working", "dana-impl-2": "working", "dana-rev-1": "ready", "dana-rev-2": "in review", "dana-rev-3": "exited", "dana-rev-4": "exited" });
   assert.deepEqual(doc.teams[0].members[0], { name: "dana-impl-1", role: "implementer", cli: "codex", model: "gpt-5", effort: "high", branch: "team/n1/dana-impl-1", state: "working" });
   assert.equal(doc.teams[0].members[1].model, null, "the CLI's default");
+  assert.equal(doc.teams[0].members[1].branch, "team/n1/dana-impl-2 (deleted)", "its worktree was removed and the branch with it");
   assert.deepEqual(doc.teams[0].reviews, [{ id: "rv-00000002", member: "dana-impl-2", waiting: ["dana-rev-2"] }]);
   assert.notEqual(parseTeamStatus(raw, "dana-lead"), null);
   assert.equal(leadStatus(home, "erin-lead", deps) === null, false);

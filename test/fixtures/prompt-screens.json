@@ -1,5 +1,5 @@
 {
- "source": "Live captures of codex-cli 0.165.0 and Claude Code 2.1.312 (macOS, tmux), 2026-10-29: the startup folder-trust prompt of each, nothing answered and nothing saved to the trust config. Codex run directly in tmux (w80, w120, w200) and through hoptell tmux (option 2 is Quit there, Back to Agent Command Center otherwise). Rows: capture-pane -p; cursor: cursor_x, cursor_y; size: the pane size. Temporary paths are replaced with same-length placeholders. Codex in a linked worktree of an untrusted repository (w120, w200, 2026-10-30), run directly in tmux with a prompt: the variant that also names the repository root, the folder Codex trusts; no cursor recorded (cursor: null).",
+ "source": "Live captures of codex-cli 0.165.0 and Claude Code 2.1.312 (macOS, tmux), 2026-10-29: the startup folder-trust prompt of each, nothing answered and nothing saved to the trust config. Codex run directly in tmux (w80, w120, w200) and through hoptell tmux (option 2 is Quit there, Back to Agent Command Center otherwise). Rows: capture-pane -p; cursor: cursor_x, cursor_y; size: the pane size. Temporary paths are replaced with same-length placeholders. Codex in a linked worktree of an untrusted repository (w120, w200, 2026-10-30), run directly in tmux with a prompt: the variant that also names the repository root, the folder Codex trusts; no cursor recorded (cursor: null). Claude Code 2.1.314 and agy 1.4.11 (2026-10-30), each run directly in tmux, nothing trusted: the dialog at w80, w120 and w200, in a linked worktree, a subfolder, under a member's launch line, with the other row selected, and the screens that are not it (Claude Code's permission variant and a folder with a project .mcp.json, agy after one ctrl+c, agy's input once trusted); the home folder is a same-length placeholder too.",
  "screens": [
   {
    "name": "claude-trust-w120",
@@ -181,6 +181,677 @@
     "  2. Back to Agent Command Center",
     "",
     "  enter continue · esc back"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-session-trusted-input-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 2,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "      ▄▀▀▄",
+    "     ▀▀▀▀▀▀",
+    "    ▀▀▀▀▀▀▀▀",
+    "   ▄▀▀    ▀▀▄",
+    "  ▄▀▀      ▀▀▄",
+    "",
+    "  Antigravity CLI 1.4.11",
+    "  <account> (Google AI Pro)",
+    "  Gemini 3.8 Flash (Medium)",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-sessio",
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    ">",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "? for shortcuts                                                                                Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-ctrlc-once-w200",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "200x40",
+   "cursor": {
+    "x": 26,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-plain",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "press ctrl+c again to exit                                                                                                                                                     Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-member-reviewer-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 120,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-wt",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                        plan · Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-selected-no-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 10,
+    "y": 9
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-plain",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "  Yes, I trust this folder",
+    "> No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                               Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-subdir-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 120,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-repo/sub",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                               Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 120,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-plain",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                               Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-w200",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "200x40",
+   "cursor": {
+    "x": 200,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-plain",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                                                                                                               Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-w80",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "80x40",
+   "cursor": {
+    "x": 80,
+    "y": 13
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "xxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-plain",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                       Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "agy-1.4.11-trust-worktree-w120",
+   "cli": "agy",
+   "version": "1.4.11",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 120,
+    "y": 12
+   },
+   "rows": [
+    "Accessing workspace:",
+    "",
+    "/private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/agy-wt",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "  ↑/↓ Navigate · enter Confirm",
+    "                                                                                               Gemini 3.8 Flash · medium"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-homepath-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /Users/xxxxxxxx/hoptell-trustcap-home-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-homepath-w80",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "80x40",
+   "cursor": {
+    "x": 1,
+    "y": 14
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /Users/xxxxxxxx/hoptell-trustcap-home-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your",
+    " own code, a well-known open source project, or work from your team). If not,",
+    " take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-member-implementer-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-wt",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-member-reviewer-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-wt",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-member-sessionid-name-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-wt",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-projectmcp-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-mcp",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-selected-yes-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 15
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-pla",
+    " in",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    "   No, exit",
+    " ❯ Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-settings-allow-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 18
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-set",
+    " tings",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " ⚠ This folder pre-approves 2 tool permissions in .claude/settings.json:",
+    "   Bash(ls:*) and Read",
+    " These will apply without asking. Only proceed if you trust this configuration.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-subdir-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 14
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-rep",
+    " o/sub",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 14
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-pla",
+    " in",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-w200",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "200x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-plain",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this",
+    " folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-w80",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "80x40",
+   "cursor": {
+    "x": 1,
+    "y": 15
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    " xxxxxxxxxxxxxxxxxxxx/trustcap/claude-plain",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your",
+    " own code, a well-known open source project, or work from your team). If not,",
+    " take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-worktree-w120",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "120x40",
+   "cursor": {
+    "x": 1,
+    "y": 13
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/trustcap/claude-wt",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source",
+    " project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
+   ]
+  },
+  {
+   "name": "claude-2.1.314-trust-worktree-w80",
+   "cli": "claude",
+   "version": "2.1.314",
+   "launch": "direct",
+   "size": "80x40",
+   "cursor": {
+    "x": 1,
+    "y": 15
+   },
+   "rows": [
+    "",
+    "────────────────────────────────────────────────────────────────────────────────",
+    " Accessing workspace:",
+    "",
+    " /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    " xxxxxxxxxxxxxxxxxxxx/trustcap/claude-wt",
+    "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your",
+    " own code, a well-known open source project, or work from your team). If not,",
+    " take a moment to review what's in this folder first.",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " Security guide",
+    "",
+    " ❯ No, exit",
+    "   Yes, I trust this folder",
+    "",
+    " Enter to confirm · Esc to cancel"
    ]
   }
  ]

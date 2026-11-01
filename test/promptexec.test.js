@@ -11,12 +11,13 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import * as sig from "../lib/ownersig.js";
-import { CARD_MS, START_MS, answerText, answerableOptions, homeIdOf, manifestDigest, parseResult, resultKeyId, resultVerifies } from "../lib/promptcards.js";
-import { REPORT_TRIES, promptAnswers, reportSettled, resultReport } from "../lib/promptexec.js";
+import { ANSWERABLE_OF, CARD_MS, START_MS, answerText, answerableOptions, homeIdOf, manifestDigest, parseResult, resultKeyId, resultVerifies } from "../lib/promptcards.js";
+import { REPORT_TRIES, SETTLE_MS, promptAnswers, reportSettled, resultReport } from "../lib/promptexec.js";
 import { promptFileOf, readPromptRecord, writePromptRecord } from "../lib/promptflow.js";
 import { classifyPrompt } from "../lib/prompts.js";
 import { processIdentity } from "../lib/host.js";
 import { injector } from "../lib/tmux.js";
+import { GAP_MS, readLaunch, startGate, writeExit, writeLaunch } from "../lib/startgate.js";
 import { sleep } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-pex-"));
@@ -29,6 +30,8 @@ test.after(() => {
 });
 const hasTmux = spawnSync("tmux", ["-V"]).status === 0;
 const FAKE = new URL("./fixtures/fake-codex-trust.cjs", import.meta.url).pathname;
+const FOLDER_FAKE = new URL("./fixtures/fake-folder-trust.cjs", import.meta.url).pathname; // Claude Code and agy
+const VERSION = { codex: "0.165.0", claude: "2.1.314", agy: "1.4.11" };
 const tm = (...args) => execFileSync("tmux", args, { encoding: "utf8" }).trim();
 
 const ME = "m_mmmmmmmmmmmmmmmmmmmmmmmmmm";
@@ -41,35 +44,50 @@ const RK = "9".repeat(64); // the answer's result key
 let n = 0;
 
 /**
- * A stand-in dialog in its own tmux session, the launch it belongs to (the gate's), a home with its
- * prompt record, and the handler. `untested`: the launch's test switch (the table's Trust and Quit
- * are not checked live yet); `over`: manifest fields that differ from the launch.
+ * A stand-in dialog of `cli` in its own tmux session, the launch it belongs to (the gate's), a home
+ * with its prompt record, and the handler. `untested`: the launch's test switch (the table's Trust
+ * and Quit are not checked live yet); `over`: manifest fields that differ from the launch;
+ * `realGate`: the launch record written and the real gate (lib/startgate.js) over it, fed the
+ * first read, instead of a stand-in.
  */
-async function world(t, { mode = "normal", armed = true, untested = true, over = {}, ops: wrap = (o) => o, now = Date.now, report = null } = {}) {
+async function world(t, { cli = "codex", mode = "normal", armed = true, untested = true, realGate = false, over = {}, ops: wrap = (o) => o, now = Date.now, report = null } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-pex-home-")));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const log = path.join(home, "keys.log");
   const ctl = path.join(home, "ctl");
   const session = `hoptell-pex-${process.pid}-${n++}`;
-  const [sessionId, pane, pid] = tm("new-session", "-d", "-x", "200", "-y", "40", "-P", "-F", "#{session_id} #{pane_id} #{pane_pid}", "-s", session, `${process.execPath} ${FAKE} ${log} ${mode} ${ctl}`).split(" ");
+  const folder = "/private/tmp/x";
+  const run = cli === "codex" ? `${process.execPath} ${FAKE} ${log} ${mode} ${ctl}${realGate ? ` ${folder}` : ""}` : `${process.execPath} ${FOLDER_FAKE} ${log} ${cli} ${mode} ${ctl} ${folder}`;
+  const [sessionId, pane, pid] = tm("new-session", "-d", "-x", "200", "-y", "40", "-P", "-F", "#{session_id} #{pane_id} #{pane_pid}", "-s", session, run).split(" ");
   t.after(() => spawnSync("tmux", ["kill-session", "-t", `=${session}`]));
   for (let i = 0; i < 100 && !fs.existsSync(log); i++) await sleep(20);
   await sleep(100);
   const inj = injector(pane, pid);
   const read = inj.look();
-  const p = classifyPrompt(read.screen, { cli: "codex", version: "0.165.0" });
+  const p = classifyPrompt(read.screen, { cli, version: VERSION[cli], cursor: read.cursor });
   assert.equal(p?.actionable, true, read.screen);
   const at = now();
-  const launch = {
+  const socket = tm("display-message", "-p", "-t", pane, "#{socket_path}");
+  let launch = {
     id: "2".repeat(32),
-    cli: { name: "codex", path: "/opt/homebrew/bin/codex", version: "0.165.0" },
-    folder: "/private/tmp/x",
-    root: "/private/tmp/x",
-    tmux: { socket: tm("display-message", "-p", "-t", pane, "#{socket_path}"), session: sessionId, pane },
+    cli: { name: cli, path: `/opt/homebrew/bin/${cli}`, version: VERSION[cli] },
+    folder,
+    root: folder,
+    scope: cli === "codex" ? null : "folder",
+    tmux: { socket, session: sessionId, pane },
     host: processIdentity(Number(pid)),
     untested,
     started: at,
   };
+  let gate;
+  if (realGate) {
+    const { cli: c, root, scope, tmux: x, host } = launch;
+    writeLaunch(home, "me-alice", { cli: c, root, scope, gate: { state: "armed", why: null, at }, folder, tmux: x, host, untested, now });
+    gate = startGate(home, "me-alice", { pane, pid, session: sessionId, socket, now });
+    gate.observe({ ...read, prompt: p });
+    assert.equal(gate.armed(), true);
+    launch = gate.launch;
+  }
   const manifest = {
     hoptell_prompt_manifest: 1,
     realm: REALM,
@@ -79,12 +97,12 @@ async function world(t, { mode = "normal", armed = true, untested = true, over =
     launch: launch.id,
     team: null,
     session: "me-alice",
-    scope: { root: launch.root, folder: launch.folder },
+    scope: cli === "codex" ? { root: launch.root, folder: launch.folder } : { root: launch.root, folder: launch.folder, kind: launch.scope },
     cli: { ...launch.cli },
     host: { ...launch.host },
     tmux: { ...launch.tmux },
-    subtype: "codex-startup-trust",
-    options: answerableOptions("0.165.0")[0].map((o) => JSON.parse(JSON.stringify(o))),
+    subtype: ANSWERABLE_OF[cli],
+    options: answerableOptions(VERSION[cli], cli)[0].map((o) => JSON.parse(JSON.stringify(o))),
     untested,
     selected: p.selected,
     dialog: p.dialog,
@@ -96,10 +114,10 @@ async function world(t, { mode = "normal", armed = true, untested = true, over =
   };
   const digest = manifestDigest(manifest);
   writePromptRecord(home, "me-alice", { digest, manifest, state: "published" });
-  const gate = { launch, on: armed, offs: [], observed: [], armed: () => gate.on, off: (why) => (gate.on = false, gate.offs.push(why)), observe: (r) => gate.observed.push(r) };
+  gate ??= { launch, on: armed, offs: [], observed: [], armed: () => gate.on, off: (why) => (gate.on && gate.offs.push(why), gate.on = false), observe: (r) => gate.observed.push(r) };
   const reports = [];
   const logs = [];
-  const ops = wrap({ pane: inj.pane, pid: inj.pid, look: inj.look, paneAlive: inj.paneAlive, inMode: inj.inMode, keyIdle: inj.keyIdle, press: inj.press });
+  const ops = wrap({ pane: inj.pane, pid: inj.pid, look: inj.look, paneAlive: inj.paneAlive, inMode: inj.inMode, keyIdle: inj.keyIdle, press: inj.press, sessionGone: inj.sessionGone, binding: inj.binding });
   const handler = promptAnswers(home, "me-alice", { gate, ops, report: report ?? (async (r) => (reports.push(r), { note: true, lead: true })), pin: () => PIN, now, lockMs: 300, log: (l) => logs.push(l) });
   /** The owner's signed answer for `choice`, as the bridge makes it. */
   const envelope = (choice, { to = { name: CTL, member: ME }, issuedAt = now(), d = digest, nonce = manifest.nonce, kind = "prompt_answer" } = {}) =>
@@ -107,7 +125,7 @@ async function world(t, { mode = "normal", armed = true, untested = true, over =
   let confirmed = 0;
   const answer = (text, from = "me-owner") => handler.onMessage({ from, text }, () => confirmed++, CONN);
   const keys = () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("key") || /^(QUIT|TRUSTED)$/.test(l));
-  return { home, log, ctl, pane, inj, gate, reports, logs, manifest, digest, envelope, answer, handler, keys, confirmed: () => confirmed, state: () => readPromptRecord(home, "me-alice") };
+  return { home, log, ctl, pane, pid, inj, gate, reports, logs, manifest, digest, envelope, answer, handler, keys, confirmed: () => confirmed, state: () => readPromptRecord(home, "me-alice") };
 }
 const outcome = (w) => [w.keys(), w.state().state, w.state().why];
 
@@ -119,7 +137,7 @@ test("Quit: the signed answer is taken once, recorded before the key, and only \
   assert.deepEqual(w.state().answer, { choice: "2", result_key: RK });
   assert.deepEqual(w.state().report, { outcome: "done", why: null, label: "Quit", note: true, lead: true, tries: 1 });
   assert.deepEqual(w.gate.offs, ["answered"]);
-  assert.deepEqual(w.reports, [{ outcome: "done", why: null, label: "Quit", digest: w.digest, nonce: w.manifest.nonce, key: RK, note: true, lead: true }]);
+  assert.deepEqual(w.reports, [{ outcome: "done", why: null, label: "Quit", digest: w.digest, nonce: w.manifest.nonce, key: RK, cli: "codex", note: true, lead: true }]);
   assert.equal(w.confirmed(), 1);
   // The same answer again, or another tap: never tried again, and a report already taken is not sent again.
   await w.answer(w.envelope("2"));
@@ -355,7 +373,7 @@ test("a result not taken is kept and tried again, a bounded number of times; the
   await w.answer(w.envelope("2"));
   assert.deepEqual(w.keys(), ["key 2", "QUIT"]);
   assert.equal(calls.length, 3);
-  assert.deepEqual(calls.at(-1), { outcome: "done", why: null, label: "Quit", digest: w.digest, nonce: w.manifest.nonce, key: RK, note: true, lead: false }, "the part not taken yet only");
+  assert.deepEqual(calls.at(-1), { outcome: "done", why: null, label: "Quit", digest: w.digest, nonce: w.manifest.nonce, key: RK, cli: "codex", note: true, lead: false }, "the part not taken yet only");
   assert.deepEqual([w.state().report.note, w.state().report.lead], [true, true]);
   assert.equal(await w.handler.flush({ force: true }), true);
   assert.equal(calls.length, 3, "taken: never sent again");
@@ -461,4 +479,146 @@ test("a record left \"attempting\" by an injector that stopped becomes unknown/i
   assert.deepEqual(calls.map((c) => [c.outcome, c.why, c.label, c.key]), [["unknown", "interrupted", "Trust folder", RK]]);
   assert.deepEqual(w.gate.offs, ["answered"]);
   assert.deepEqual(w.keys(), [], "nothing pressed");
+});
+
+// ---- Claude Code 2.1.314 and agy 1.4.11 (design 10, trust buttons) ----------------------------
+
+const gateWhy = (w) => readLaunch(w.home, "me-alice")?.gate;
+
+test("Claude Code and agy Quit: Esc only, checked live (no test switch needed); the agent's end is the evidence", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  for (const cli of ["claude", "agy"]) {
+    const w = await world(t, { cli, untested: false });
+    const quit = w.manifest.options.find((o) => o.action === "quit");
+    await w.answer(w.envelope(quit.key));
+    assert.deepEqual(outcome(w), [["key Escape", "QUIT"], "done", null], cli);
+    assert.deepEqual(w.gate.offs, ["answered"]);
+    // Trust is not checked live yet: without the test switch it is refused, nothing pressed.
+    const v = await world(t, { cli, untested: false });
+    await v.answer(v.envelope(v.manifest.options.find((o) => o.action === "trust").key));
+    assert.deepEqual(outcome(v), [[], "refused", "changed"], cli);
+  }
+});
+
+test("the normal two-key success with the real gate: Claude Code Down, a fresh read with Yes selected, Enter; Codex \"1\", the read, Enter; agy the read, Enter; the gate ends after the last key and the input box makes it done", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  for (const [cli, choice, keys] of [["claude", "2", ["key Down", "key Enter", "TRUSTED"]], ["codex", "1", ["key 1", "key Enter", "TRUSTED"]], ["agy", "1", ["key Enter", "TRUSTED"]]]) {
+    // The gate is asked right before the Enter: still armed, the frame matched with the selection moved.
+    let w = null;
+    let armedAtEnter = null;
+    w = await world(t, { cli, realGate: true, ops: (o) => ({ ...o, press: (k, x) => (k[0] === "Enter" && (armedAtEnter = w.gate.armed()), o.press(k, x)) }) });
+    await w.answer(w.envelope(choice));
+    assert.equal(armedAtEnter, true, cli);
+    assert.deepEqual(outcome(w), [keys, "done", null], cli);
+    assert.deepEqual([gateWhy(w).state, gateWhy(w).why], ["off", "answered"], cli);
+    assert.equal(w.gate.armed(), false);
+    assert.equal(w.reports[0].label, "Trust folder");
+  }
+});
+
+test("Claude Code: a lost Down never brings the Enter (unknown, not tried again); the selection on Yes at the card's read, or moved there before the press, refuses with nothing sent", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  const w = await world(t, { cli: "claude", mode: "lost-down", realGate: true });
+  await w.answer(w.envelope("2"));
+  assert.deepEqual(outcome(w), [["key Down"], "unknown", "changed"]);
+  await w.answer(w.envelope("2"));
+  assert.deepEqual(w.keys(), ["key Down"], "unknown is never tried again");
+  // "Yes" selected when the card was made: Trust's Down would move it back to "No, exit".
+  const v = await world(t, { cli: "claude", mode: "start-on-2" });
+  assert.equal(v.manifest.selected, 2);
+  await v.answer(v.envelope("2"));
+  assert.deepEqual(outcome(v), [[], "refused", "changed"]);
+  // The selection moved after the card's read (another key, played here): not the card's dialog.
+  const u = await world(t, { cli: "claude" });
+  tm("send-keys", "-t", u.pane, "Down");
+  await sleep(200);
+  await u.answer(u.envelope("2"));
+  assert.deepEqual(outcome(u), [["key Down"], "refused", "changed"], "only the played key");
+});
+
+test("an attempt aborts between the keys, with no further key: another frame, a read gap over GAP_MS, the startup window's end", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  // Another frame after the Down (the dialog drawn for another folder).
+  const w = await world(t, { cli: "claude", realGate: true, ops: (o) => ({ ...o, press: (k, x) => (k[0] === "Down" && fs.writeFileSync(w.ctl, "redraw\n"), o.press(k, x)) }) });
+  await w.answer(w.envelope("2"));
+  await sleep(300);
+  assert.deepEqual(outcome(w), [["key Down"], "unknown", "changed"]);
+  // A gap between the reads, and the outer cap: a clock that jumps after the first key.
+  for (const jump of [GAP_MS + 1, START_MS + CARD_MS]) {
+    let clock = Date.now();
+    const v = await world(t, { cli: "codex", realGate: true, now: () => clock, ops: (o) => ({ ...o, press: (k, x) => { const r = o.press(k, x); if (k[0] === "1") clock += jump; return r; } }) });
+    await v.answer(v.envelope("1"));
+    assert.deepEqual(outcome(v), [["key 1"], "unknown", "changed"], String(jump));
+    assert.notEqual(gateWhy(v).why, "answered", "the gate ended by its own rule first");
+  }
+});
+
+test("the settle read: done only on positive evidence; the dialog still there, the agent ended after Trust, another screen, no reading, or the agent still running after Quit are unknown; no second key", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  let blind = false;
+  const cases = [
+    // Claude Code drops the Enter: the dialog stays, Yes selected.
+    [{ cli: "claude", mode: "drop-enter" }, "2", [["key Down", "key Enter"], "unknown", "shown"]],
+    [{ cli: "claude", mode: "trust-exits" }, "2", [["key Down", "key Enter", "TRUSTED"], "unknown", "ended"]],
+    [{ cli: "agy", mode: "trust-other" }, "1", [["key Enter", "TRUSTED"], "unknown", "unseen"]],
+    [{ cli: "codex", mode: "enter-ignored" }, "1", [["key 1", "key Enter"], "unknown", "shown"]],
+    [{ cli: "agy", mode: "quit-stays", untested: false }, "2", [["key Escape", "QUIT"], "unknown", "running"]],
+    // No capture counts for the whole bound.
+    [{ cli: "codex", ops: (o) => ({ ...o, look: () => (blind ? null : o.look()), press: (k, x) => ((blind = k[0] === "Enter"), o.press(k, x)) }) }, "1", [["key 1", "key Enter", "TRUSTED"], "unknown", "unseen"]],
+  ];
+  const t0 = Date.now();
+  await Promise.all(cases.map(async ([opts, choice, want]) => {
+    const w = await world(t, opts);
+    await w.answer(w.envelope(choice));
+    await sleep(100);
+    assert.deepEqual(outcome(w), want, JSON.stringify(opts.mode ?? opts.cli));
+  }));
+  assert.ok(Date.now() - t0 >= SETTLE_MS, "bounded by SETTLE_MS, not shorter");
+});
+
+test("the settle read: blank and partly drawn reads are no reading, then the input box is done; a Quit whose agent's end hoptell prompt-wait noted is done", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  let after = 0;
+  const w = await world(t, { cli: "agy", ops: (o) => ({ ...o, press: (k, x) => ((after = 1), o.press(k, x)), look: () => {
+    const r = o.look();
+    if (!after || !r) return r;
+    after++;
+    return after <= 2 ? { ...r, screen: "", inputShown: false } : after <= 3 ? { ...r, screen: "TRUSTED\n", inputShown: false } : r;
+  } }) });
+  await w.answer(w.envelope("1"));
+  assert.deepEqual(outcome(w), [["key Enter", "TRUSTED"], "done", null]);
+  assert.ok(after >= 4);
+  // The window's shell outlives the agent: its note that the agent ended is the evidence.
+  const v = await world(t, { cli: "claude", mode: "quit-stays", untested: false, realGate: true, ops: (o) => ({ ...o, press: (k, x) => { const r = o.press(k, x); setTimeout(() => writeExit(v.home, "me-alice", v.manifest.launch, "0"), 300); return r; } }) });
+  await v.answer(v.envelope("1"));
+  assert.deepEqual(outcome(v), [["key Escape", "QUIT"], "done", null]);
+  // A note of another launch is not this one's.
+  const u = await world(t, { cli: "claude", mode: "quit-stays", untested: false, realGate: true });
+  fs.writeFileSync(path.join(u.home, "sessions", "me-alice.exited"), JSON.stringify({ launch: "5".repeat(32), status: 0, at: Date.now() }));
+  await u.answer(u.envelope("1"));
+  assert.deepEqual(outcome(u), [["key Escape", "QUIT"], "unknown", "running"]);
+});
+
+test("Claude Code without a cursor read, or with it off the marked row: no Trust; at the card's read nothing is sent, at the revalidation no Enter", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  for (const cursor of [null, undefined, { x: 5, y: 14 }, { x: 1, y: 99 }, { x: "1", y: "14" }]) {
+    const label = JSON.stringify(cursor) ?? "absent";
+    const blind = (r) => {
+      if (!r) return r;
+      const rest = { ...r };
+      delete rest.cursor;
+      return cursor === undefined ? rest : { ...rest, cursor };
+    };
+    // At the first check.
+    const w = await world(t, { cli: "claude", ops: (o) => ({ ...o, look: () => blind(o.look()) }) });
+    await w.answer(w.envelope("2"));
+    assert.deepEqual(outcome(w), [[], "refused", "changed"], label);
+    // At the revalidation only: the Down went out, the Enter never does.
+    let downed = false;
+    const v = await world(t, { cli: "claude", ops: (o) => ({ ...o, look: () => (downed ? blind(o.look()) : o.look()), press: (k, x) => ((downed = true), o.press(k, x)) }) });
+    await v.answer(v.envelope("2"));
+    assert.deepEqual(outcome(v), [["key Down"], "unknown", "changed"], label);
+  }
+});
+
+test("the settle read counts a read only in the manifest's tmux server and session: a pane in another session, or a binding that cannot be read, is never done", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  for (const b of [(o) => ({ ...o.binding(), session: "$999" }), (o) => ({ ...o.binding(), socket: "/private/tmp/other-socket" }), () => null]) {
+    let after = false;
+    const w = await world(t, { ops: (o) => ({ ...o, binding: () => (after ? b(o) : o.binding()), press: (k, x) => ((after = k[0] === "Enter"), o.press(k, x)) }) });
+    await w.answer(w.envelope("1"));
+    assert.deepEqual(outcome(w), [["key 1", "key Enter", "TRUSTED"], "unknown", "unseen"]);
+  }
 });

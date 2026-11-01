@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { processInfo, startedAtMs } from "../lib/host.js";
 import { hookSessionLabel } from "../lib/wake.js";
+import { readSessionEvents } from "../lib/sessionevents.js";
 import { COALESCE_MS, HELD_NOTICE, NOTICE } from "../lib/notices.js";
 import { sleep, world } from "./helpers.js";
 
@@ -260,6 +261,21 @@ test("hook delivery: /clear keeps the bell, and old conversations are ignored", 
   await a.call("send_message", { to: "hk7", message: "after clear" });
   const n = await host.next((e) => e.ev === "file-changed" && e.code === 2);
   assert.equal(n.stderr, NOTICE);
+});
+
+test("SessionStart appends each session id and source to the process's event log", { skip: !supported }, async (t) => {
+  const w = await world();
+  t.after(() => w.close());
+  const host = await fakeClaude(w, t);
+  const first = await host.sessionStart({ session_id: "conv-a" });
+  await host.sessionStart({ session_id: "conv-b", source: "clear" });
+  await host.sessionStart({ session_id: "conv-a", source: "resume" });
+  const bell = first.paths[0];
+  const r = readSessionEvents(path.dirname(bell), path.basename(bell, ".bell"));
+  assert.equal(r.state, "ok");
+  assert.deepEqual([...r.ids.keys()].sort(), ["conv-a", "conv-b"]);
+  assert.ok(r.ids.get("conv-b").has("clear"));
+  assert.ok(r.ids.get("conv-a").has("resume"));
 });
 
 test("hook delivery: foreign files, malformed input and concurrent callbacks", { skip: !supported }, async (t) => {

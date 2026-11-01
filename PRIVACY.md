@@ -73,6 +73,10 @@ process. None of this is sent to the relay.
   sessions or shared-token sessions, and never in `list_peers` output.
 - Name leases and reservations (which session holds a name, for up to 30 seconds after its
   connection drops) are kept in memory only.
+- Kept names (Claude Code sessions with an automatic name): for each name with a ticket, the
+  relay keeps, in memory only, the member id (or that a shared token was used), a SHA-256 hash of
+  the ticket and the time it was last used. It forgets them when it restarts, and after 7 days
+  without use. The ticket itself is not stored or logged.
 - For receivers on the current protocol, each delivered message also states how the sender
   was authenticated: the sender's member id and member name, or that a shared token was used,
   and the relay's realm id.
@@ -337,6 +341,20 @@ process. None of this is sent to the relay.
   prompt or transcript. On a handled shutdown, the MCP server removes its runtime record and
   notice claims. Ownership state is retained for later ended-host cleanup. Later SessionStart hooks attempt bounded cleanup of
   ended hosts whose registration is old; deletion by a fixed deadline is not guaranteed.
+- Kept names (Claude Code): the SessionStart hook appends the session id and its start reason
+  (such as `startup`, `resume` or `clear`) to `<key>.events` in `~/.hoptell/wake/` (0600, at
+  most 64 lines). Every hoptell MCP server of a Claude Code session keeps `<key>.names.json`
+  there with its process id and start time, the process id and start time of the Claude Code
+  process's parent, its peer name, the time it was written, and whether
+  its name is kept (or why not). `hoptell doctor` shows it, and `hoptell team` uses it to find a
+  stopped member's conversation. Both are
+  removed with the registration. In `~/.hoptell/names/` (0700; files 0600, named after hashes)
+  the MCP server keeps one record per kept name, with the relay profile id, the relay's realm id
+  and the member id it was kept for, the name, its ticket, the ids of the session records that
+  point to it, and the time it was last used, and one record per Claude Code session id that
+  points to a name, with the same realm and member ids. Records unused for 7 days are removed
+  when later MCP servers start, a batch at a time. The ticket is a secret for that name: it is
+  never shown in `list_peers`, logs or `hoptell doctor`.
 - Session titles from Claude Code (unless `HOPTELL_TITLE_AUTO=off`): the `SessionStart` and
   `UserPromptSubmit` hooks copy the session's custom name and its session id into
   `<key>.title.json` in `~/.hoptell/wake/` (0600, at most 1 KiB). They never copy the prompt

@@ -180,6 +180,55 @@ test("the surfaces: one lead notice per occurrence with the attach command (team
   assert.deepEqual([told.length, notes.length, notes[1].kind, notes[1].team], [2, 2, "stall", null]);
 });
 
+test("the surfaces: what the relay could not take is sent again while the occurrence holds, the note charged to the budget once; an occurrence that ended is owed nothing", async (t) => {
+  const home = tmpHome(t);
+  let at = NOW;
+  let reach = false;
+  const told = [];
+  const notes = [];
+  // null: the relay could not be reached (lib/control.js).
+  const control = { tell: async (to, text) => (reach ? (told.push({ to, text }), true) : null), note: async (text) => (reach ? (notes.push(parseWaitNote(text)), true) : null) };
+  const s = waitSurface(home, "me-alice", { control, team: { team: "n4", lead: "me-lead" }, folder: "app", now: () => at, retryMs: 15_000 });
+  const rec = occurrence(home, "me-alice", { kind: "prompt", subtype: "approval", actionable: false, since: NOW });
+  await s.start(rec);
+  assert.deepEqual([told.length, notes.length], [0, 0]);
+  reach = true;
+  at += 5000;
+  await s.tick();
+  assert.deepEqual([told.length, notes.length], [0, 0], "not due yet");
+  at += 10_000;
+  await s.tick();
+  assert.deepEqual([told.length, notes.length], [1, 1]);
+  assert.equal(notes[0].nonce, rec.nonce, "the same occurrence, so the bridge shows it once");
+  assert.equal(notes[0].minutes, 0);
+  assert.match(told[0].text, new RegExp(`needs a look: .*\\(${rec.id}\\)`));
+  // Charged once: the budget holds one note, not one per try.
+  assert.equal(JSON.parse(fs.readFileSync(`${home}/v2/waits/budget.json`, "utf8")).sent.length, 1);
+  // Nothing more is owed.
+  at += 60_000;
+  await s.tick();
+  await s.retry();
+  assert.deepEqual([told.length, notes.length], [1, 1]);
+  // Down again for the next occurrence, which then ends: nothing is sent for it when the relay is back.
+  reach = false;
+  const next = occurrence(home, "me-alice", { kind: "stall", subtype: "busy", actionable: false, since: at - 11 * 60_000 });
+  await s.start(next);
+  s.end(next);
+  reach = true;
+  at += 60_000;
+  await s.tick();
+  await s.retry();
+  assert.deepEqual([told.length, notes.length], [1, 1]);
+  // A refusal (false) is not tried again.
+  const refused = [];
+  const r = waitSurface(home, "me-bob", { control: { note: async (text) => (refused.push(text), false) }, now: () => at, retryMs: 1 });
+  await r.start(occurrence(home, "me-bob", { kind: "prompt", subtype: "approval", actionable: false, since: at }));
+  at += 10;
+  await r.tick();
+  await r.retry();
+  assert.equal(refused.length, 1);
+});
+
 test("the bridge words a waiting session's note itself: never screen text, no people signal for the control name, hidden sessions skipped", async (t) => {
   const r = await ownerRelay(t);
   const home = tmpHome(t);
@@ -276,6 +325,52 @@ test("the bridge's own budget: one note per claimed session and kind every 5 min
   await send(note("me-later"));
   await until(() => waits().some((x) => / later /.test(x)), 4000, "a new hour");
   assert.equal(tg.calls("sendMessage").filter((c) => /toString|\[object/.test(c.params.text)).length, 0);
+});
+
+test("the control connection: a use whose purpose ended during the connection wait sends nothing; a refused credential is final, an identity provider out of reach is not", async (t) => {
+  const home = tmpHome(t);
+  sig.trustPin(home, sig.formatPin({ realm: REALM, name: "me-owner", pub: newKey().pub }));
+  let open;
+  const f = fakeClients({ gate: new Promise((r) => (open = r)) });
+  const control = createControl({ home, name: "me-alice", client: f.client, policy: () => ({ legacy: true }) });
+  let holds = true;
+  const note = control.note("x", { live: () => holds });
+  const tell = control.tell("me-lead", "y", { live: () => holds });
+  holds = false;
+  open();
+  assert.deepEqual([await note, await tell], [false, false]);
+  assert.equal(f.made.flatMap((c) => c.sent).length, 0);
+  assert.equal(await control.note("z"), true, "still usable");
+  control.close();
+  // The relay refuses the credential on the first connect: final, never tried again.
+  const refusing = (why) => {
+    const made = [];
+    const client = ({ name }) => {
+      const c = Object.assign(new EventEmitter(), {
+        name,
+        start: () => c,
+        async ready() {
+          c.emit("fatal", why);
+          throw new Error(`relay refused the connection: ${why}`);
+        },
+        close() {},
+      });
+      made.push(c);
+      return c;
+    };
+    return { client, made };
+  };
+  const bad = refusing("unauthorized (4003)");
+  const denied = createControl({ home, name: "me-bob", client: bad.client, policy: () => ({ legacy: true }) });
+  assert.equal(await denied.note("x"), false);
+  assert.equal(denied.offline(), false);
+  assert.equal(await denied.note("x"), false);
+  assert.equal(bad.made.length, 1, "not tried again");
+  const idp = refusing("identity provider unavailable (4003)");
+  const later = createControl({ home, name: "me-carol", client: idp.client, policy: () => ({ legacy: true }) });
+  assert.equal(await later.note("x"), null);
+  assert.equal(await later.note("x"), null);
+  assert.equal(idp.made.length, 2, "tried again");
 });
 
 test("the control connection tells onReady of every connection it gets: the first, a fresh one after it ended (a name drawn again too), and a reconnect", async (t) => {

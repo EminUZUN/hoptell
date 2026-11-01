@@ -11,7 +11,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
 import { BIN } from "../lib/config.js";
-import { MANIFEST_FIT, NOTICE_MS, leadCheck, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamApply, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { MANIFEST_FIT, NOTICE_MS, launchExit, leadCheck, memberSessionEvents, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamApply, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
 import { APPLY_WINDOW_MS, decisionText, newActionId, parseLandingRequest, parseLandingStatus, readTombstone, teamOfAction } from "../lib/landings.js";
 import * as ownersig from "../lib/ownersig.js";
 import { grantText, newGrantId, noticeText, parseNotice, readGrantState, storeGrant, writeGrantState } from "../lib/grants.js";
@@ -21,7 +21,11 @@ import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { MEMBER_HIDDEN, serveEngine } from "../lib/mcp.js";
-import { readLaunch } from "../lib/startgate.js";
+import { launchGate, readLaunch, writeExit, writeLaunch } from "../lib/startgate.js";
+import { ensureWakeDir } from "../lib/wake.js";
+import { writeNamesStatus } from "../lib/names.js";
+import { appendSessionEvent } from "../lib/sessionevents.js";
+import { recordThread } from "../lib/resume.js";
 import { sleep, world } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-teams-"));
@@ -78,7 +82,7 @@ function fakeClis(root) {
   fs.mkdirSync(bin, { recursive: true });
   const help = {
     codex: "Usage: codex [OPTIONS] [PROMPT]\n  -c, --config <key=value>\n  -m, --model <MODEL>\n  -s, --sandbox <SANDBOX_MODE>  [possible values: read-only, workspace-write, danger-full-access]\n  -a, --ask-for-approval <APPROVAL_POLICY>  [possible values: untrusted, on-request, never]\n",
-    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n',
+    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n',
   };
   const version = { codex: "codex-cli 0.164.0", claude: "2.1.311 (Claude Code)" };
   for (const cli of ["codex", "claude"]) {
@@ -124,6 +128,10 @@ test("team file: the fields, the member prefix, roles and CLIs, owns that do not
   bad(teamDoc({ members: [memberOf({ owns: ["/etc/**"] })] }), /not a glob relative/);
   bad(teamDoc({ members: [memberOf({ template: "boss" })] }), /template must be/);
   bad(teamDoc({ members: [memberOf({ lifetimeMinutes: 0 })] }), /lifetimeMinutes must be 1 to 1440/);
+  bad(teamDoc({ members: [memberOf({ resume: "yes" })] }), /resume must be auto or never/);
+  // Whether team restart continues a conversation: implementers by default, reviewers on request.
+  assert.deepEqual(ok.members.map((m) => m.resume), ["auto", "never"]);
+  assert.equal(checkTeam(teamDoc({ members: [memberOf({ resume: "never" }), { name: "dana-n1-rev-1", role: "reviewer", cli: "codex", task: "t.md", resume: "auto" }] }), { file, homedir: "/home/dana" }).members.map((m) => m.resume).join(), "never,auto");
   bad(teamDoc({ idleMinutes: { implementer: 10 } }), /implementers are never ended for idleness/);
   bad(teamDoc({ members: [] }), /members must be a list of 1 to 16/);
   bad(teamDoc({ members: Array.from({ length: 17 }, (_, i) => memberOf({ name: `dana-r${i}`, role: "reviewer", owns: undefined })) }), /1 to 16/);
@@ -160,7 +168,7 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.equal(dry.failed, null, dry.failed?.m);
   assert.match(dry.out, /hoptell worktree add dana-n1-impl-1 --team n1 --cli codex --owns 'lib\/\*\*'/);
   assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-impl-1 --roles implementer,n1 --cwd ${s.root}/repo-wt/dana-n1-impl-1 --task \\S+impl.md -- codex -s workspace-write -a never`));
-  assert.match(dry.out, /hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \S+ --task \S+rev\.md -- claude --permission-mode plan --effort high --append-system-prompt/);
+  assert.match(dry.out, /hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \S+ --task \S+rev\.md -- claude --permission-mode plan --effort high --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt/);
   assert.match(dry.out, /read your task with the hoptell read_task tool/);
   assert.match(dry.warn, /dana-n1-impl-1 \(codex\) gets write access to its worktree/);
   assert.match(dry.out, /Dry run: nothing was started/);
@@ -253,6 +261,9 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   const up = await cli("up", file, "--yes");
   assert.equal(up.code, 0, up.stderr);
   assert.deepEqual(["dana-n1-impl-1", "dana-n1-rev-1"].map((n) => readLaunch(w.home, n)?.untested), [true, true]);
+  // What memberCommand built reaches the launch record through launch() (its words' digest).
+  const digestOf = (argv) => crypto.createHash("sha256").update(JSON.stringify(argv)).digest("hex");
+  for (const [i, n] of ["dana-n1-impl-1", "dana-n1-rev-1"].entries()) assert.deepEqual(readLaunch(w.home, n)?.built, { cli: i ? "claude" : "codex", mode: "fresh", argv: digestOf(readState(w.home, "n1").members[i].argv) }, n);
   assert.match(up.stdout, /started dana-n1-impl-1 \(tmux session \$\d+\)/);
   assert.match(up.stdout, /started the supervisor/);
   // No session of the lead is online at the test relay: a warning after the start.
@@ -274,6 +285,11 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   assert.equal(show(impl.session.pane, "#{pane_current_path}"), impl.worktree);
   assert.equal(show(rev.session.pane, "#{pane_current_path}"), s.repo);
   assert.match(show(impl.session.pane, "#{pane_start_command}"), /'-s' 'workspace-write' '-a' 'never'/);
+  // A Claude Code member starts with the conversation id hoptell picked and its name (design 10, R.2).
+  assert.equal(rev.conversation.source, "assigned");
+  assert.match(show(rev.session.pane, "#{pane_start_command}"), new RegExp(`'--session-id' '${rev.conversation.id}' '-n' 'dana-n1-rev-1'`));
+  assert.equal(impl.conversation, null, "a Codex member's id is learned later");
+  assert.ok(Date.parse(impl.launch.at) <= Date.parse(impl.session.started), "the launch's start is taken before the launch call");
   assert.equal(fs.readFileSync(teamPaths(w.home, "n1").task(impl.name), "utf8"), "Implement it.\n");
   assert.match((await cli("up", file, "--yes")).stderr, /team n1 is already up/);
 
@@ -286,7 +302,12 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
 
   // The loop: the implementer works, is stopped (by its session id), the lead commits.
   fs.writeFileSync(path.join(impl.worktree, "lib", "x.js"), "export const x = 2;\n");
-  assert.match((await cli("restart", impl.name)).stderr, /still running; hoptell team stop/);
+  // Restart of a running member: stopped first (by its session id), then started again; this Codex
+  // member left no conversation hoptell can confirm, so it starts fresh and says why.
+  const first = await cli("restart", impl.name);
+  assert.equal(first.code, 0, first.stderr);
+  assert.match(first.stdout, /^stopped dana-n1-impl-1 first \(exited\)\nrestarted dana-n1-impl-1 \(tmux session \$\d+\), with a fresh conversation: no conversation of this launch was found$/m);
+  assert.equal(fs.readFileSync(path.join(impl.worktree, "lib", "x.js"), "utf8"), "export const x = 2;\n");
   const stop = await cli("stop", impl.name);
   assert.equal(stop.code, 0, stop.stderr);
   assert.match(stop.stdout, /dana-n1-impl-1: exited/);
@@ -300,7 +321,8 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   const again = readState(w.home, "n1").members[0];
   assert.notEqual(again.session.id, impl.session.id);
   assert.equal(readLaunch(w.home, impl.name)?.untested, true, "the restart's launch record too");
-  assert.match(show(again.session.pane, "#{pane_start_command}"), new RegExp(`restarted in your worktree; your branch is team/n1/dana-n1-impl-1 at ${commit.commit}`));
+  assert.deepEqual(readLaunch(w.home, impl.name)?.built, { cli: "codex", mode: "restart-fresh", argv: digestOf(again.argv) });
+  assert.match(show(again.session.pane, "#{pane_start_command}"), new RegExp(`restarted in your worktree with a fresh conversation \\(you remember nothing of before\\); your branch is team/n1/dana-n1-impl-1 at ${commit.commit}`));
   assert.match(execFileSync("tmux", ["show-environment", "-t", again.session.id], { encoding: "utf8" }), /^HOPTELL_TEAM_MEMBER=implementer:n1$/m);
   assert.equal((await cli("stop", impl.name)).code, 0);
 
@@ -361,6 +383,7 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   assert.equal(landed.failed, null, landed.failed);
   assert.match(landed.out, new RegExp(`Landed ${C} on main \\(was ${T}\\), landing L2\\.`));
   assert.match(landed.out, /worktree removed; branch team\/n1\/dana-n1-impl-1 deleted/);
+  assert.deepEqual([readState(w.home, "n1").members.find((m) => m.name === impl.name).removed.branch], ["deleted"], "kept for team status");
   assert.doesNotMatch(landed.out, /warning/);
   assert.equal(git(s.repo, "rev-parse", "main"), C);
   assert.equal(git(s.repo, "status", "--porcelain", "--untracked-files=no"), "", "the checkout moved with its branch");
@@ -419,6 +442,8 @@ test("team down keeps a dirty worktree and a branch with commits that never land
   assert.equal(down.code, 0, down.stderr);
   assert.match(down.stdout, /dana-n2-a: exited; worktree kept: the worktree of dana-n2-a has 1 uncommitted change \(dirty\.txt\)/);
   assert.match(down.stdout, /dana-n2-b: exited; worktree removed; branch team\/n2\/dana-n2-b kept \(it has commits that hoptell has no record of landing\)/);
+  const status = await w.cli(["team", "status", "n2"], env);
+  assert.match(status.stdout, /\n {4}team\/n2\/dana-n2-b \(kept: it has commits that hoptell has no record of landing\)(, owns [^\n]*)?\n {4}worktree removed/);
   assert.ok(fs.existsSync(a.worktree));
   assert.ok(git(s.repo, "rev-parse", "team/n2/dana-n2-b"));
 });
@@ -825,15 +850,16 @@ test("team file: the schema file and the checker agree on fields, enums and limi
   const schema = JSON.parse(fs.readFileSync(new URL("../schema/team.schema.json", import.meta.url), "utf8"));
   const item = schema.properties.members.items;
   assert.deepEqual(Object.keys(schema.properties).sort(), ["base", "idleMinutes", "lead", "lifetimeMinutes", "members", "repo", "team", "version", "worktrees"]);
-  assert.deepEqual(Object.keys(item.properties).sort(), ["cli", "effort", "folder", "lifetimeMinutes", "model", "name", "owns", "role", "task", "template"]);
+  assert.deepEqual(Object.keys(item.properties).sort(), ["cli", "effort", "folder", "lifetimeMinutes", "model", "name", "owns", "resume", "role", "task", "template"]);
   assert.deepEqual(item.properties.role.enum, ["implementer", "reviewer"]);
   assert.deepEqual(item.properties.cli.enum, ["codex", "claude", "agy"]);
   assert.deepEqual(item.properties.template.enum, ["reviewer", "implementer", "tester"]);
+  assert.deepEqual(item.properties.resume.enum, ["auto", "never"]);
   assert.equal(schema.properties.members.maxItems, 16);
   assert.equal(schema.properties.lifetimeMinutes.maximum, 1440);
   assert.equal(item.properties.owns.maxItems, 64);
   // Every field the schema names is one the checker takes, and an unknown one is refused by both.
-  const ok = { version: 1, team: "n1", repo: "/r", base: "main", worktrees: "/w", lead: "dana-lead", idleMinutes: { reviewer: 30 }, lifetimeMinutes: 60, members: [{ name: "dana-i", role: "implementer", cli: "codex", model: "m", effort: "high", task: "/t", owns: ["lib/**"], template: "implementer", lifetimeMinutes: 5, folder: "i" }] };
+  const ok = { version: 1, team: "n1", repo: "/r", base: "main", worktrees: "/w", lead: "dana-lead", idleMinutes: { reviewer: 30 }, lifetimeMinutes: 60, members: [{ name: "dana-i", role: "implementer", cli: "codex", model: "m", effort: "high", task: "/t", owns: ["lib/**"], template: "implementer", lifetimeMinutes: 5, folder: "i", resume: "never" }] };
   assert.equal(checkTeam(ok, { file: "/x/team.json", homedir: "/h" }).members.length, 1);
   assert.throws(() => checkTeam({ ...ok, extra: 1 }, { file: "/x/team.json", homedir: "/h" }), /unknown field "extra"/);
   assert.equal(schema.additionalProperties, false);
@@ -1534,9 +1560,11 @@ test("a member belongs to its one active team: a team that is down keeps only it
   const session = sleepers(t);
   const f = fakeClis(s.root);
   const launched = [];
+  const contained = [];
   const deps = {
-    launch: async (name, argv, roles) => {
+    launch: async (name, argv, roles, opts) => {
       launched.push([name, roles]);
+      contained.push(opts.containment);
       const x = session(Date.now());
       return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid };
     },
@@ -1551,6 +1579,9 @@ test("a member belongs to its one active team: a team that is down keeps only it
   assert.deepEqual(readState(s.home, "n5").events, []);
   await teamRestart(s.home, member, { homedir: s.homedir, env: { PATH: f.PATH } }, deps);
   assert.deepEqual(launched, [[member, "implementer,n6"]]);
+  // Its launch's containment (design 10, Part C): no VERIFIED row ships, so it is uncontained.
+  assert.deepEqual([contained[0].contained, contained[0].set, contained[0].recheck], [false, null, null]);
+  assert.match(contained[0].why, /^row V: no hoptell test verified containment \(contained-member set B\) for codex/);
   assert.ok(readState(s.home, "n6").members[0].session);
   assert.equal(readState(s.home, "n5").members[0].session, null);
   assert.equal(readState(s.home, "n6").candidate.member, member, "n6 holds the candidate");
@@ -1591,6 +1622,298 @@ test("restart runs the same launch checks as up: an agy member is not restarted 
   assert.deepEqual(launched, []);
   assert.throws(() => launchPreflight(s.repo, [{ name: "x", cli: "claude" }, { name: "dana-a", cli: "agy" }]), /does not start agy members \(dana-a\)/);
   assert.equal(launchPreflight(s.repo, [{ name: "x", cli: "codex" }]), undefined);
+});
+
+/** A member restart's stand-ins: launches are sleeping processes (or ones that quit at once), stops end them by pid. */
+function restartWorld(t, team, name, row) {
+  const s = repoSetup(t);
+  const f = fakeClis(s.root);
+  const session = sleepers(t);
+  writeTeam(s.home, stateOf(team, [row(s, session)], { repo: s.repo }));
+  const launched = [];
+  // A launch whose CLI quits at once: {status} its exit record gives (null: none).
+  const quits = [];
+  const exitOf = new Map();
+  const deps = {
+    launch: async (name, argv) => {
+      launched.push(argv);
+      const q = quits.shift();
+      if (q) {
+        const p = spawn("true", [], { stdio: "ignore" });
+        await new Promise((r) => p.on("exit", r));
+        exitOf.set(p.pid, q.status);
+        return { session: `hoptell-${name}`, sessionId: "$99", pane: "%99", pid: p.pid };
+      }
+      const x = session(Date.now());
+      return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid };
+    },
+    endSession: (pane, pid) => (process.kill(pid), true),
+    warn: () => {},
+    sleep: async () => {},
+    wait: 2000,
+    resumeWatchMs: 0,
+    exitStatus: (m) => (Number.isSafeInteger(exitOf.get(m.session.pid)) ? { status: exitOf.get(m.session.pid) } : null),
+  };
+  const restart = (mode, more = {}) => teamRestart(s.home, name, { homedir: s.homedir, env: { PATH: f.PATH, ...more.env }, mode }, { ...deps, ...more.deps });
+  return { s, f, session, deps, launched, quits, restart, member: () => readState(s.home, team).members[0] };
+}
+
+test("restart of a Claude Code member: a running member is stopped, then resumed with --resume and its name; --fresh picks a new --session-id", async (t) => {
+  const L = crypto.randomUUID();
+  const name = "dana-n9-rev-1";
+  const T0 = Date.now() - 60_000;
+  const row = (s, session) => memberRow(name, "reviewer", session(T0), { cwd: s.repo, resume: "auto", conversation: { cli: "claude", id: L, cwd: s.repo, source: "assigned", created: new Date(T0).toISOString(), firstLaunch: new Date(T0).toISOString(), lastLaunch: new Date(T0).toISOString(), launchedAs: "startup", resumable: true, why: null } });
+  const x = restartWorld(t, "n9", name, row);
+  // Claude Code's session folder of the member: the launch's own transcript.
+  const dir = path.join(x.s.homedir, ".claude", "projects", x.s.repo.replace(/[^A-Za-z0-9]/g, "-"));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${L}.jsonl`), "{}\n");
+  let events = { state: "ok", events: [{ session_id: L, source: "startup" }] };
+  const sessionEvents = () => events;
+  const before = x.member().session;
+  const r = await x.restart("auto", { deps: { sessionEvents } });
+  assert.equal(r.stopped, "exited");
+  assert.equal(r.resumed, L);
+  // A record from before the evidence was kept: unknown, warned, still resumed.
+  assert.deepEqual(r.warnings, [`${name}: hoptell cannot tell whether claude's version changed since the conversation's last launch; resuming it`, `${name}: hoptell cannot tell whether its role template changed since the conversation started; Claude Code keeps the system prompt it started with (hoptell team restart ${name} --fresh applies the current one)`]);
+  assert.equal(identityState(before.root), "different", "the old session was ended");
+  const argv = x.launched.at(-1);
+  assert.deepEqual(argv.slice(argv.indexOf("--resume"), argv.indexOf("--resume") + 4), ["--resume", L, "-n", name]);
+  assert.ok(!argv.includes("--session-id"), "--resume is not combined with --session-id");
+  assert.match(argv.at(-1), /^You are the reviewer for dana-lead, restarted with your conversation; continue;/);
+  let m = x.member();
+  assert.equal(m.conversation.id, L);
+  assert.equal(m.conversation.launchedAs, "resume");
+  assert.equal(m.conversation.lastLaunch, m.launch.at, "taken before the launch call");
+  assert.equal(m.conversation.created, new Date(T0).toISOString(), "created never changes");
+  assert.deepEqual(readState(x.s.home, "n9").events.slice(-2).map((e) => e.what), [`stop ${name}: exited`, `restarted ${name}: resumed ${L}`]);
+  // After a /clear in the resumed launch: the cleared conversation X continues.
+  const X = crypto.randomUUID();
+  fs.writeFileSync(path.join(dir, `${X}.jsonl`), "{}\n");
+  events = { state: "ok", events: [{ session_id: L, source: "resume" }, { session_id: X, source: "clear" }] };
+  assert.equal((await x.restart("auto", { deps: { sessionEvents } })).resumed, X);
+  m = x.member();
+  assert.equal(m.conversation.id, X);
+  assert.equal(m.conversation.source, "hook");
+  // --fresh: a new id, never the old one; the record is the new launch's.
+  const fresh = await x.restart("fresh", { deps: { sessionEvents } });
+  assert.equal(fresh.resumed, null);
+  const fa = x.launched.at(-1);
+  const id = fa[fa.indexOf("--session-id") + 1];
+  assert.ok(![L, X].includes(id) && /^[0-9a-f-]{36}$/.test(id));
+  assert.deepEqual(fa.slice(fa.indexOf("--session-id"), fa.indexOf("--session-id") + 4), ["--session-id", id, "-n", name]);
+  assert.ok(!fa.includes("--resume"));
+  m = x.member();
+  assert.deepEqual([m.conversation.id, m.conversation.source, m.conversation.launchedAs], [id, "assigned", "startup"]);
+  // The launch's start is taken before its launch call; the evidence a resume compares is kept.
+  assert.ok(Date.parse(m.launch.at) <= Date.parse(m.session.started));
+  assert.deepEqual([m.conversation.created, m.conversation.cliVersion, m.launch.cliVersion], [m.launch.at, "2.1.311", "2.1.311"]);
+  assert.match(m.conversation.templateDigest, /^[0-9a-f]{64}$/);
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), "{}\n");
+  events = { state: "ok", events: [{ session_id: id, source: "startup" }] };
+  const same = await x.restart("auto", { deps: { sessionEvents } });
+  assert.deepEqual([same.resumed, same.warnings], [id, []]);
+  // Another version and template recorded (the state read again from disk): both warned, still resumed.
+  const st = readState(x.s.home, "n9");
+  st.members[0].conversation = { ...st.members[0].conversation, cliVersion: "2.1.300", templateDigest: "0".repeat(64) };
+  writeTeam(x.s.home, st);
+  events = { state: "ok", events: [{ session_id: id, source: "resume" }] };
+  const changed = await x.restart("auto", { deps: { sessionEvents } });
+  assert.equal(changed.resumed, id);
+  assert.deepEqual(changed.warnings, [`${name}: claude changed from 2.1.300 to 2.1.311 since the conversation's last launch; resuming it`, `${name}: its role template changed since the conversation started; Claude Code keeps the system prompt it started with, so the change does not apply (hoptell team restart ${name} --fresh applies the current one)`]);
+  m = x.member();
+  assert.deepEqual([m.conversation.cliVersion, m.conversation.templateDigest], ["2.1.311", "0".repeat(64)], "the version is the latest launch's, the template the first one's");
+});
+
+test("restart: the new session is saved before the early-exit watch, so a restart interrupted there leaves the new member under team control", async (t) => {
+  const L = crypto.randomUUID();
+  const name = "dana-n9-rev-4";
+  const T0 = Date.now() - 60_000;
+  const row = (s, session) => memberRow(name, "reviewer", session(T0), { cwd: s.repo, resume: "auto", conversation: { cli: "claude", id: L, cwd: s.repo, source: "assigned", created: new Date(T0).toISOString(), firstLaunch: new Date(T0).toISOString(), lastLaunch: new Date(T0).toISOString(), launchedAs: "startup", resumable: true, why: null } });
+  const x = restartWorld(t, "n9", name, row);
+  const dir = path.join(x.s.homedir, ".claude", "projects", x.s.repo.replace(/[^A-Za-z0-9]/g, "-"));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${L}.jsonl`), "{}\n");
+  const sessionEvents = () => ({ state: "ok", events: [{ session_id: L, source: "startup" }] });
+  const before = x.member().session;
+  // The watch is interrupted while the resumed CLI runs.
+  await assert.rejects(() => x.restart("auto", { deps: { sessionEvents, resumeWatchMs: 1000, sleep: async () => { throw new Error("interrupted"); } } }), /interrupted/);
+  assert.equal(x.launched.length, 1);
+  // Read again from disk: the new session, its launch and its conversation.
+  const m = x.member();
+  assert.notEqual(m.session.pid, before.pid);
+  assert.equal(identityState(m.session.root), "same", "the saved session is the running new one");
+  assert.deepEqual([m.conversation.id, m.conversation.launchedAs, m.conversation.lastLaunch], [L, "resume", m.launch.at]);
+  // team status and team stop find the new member by its saved identity.
+  const st = await teamStatus(x.s.home, "n9", {});
+  assert.deepEqual([st.members[0].state, st.members[0].session], ["running", m.session.id]);
+  assert.equal(await teamStop(x.s.home, name, x.deps).then((r) => r.state), "exited");
+  assert.equal(identityState(m.session.root), "different", "the new session was ended");
+});
+
+test("restart without hook data: auto starts fresh with a notice; --resume refuses and starts nothing; a resumed CLI that quits with a nonzero status is started fresh once", async (t) => {
+  const L = crypto.randomUUID();
+  const name = "dana-n9-rev-2";
+  const T0 = Date.now() - 60_000;
+  const conv = (s) => ({ cli: "claude", id: L, cwd: s.repo, source: "assigned", created: new Date(T0).toISOString(), firstLaunch: new Date(T0).toISOString(), lastLaunch: new Date(T0).toISOString(), launchedAs: "startup", resumable: true, why: null });
+  const row = (s, session) => memberRow(name, "reviewer", { ...session(T0) }, { cwd: s.repo, resume: "auto", conversation: conv(s) });
+  const x = restartWorld(t, "n9", name, row);
+  // No session event reader: nothing to tie the conversation to.
+  const pid = x.member().session.pid;
+  process.kill(pid);
+  await refusal(() => x.restart("resume"), "not_resumable", /cannot be resumed: no session hook data; nothing was started/);
+  assert.deepEqual(x.launched, []);
+  const r = await x.restart("auto");
+  assert.equal(r.stopped, null, "it had exited");
+  assert.equal(r.fresh, "no session hook data");
+  assert.match(x.launched.at(-1).at(-1), /^You are the reviewer for dana-lead, restarted with a fresh conversation \(you remember nothing of before\); read your task/);
+  assert.match(readState(x.s.home, "n9").events.at(-1).what, new RegExp(`restarted ${name}: fresh \\(no session hook data`));
+  // The log's other states (lib/sessionevents.js readSessionEvents): none of them is resumed.
+  const cur = x.member().conversation.id;
+  for (const [r, why] of [[{ state: "none" }, "no session hook data"], [{ state: "full" }, "the session event log is full (the conversation changed too often)"], [{ state: "unreadable" }, "the session event log could not be read"], [{ state: "ok", events: [{ session_id: cur, source: "" }] }, "the session event log does not show this launch"]]) {
+    const c = { ...x.member().conversation };
+    await refusal(() => x.restart("resume", { deps: { sessionEvents: () => r } }), "not_resumable", new RegExp(`cannot be resumed: ${why.replace(/[()]/g, "\\$&")}`));
+    assert.deepEqual(x.member().conversation, c, "a refusal changes no record");
+  }
+  // A resumed CLI that quits at once with a nonzero status refused the conversation: auto
+  // relaunches fresh once.
+  const dir = path.join(x.s.homedir, ".claude", "projects", x.s.repo.replace(/[^A-Za-z0-9]/g, "-"));
+  fs.mkdirSync(dir, { recursive: true });
+  const id = x.member().conversation.id;
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), "{}\n");
+  const eventsOf = (sid, source) => () => ({ state: "ok", events: [{ session_id: sid, source }] });
+  x.launched.length = 0;
+  x.quits.push({ status: 1 });
+  const again = await x.restart("auto", { deps: { sessionEvents: eventsOf(id, "startup") } });
+  assert.equal(again.resumed, null);
+  assert.equal(again.fresh, "the CLI quit with status 1 when it was resumed");
+  assert.equal(x.launched.length, 2);
+  assert.ok(x.launched[0].includes("--resume") && x.launched[1].includes("--session-id"));
+  assert.ok(readState(x.s.home, "n9").events.some((e) => e.what === `restart ${name}: the resumed CLI quit at once (status 1)`));
+  // Status 0 (it finished, or was quit normally) and an unknown status are no refusal: reported,
+  // not started again; the conversation stays the resumed one.
+  const id2 = x.member().conversation.id;
+  fs.writeFileSync(path.join(dir, `${id2}.jsonl`), "{}\n");
+  for (const [q, exited, source] of [[{ status: 0 }, "status 0", "startup"], [{ status: null }, "its exit status is unknown", "resume"]]) {
+    x.launched.length = 0;
+    x.quits.push(q);
+    const r = await x.restart("auto", { deps: { sessionEvents: eventsOf(id2, source) } });
+    assert.deepEqual([r.resumed, r.fresh, r.exited, x.launched.length], [id2, null, exited, 1]);
+    assert.ok(readState(x.s.home, "n9").events.some((e) => e.what === `restart ${name}: the resumed CLI exited at once (${exited}); not started again`));
+    assert.deepEqual([x.member().conversation.id, x.member().conversation.resumable], [id2, true]);
+  }
+  // Strict: a nonzero status leaves it stopped and the conversation not resumable.
+  x.launched.length = 0;
+  x.quits.push({ status: 2 });
+  await refusal(() => x.restart("resume", { deps: { sessionEvents: eventsOf(id2, "resume") } }), "resume_failed", /quit with status 2 when it was resumed/);
+  assert.equal(x.launched.length, 1);
+  assert.deepEqual([x.member().conversation.resumable, x.member().conversation.why], [false, "the CLI quit with status 2 when it was resumed"]);
+});
+
+test("restart of a running member whose stop is not confirmed starts nothing; a member in a state from before resume restarts fresh", async (t) => {
+  const name = "dana-n9-rev-3";
+  const row = (s, session) => memberRow(name, "reviewer", session(Date.now() - 1000), { cwd: s.repo });
+  const x = restartWorld(t, "n9", name, row);
+  assert.equal(x.member().conversation, undefined, "an older state has no conversation field");
+  await refusal(() => x.restart("auto", { deps: { endSession: () => false, wait: 0 } }), "still_running", /is not confirmed stopped \(running\); nothing was started/);
+  assert.deepEqual(x.launched, []);
+  assert.match(readState(x.s.home, "n9").events.at(-1).what, new RegExp(`stop ${name}: running`));
+  // A reviewer's default is fresh: no resume is tried; its Claude Code id is new.
+  const r = await x.restart("auto");
+  assert.deepEqual([r.stopped, r.resumed, r.fresh], ["exited", null, null]);
+  assert.ok(x.launched.at(-1).includes("--session-id"));
+  assert.equal(x.member().conversation.source, "assigned");
+});
+
+test("restart refuses while a process still runs in the member's worktree, unlike team stop; nothing is started", async (t) => {
+  const { s, rec, member } = await landingSetup(t, "n9", { candidate: false });
+  const st = readState(s.home, "n9");
+  // Its pane's process is gone; a process of the user still works in its worktree.
+  st.members[0].session = { id: "$1", pane: "%1", pid: 999_999, root: null, started: new Date(0).toISOString() };
+  writeTeam(s.home, st);
+  let rows = [{ pid: 500, cwd: "/", command: "node" }, { pid: 700, cwd: path.join(rec.path, "lib"), command: "node" }];
+  let clock = 0;
+  const launched = [];
+  const deps = {
+    procs: { table: () => new Map([[500, { pid: 500, ppid: 1, uid: process.getuid(), start: "1" }]]), self: 500, cwds: () => rows },
+    launch: async () => (launched.push(1), assert.fail("nothing is started")),
+    endSession: () => false,
+    warn: () => {},
+    sleep: async (ms) => void (clock += ms),
+    now: () => clock,
+    lingerMs: 1000,
+  };
+  const f = fakeClis(s.root);
+  await refusal(() => teamRestart(s.home, member, { homedir: s.homedir, env: { PATH: f.PATH } }, deps), "still_running", new RegExp(`^${member} exited, but process 700 \\(node\\) still runs in its worktree; nothing was started\\. Stop that process by its pid, then run hoptell team restart ${member} again$`));
+  assert.deepEqual(launched, []);
+  assert.equal(readState(s.home, "n9").members[0].session.pid, 999_999, "the record is unchanged");
+  // The same through the CLI: the refusal's text and exit code.
+  const out = [];
+  let failed = null;
+  await assert.rejects(teamCommand({ args: ["restart", member], home: s.home, homedir: s.homedir, env: { PATH: f.PATH }, out: (l) => out.push(l), warn: () => {}, fail: (m, c = 1) => { failed = { m, c }; throw new Error("fail"); }, deps }), /^Error: fail$/);
+  assert.match(failed.m, new RegExp(`^${member} exited, but process 700 \\(node\\) still runs in its worktree; nothing was started`));
+  assert.equal(failed.c, 1);
+  assert.deepEqual([out, launched], [[], []]);
+  // A scan that cannot answer confirms nothing either (team stop leaves that to the worktree commands).
+  rows = null;
+  await refusal(() => teamRestart(s.home, member, { homedir: s.homedir, env: { PATH: f.PATH } }, deps), "still_running", new RegExp(`^${member} exited, but the processes in its worktree could not be checked \\(.+\\); nothing was started`));
+  assert.deepEqual(launched, []);
+  // Once it is gone the restart goes ahead.
+  rows = [{ pid: 500, cwd: "/", command: "node" }];
+  const session = sleepers(t);
+  const r = await teamRestart(s.home, member, { homedir: s.homedir, env: { PATH: f.PATH } }, { ...deps, launch: async (name) => { const x = session(Date.now()); return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid }; } });
+  assert.equal(r.member, member);
+});
+
+test("restart of a Codex member: the thread its MCP server recorded is resumed with codex resume, twice; a changed rollout starts fresh", async (t) => {
+  const name = "dana-n9-rev-4";
+  const T0 = Date.now() - 60_000;
+  const row = (s, session) => memberRow(name, "reviewer", session(T0), { cli: "codex", argv: ["codex"], cwd: s.repo, resume: "auto" });
+  const x = restartWorld(t, "n9", name, row);
+  const codexHome = path.join(x.s.root, "codex");
+  const env = { CODEX_HOME: codexHome };
+  const thread = crypto.randomUUID();
+  // What the member's read_task call left (lib/mcp.js), and Codex's rollout of that thread.
+  recordThread(x.s.home, name, { threadId: thread });
+  const at = new Date(T0 + 1500);
+  const day = path.join(codexHome, "sessions", String(at.getFullYear()), String(at.getMonth() + 1).padStart(2, "0"), String(at.getDate()).padStart(2, "0"));
+  fs.mkdirSync(day, { recursive: true });
+  const file = path.join(day, `rollout-x-${thread}.jsonl`);
+  fs.writeFileSync(file, `${JSON.stringify({ type: "session_meta", payload: { id: thread, cwd: x.s.repo, timestamp: at.toISOString() } })}\n`);
+  for (let i = 0; i < 2; i++) {
+    const r = await x.restart("auto", { env });
+    assert.equal(r.resumed, thread, `restart ${i + 1}`);
+    const argv = x.launched.at(-1);
+    const c = argv.indexOf("codex");
+    assert.deepEqual(argv.slice(c, c + 3), ["codex", "resume", thread]);
+    assert.ok(argv.includes('tui.resume_cwd="current"'));
+    assert.match(argv.at(-1), /restarted with your conversation; continue;/);
+    const m = x.member();
+    assert.deepEqual([m.conversation.id, m.conversation.source, m.conversation.created, m.conversation.launchedAs], [thread, "mcp", at.toISOString(), "resume"]);
+  }
+  // The rollout is not the recorded one any more: fresh, with the reason; the record is cleared.
+  fs.writeFileSync(file, `${JSON.stringify({ type: "session_meta", payload: { id: thread, cwd: x.s.repo, timestamp: new Date(T0 + 9000).toISOString() } })}\n`);
+  const r = await x.restart("auto", { env });
+  assert.equal(r.fresh, "the conversation's rollout file is not the one recorded");
+  assert.ok(!x.launched.at(-1).includes("resume"));
+  assert.match(x.launched.at(-1).at(-1), /with a fresh conversation \(you remember nothing of before\)/);
+  assert.equal(x.member().conversation, null);
+  // A thread that Codex starts (and reports to read_task) while the launch call has not returned
+  // yet is this launch's: the launch's start is taken before the call.
+  const T2 = crypto.randomUUID();
+  await x.restart("fresh", { env, deps: { launch: async (n, argv) => {
+    const at2 = new Date();
+    const day2 = path.join(codexHome, "sessions", String(at2.getFullYear()), String(at2.getMonth() + 1).padStart(2, "0"), String(at2.getDate()).padStart(2, "0"));
+    fs.mkdirSync(day2, { recursive: true });
+    fs.writeFileSync(path.join(day2, `rollout-y-${T2}.jsonl`), `${JSON.stringify({ type: "session_meta", payload: { id: T2, cwd: x.s.repo, timestamp: at2.toISOString() } })}\n`);
+    recordThread(x.s.home, name, { threadId: T2 });
+    await new Promise((r) => setTimeout(r, 30));
+    return x.deps.launch(n, argv);
+  } } });
+  assert.ok(Date.parse(x.member().launch.at) < Date.parse(x.member().session.started));
+  const r2 = await x.restart("auto", { env });
+  assert.equal(r2.resumed, T2, r2.fresh);
+  assert.deepEqual([x.member().conversation.cliVersion, x.member().conversation.created < x.member().session.started], ["0.164.0", true]);
 });
 
 test("landing recovery: the journal stays after a move that happened, a recorded landing is finished once, a failed ref deletion stops before cleanup", async (t) => {
@@ -2461,12 +2784,16 @@ test("review request ids are per team: a verdict names its team and changes only
   assert.equal(stateBytes(home, "n4"), n4);
 });
 
-test("team status: an implementer without a worktree shows no worktree, or worktree removed after a landing or down; never undefined", async (t) => {
+test("team status: an implementer without a worktree shows no worktree, or worktree removed after a landing or down, and what became of its branch; never undefined", async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-st-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const impl = (name) => memberRow(name, "implementer", null, { cli: "codex", worktree: `/x/repo-wt/${name}`, branch: `team/n6/${name}` });
-  const landed = { member: "dana-n6-impl-2", H: "a".repeat(40), C: "b".repeat(40), T: "c".repeat(40), target: "main", at: new Date(0).toISOString() };
-  writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1"), impl("dana-n6-impl-2")], { landed: [landed] }));
+  const impl = (name, more = {}) => memberRow(name, "implementer", null, { cli: "codex", worktree: `/x/repo-wt/${name}`, branch: `team/n6/${name}`, ...more });
+  const landedAs = (member) => ({ member, H: "a".repeat(40), C: "b".repeat(40), T: "c".repeat(40), target: "main", at: new Date(0).toISOString() });
+  const at = new Date(0).toISOString();
+  // impl-2 landed before hoptell kept what the removal did; impl-3's branch was deleted after its
+  // landing; impl-4's was kept.
+  const members = [impl("dana-n6-impl-1"), impl("dana-n6-impl-2"), impl("dana-n6-impl-3", { owns: ["lib/**"], removed: { branch: "deleted", why: null, at } }), impl("dana-n6-impl-4", { removed: { branch: "kept", why: "team/n6/dana-n6-impl-4 moved", at } })];
+  writeTeam(home, stateOf("n6", members, { landed: ["dana-n6-impl-2", "dana-n6-impl-3", "dana-n6-impl-4"].map(landedAs) }));
   const show = async (args) => {
     const out = [];
     await teamCommand({ args, home, homedir: home, env: {}, out: (l) => out.push(l), warn: () => {}, fail: (m) => assert.fail(m) });
@@ -2474,14 +2801,17 @@ test("team status: an implementer without a worktree shows no worktree, or workt
   };
   let text = await show(["status", "n6"]);
   assert.match(text, /dana-n6-impl-1 .*\n {4}team\/n6\/dana-n6-impl-1\n {4}no worktree\n/);
-  assert.match(text, /dana-n6-impl-2 .*\n {4}team\/n6\/dana-n6-impl-2\n {4}worktree removed/);
+  assert.match(text, /dana-n6-impl-2 .*\n {4}team\/n6\/dana-n6-impl-2 \(landed\)\n {4}worktree removed/);
+  assert.match(text, /dana-n6-impl-3 .*\n {4}team\/n6\/dana-n6-impl-3 \(deleted: it landed\), owns lib\/\*\*\n {4}worktree removed/);
+  assert.match(text, /dana-n6-impl-4 .*\n {4}team\/n6\/dana-n6-impl-4 \(kept: team\/n6\/dana-n6-impl-4 moved\)\n {4}worktree removed/);
   let json = await show(["status", "n6", "--json"]);
-  assert.deepEqual(JSON.parse(json).members.map((m) => [m.noWorktree, m.commits, m.head]), [["no worktree", null, null], ["worktree removed", null, null]]);
+  assert.deepEqual(JSON.parse(json).members.map((m) => [m.noWorktree, m.commits, m.head, m.branchState ?? null, m.branchWhy ?? null]), [["no worktree", null, null, null, null], ["worktree removed", null, null, "landed", null], ["worktree removed", null, null, "deleted", "it landed"], ["worktree removed", null, null, "kept", "team/n6/dana-n6-impl-4 moved"]]);
   for (const s of [text, json]) assert.doesNotMatch(s, /undefined|\? commit/);
-  // A team that is down: hoptell removed what it could.
-  writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1")], { status: "down" }));
+  // A team that is down: hoptell removed what it could; a branch without commits was deleted.
+  writeTeam(home, stateOf("n6", [impl("dana-n6-impl-1"), impl("dana-n6-impl-5", { removed: { branch: "deleted", why: null, at } })], { status: "down" }));
   text = await show(["status", "n6"]);
-  assert.match(text, /\n {4}worktree removed/);
+  assert.match(text, /\n {4}team\/n6\/dana-n6-impl-1\n {4}worktree removed/);
+  assert.match(text, /\n {4}team\/n6\/dana-n6-impl-5 \(deleted: it had no commits\)\n {4}worktree removed/);
   json = await show(["status", "n6", "--json"]);
   assert.doesNotMatch(text + json, /undefined/);
 });
@@ -3479,4 +3809,120 @@ test("team autoland from the real command line: --off, --for and --count are kno
     assert.equal(r.status, 2, r.stderr);
     assert.match(r.stderr, new RegExp(`${flag} needs a value`));
   }
+});
+
+test("the launch line after every layer: team up and restart pass memberCommand's built to launch(), and the gate arms on it for each CLI (fresh, restart-fresh), never for a resume, a changed line or a wrapper", async (t) => {
+  const s = repoSetup(t);
+  const f = fakeClis(s.root);
+  // The versions the prompt table was recorded on; agy's stand-in too.
+  const answer = { codex: "codex-cli 0.165.0", claude: "2.1.314 (Claude Code)", agy: "1.4.11" };
+  fs.writeFileSync(path.join(f.bin, "agy.help"), "Usage: agy [options]\n  --mode <mode>\n  --model <model>\n  --sandbox\n  --dangerously-skip-permissions\n  -i, --prompt-interactive <prompt>\n");
+  for (const cli of ["codex", "claude", "agy"]) fs.writeFileSync(path.join(f.bin, cli), `#!/bin/sh\ncase "$1" in\n  --version) echo '${answer[cli]}'; exit 0;;\n  --help) cat '${path.join(f.bin, `${cli}.help`)}'; exit 0;;\n  features|debug|changelog|models) exit 2;;\nesac\nexec sleep 60\n`, { mode: 0o755 });
+  fs.mkdirSync(path.join(s.root, "tasks"));
+  fs.writeFileSync(path.join(s.root, "tasks", "rev.md"), "Review requests.\n");
+  const file = path.join(s.root, "team.json");
+  const names = { claude: "dana-n1-rev-1", codex: "dana-n1-rev-2", agy: "dana-n1-rev-3" };
+  fs.writeFileSync(file, JSON.stringify(teamDoc({ members: Object.entries(names).map(([cli, name]) => ({ name, role: "reviewer", cli, task: "tasks/rev.md" })) })));
+  const session = sleepers(t);
+  const launched = [];
+  const deps = {
+    launch: async (name, argv, roles, o) => {
+      launched.push({ name, argv, cwd: o.cwd, built: o.team.built });
+      const x = session(Date.now());
+      return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid };
+    },
+    out: () => {},
+    warn: () => {},
+    endSession: () => false,
+    sleep: async () => {},
+    wait: 0,
+  };
+  const env = { PATH: f.PATH, HOME: s.homedir };
+  await teamUp(file, { home: s.home, homedir: s.homedir, env }, deps);
+  const gate = (l, built = l.built, argv = l.argv) => launchGate(argv, { folder: l.cwd, env, built, name: l.name });
+  assert.equal(launched.length, 3);
+  for (const l of launched) {
+    const cli = Object.keys(names).find((c) => names[c] === l.name);
+    // Claude Code's fresh line carries the --session-id hoptell assigned; the others none.
+    const sid = cli === "claude" ? l.argv[l.argv.indexOf("--session-id") + 1] : null;
+    if (cli === "claude") assert.match(String(sid), /^[0-9a-f-]{36}$/, l.name);
+    assert.deepEqual(l.built, { cli, mode: "fresh", argv: l.argv, session_id: sid }, l.name);
+    const g = gate(l);
+    assert.deepEqual([g.gate.state, g.cli.name, g.cli.version, g.built.mode], ["armed", cli, answer[cli].match(/\d+\.\d+\.\d+/)[0], "fresh"], `${l.name}: ${g.gate.why}`);
+    // A resumed conversation, a line that is not built's, a wrapper: off.
+    assert.equal(gate(l, { ...l.built, mode: "resume" }).gate.why, "a resumed conversation");
+    assert.equal(gate(l, l.built, [...l.argv.slice(0, 1), "--add-dir", "/", ...l.argv.slice(1)]).gate.why, "not the launch hoptell built");
+    assert.equal(gate(l, l.built, ["env", "-u", "CODEX_HOME", ...l.argv]).gate.why, "not the launch hoptell built");
+  }
+  // Claude Code's --session-id: the gate arms only with the id assigned to this launch.
+  const c = launched.find((l) => l.name === names.claude);
+  assert.equal(gate(c, { ...c.built, session_id: crypto.randomUUID() }).gate.state, "off", "another id than the one assigned");
+  assert.equal(gate(c, null).gate.state, "off", "typed by hand");
+  // Restart: restart-fresh, built again.
+  // Its session ended (the stand-in, this test's own process, stopped by its pid).
+  process.kill(readState(s.home, "n1").members.find((m) => m.name === names.claude).session.pid);
+  await sleep(200);
+  await teamRestart(s.home, names.claude, { homedir: s.homedir, env }, deps);
+  const r = launched.at(-1);
+  const rid = r.argv[r.argv.indexOf("--session-id") + 1];
+  assert.match(String(rid), /^[0-9a-f-]{36}$/);
+  assert.notEqual(rid, c.built.session_id, "a fresh conversation gets a new id");
+  assert.deepEqual(r.built, { cli: "claude", mode: "restart-fresh", argv: r.argv, session_id: rid });
+  assert.equal(gate(r).gate.state, "armed");
+});
+
+test("a member's exit status comes from its own launch's exit note only", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-exit-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const host = { pid: 4242, start: "Thu Oct 30 10:00:00 2026", uid: 501, boot: "b1" };
+  const m = { name: "me-impl", session: { id: "$4", pane: "%7", pid: 4242, root: host } };
+  assert.equal(launchExit(home, m), null, "no launch record");
+  const launch = (o = {}) => writeLaunch(home, m.name, { cli: null, root: null, gate: { state: "off", why: "test", at: 1 }, folder: home, tmux: { socket: null, session: "$4", pane: "%7" }, host, ...o });
+  const rec = launch();
+  assert.equal(launchExit(home, m), null, "no exit note yet");
+  writeExit(home, m.name, rec.id, "1");
+  assert.deepEqual(launchExit(home, m), { status: 1 });
+  writeExit(home, m.name, rec.id, "x");
+  assert.deepEqual(launchExit(home, m), { status: null }, "a status that is not one: unknown");
+  assert.equal(launchExit(home, { ...m, session: { ...m.session, pane: "%8" } }), null, "another pane's launch");
+  assert.equal(launchExit(home, { ...m, session: { ...m.session, id: "$5" } }), null, "another tmux session's launch");
+  assert.equal(launchExit(home, { ...m, session: { ...m.session, root: null } }), null, "the member's process unknown");
+  // The same tmux numbers on another server or after a restart: another pane process, its own note.
+  for (const other of [{ ...host, pid: 9999 }, { ...host, start: "Thu Oct 30 11:00:00 2026" }, { ...host, boot: "b2" }, { ...host, uid: 502 }, null]) {
+    const r2 = launch({ host: other });
+    writeExit(home, m.name, r2.id, "1");
+    assert.equal(launchExit(home, m), null, JSON.stringify(other));
+  }
+});
+
+test("a stopped Claude Code member's session events: those of the one process under its name since its launch, in its pane", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-events-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = ensureWakeDir(home);
+  const T0 = Date.parse("2026-10-30T10:00:00.000Z");
+  const k1 = "a".repeat(32);
+  const k2 = "b".repeat(32);
+  const k3 = "c".repeat(32);
+  const id = crypto.randomUUID();
+  const root = { pid: 4242, start: "Thu Oct 30 10:00:00 2026", uid: 501, boot: "b1" };
+  const m = { name: "me-impl", launch: { at: new Date(T0).toISOString() }, session: { started: new Date(T0 + 500).toISOString(), root } };
+  assert.deepEqual(memberSessionEvents(home, m), { state: "none" }, "no process recorded");
+  writeNamesStatus(dir, k1, { peer: "me-impl", stable: "none", parent: root, now: T0 + 2000 });
+  appendSessionEvent(dir, k1, { session_id: id, source: "startup" });
+  const ev = memberSessionEvents(home, m);
+  assert.equal(ev.state, "ok");
+  assert.deepEqual(ev.events, [{ session_id: id, source: "startup" }]);
+  // Without the launch's start: the session's.
+  assert.equal(memberSessionEvents(home, { ...m, launch: undefined }).state, "ok");
+  assert.deepEqual(memberSessionEvents(home, { ...m, launch: { at: "not a time" } }), { state: "none" });
+  assert.deepEqual(memberSessionEvents(home, { ...m, launch: { at: new Date(T0 + 3000).toISOString() } }), { state: "none" }, "a process from before the launch");
+  assert.deepEqual(memberSessionEvents(home, { ...m, name: "me-other" }), { state: "none" }, "another member's process");
+  assert.deepEqual(memberSessionEvents(home, { ...m, session: { ...m.session, root: null } }), { state: "none" }, "no pane process recorded");
+  for (const other of [{ ...root, pid: 4243 }, { ...root, start: "Thu Oct 30 10:00:01 2026" }, { ...root, boot: "b2" }]) assert.deepEqual(memberSessionEvents(home, { ...m, session: { ...m.session, root: other } }), { state: "none" }, JSON.stringify(other));
+  // A foreign process later ran under the same name (another pane, or none): it is not this member's.
+  writeNamesStatus(dir, k2, { peer: "me-impl", stable: "none", parent: { ...root, pid: 777 }, now: T0 + 4000 });
+  writeNamesStatus(dir, k3, { peer: "me-impl", stable: "none", now: T0 + 5000 });
+  assert.deepEqual(memberSessionEvents(home, m).events, [{ session_id: id, source: "startup" }], "a foreign same-name process is not picked");
+  writeNamesStatus(dir, k2, { peer: "me-impl", stable: "none", parent: root, now: T0 + 4000 });
+  assert.deepEqual(memberSessionEvents(home, m), { state: "none" }, "two processes in the pane since the launch");
 });

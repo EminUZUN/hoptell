@@ -17,7 +17,7 @@ import * as sig from "../lib/ownersig.js";
 import { readPromptRecord } from "../lib/promptflow.js";
 import { readLaunch } from "../lib/startgate.js";
 import { ownerRelay, tmpHome, until } from "./owner-helpers.js";
-import { existingInstall } from "./helpers.js";
+import { existingInstall, sleep } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-pe2e-"));
 process.env.TMUX_TMPDIR = TMUX_DIR;
@@ -83,7 +83,8 @@ async function e2eWorld(t) {
 
 /**
  * One launch of `codex` in `dir` (PATH: `bin` first, if given), its card, a
- * tap on button `index` (`label`); resolves once the card shows "pressed" and the session ended.
+ * tap on button `index` (`label`); resolves once the card shows "pressed" and, after a Quit, the
+ * session ended (after a Trust the agent shows its input and runs on).
  */
 async function answerFlow(t, w, { dir, bin = null, name, index, label, root = dir, args = [], untested = false }) {
   const session = `hoptell-${name}`;
@@ -121,6 +122,14 @@ async function answerFlow(t, w, { dir, bin = null, name, index, label, root = di
   // Recorded as taken, and only then the session ends (its window waited for it).
   await until(() => readPromptRecord(w.home, name)?.report?.note === true, 5000, "marked sent");
   assert.equal(readPromptRecord(w.home, name).state, "done");
+  if (label !== "Quit") {
+    assert.equal(spawnSync("tmux", ["has-session", "-t", `=${session}`]).status, 0, "the agent runs on after a Trust");
+    // Ended here, by its exact name, before the test's homes go.
+    spawnSync("tmux", ["kill-session", "-t", `=${session}`]);
+    await until(() => spawnSync("tmux", ["has-session", "-t", `=${session}`]).status !== 0, 5000, `${session} ended`);
+    await sleep(200); // its injector's last writes
+    return;
+  }
   await until(() => spawnSync("tmux", ["has-session", "-t", `=${session}`]).status !== 0, 15_000, `${session} ended`).catch((e) => assert.fail(`${e.message}\n${why()}`));
 }
 
@@ -148,7 +157,7 @@ function fakeCodexFolder(t, { worktree = false } = {}) {
   return { dir, bin, root: root ?? dir, keys: () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("key ")) };
 }
 
-test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only \"2\", Trust \"1\" then Enter; the card shows the result; the session ends", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
+test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only \"2\", Trust \"1\" then Enter; the card shows the result; a Quit ends the session", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
   const w = await e2eWorld(t);
   // Quit: exactly "2".
   let f = fakeCodexFolder(t);

@@ -65,13 +65,15 @@ test("prompts: Codex 0.165.0's startup folder trust from live captures at three 
   const direct = LIVE.filter((x) => x.cli === "codex" && x.launch === "direct" && !x.name.includes("-worktree-")).map((x) => classifyPrompt(x.rows.join("\n"), { cli: "codex", version: "0.165.0" }).dialog);
   assert.equal(direct.length, 3);
   assert.equal(new Set(direct).size, 1);
-  // Claude Code's workspace trust (No first and selected, no digits): display-only.
-  assert.deepEqual(classifyPrompt(live("claude-trust-w120").rows.join("\n"), { cli: "claude", version: "2.1.312" }), { subtype: "folder-trust", actionable: false, options: [], selected: null });
+  // Claude Code 2.1.312's workspace trust: the rows of 2.1.314's, on a version the table was not
+  // recorded on: display-only. Without the cursor its selection is not read.
+  assert.deepEqual(classifyPrompt(live("claude-trust-w120").rows.join("\n"), { cli: "claude", version: "2.1.312" }), { subtype: "claude-startup-trust", actionable: false, options: [], selected: null });
+  assert.equal(classifyPrompt(live("claude-trust-w120").rows.join("\n"), { cli: "claude", version: "2.1.312", cursor: live("claude-trust-w120").cursor }).selected, 1);
 });
 
 test("prompts: Codex 0.165.0's worktree variant from live captures at two widths: its own shape; the folder is the repository root; the note is part of the dialog", () => {
   const at = { cli: "codex", version: "0.165.0" };
-  const wt = LIVE.filter((x) => x.name.includes("-worktree-"));
+  const wt = LIVE.filter((x) => x.cli === "codex" && x.name.includes("-worktree-"));
   assert.equal(wt.length, 2);
   const repo = `/private/tmp/${"x".repeat(85)}/wtprobe/repo`;
   for (const s of wt) {
@@ -375,4 +377,63 @@ test("the injector's own identity not read at first: read again on a later tick,
   // Kept once read; the tmux session id is read each time it is asked for.
   assert.deepEqual(owner(), OWNER);
   assert.equal(reads.length, 2);
+});
+
+test("prompts: Claude Code 2.1.314's and agy 1.4.11's startup folder trust from live captures: the selected row, the folder read back, one frame across widths; display-only on any other screen or version", () => {
+  const PH = `/private/tmp/${"x".repeat(85)}/trustcap`;
+  const want = {
+    claude: { subtype: "claude-startup-trust", version: "2.1.314", options: [{ key: "1", action: "quit", label: "Quit", steps: [["Escape"]], live: true }, { key: "2", action: "trust", label: "Trust folder", steps: [["Down"], "revalidate", ["Enter"]], live: false }] },
+    agy: { subtype: "agy-startup-trust", version: "1.4.11", options: [{ key: "1", action: "trust", label: "Trust folder", steps: ["revalidate", ["Enter"]], live: false }, { key: "2", action: "quit", label: "Quit", steps: [["Escape"]], live: true }] },
+  };
+  const folderOf = { plain: "claude-plain", wt: "claude-wt", sub: "claude-repo/sub", "member-reviewer": "claude-wt", "member-implementer": "claude-wt", "member-sessionid-name": "claude-wt", projectmcp: "claude-mcp", "selected-yes": "claude-plain", homepath: null };
+  const dialogs = LIVE.filter((x) => (x.cli === "claude" && x.version === "2.1.314") || x.cli === "agy").filter((x) => /-trust-(w\d+|worktree|subdir|member|selected|homepath|projectmcp)/.test(x.name));
+  assert.equal(dialogs.length, 20);
+  const frames = {};
+  for (const s of dialogs) {
+    const w = want[s.cli];
+    const at = { cli: s.cli, version: w.version, cursor: s.cursor };
+    const { dialog, frame, folders, ...r } = classifyPrompt(s.rows.join("\n"), at);
+    const other = /selected-(yes|no)/.test(s.name);
+    assert.deepEqual(r, { subtype: w.subtype, actionable: true, options: w.options, selected: other ? 2 : 1 }, s.name);
+    assert.match(dialog, /^[0-9a-f]{64}$/);
+    // The folder, joined however the width wrapped it.
+    const kind = s.name.replace(/^.*-trust-/, "").replace(/-w\d+$/, "");
+    const tail = s.cli === "agy" ? { w80: "agy-plain", w120: "agy-plain", w200: "agy-plain", worktree: "agy-wt", subdir: "agy-repo/sub", "member-reviewer": "agy-wt", "selected-no": "agy-plain" }[kind] : { w80: "claude-plain", w120: "claude-plain", w200: "claude-plain", worktree: "claude-wt", subdir: "claude-repo/sub", ...folderOf }[kind];
+    const folder = tail ? `${PH}/${tail}` : "/Users/xxxxxxxx/hoptell-trustcap-home-1";
+    assert.ok(folders.includes(folder), s.name);
+    (frames[`${s.cli} ${folder}`] ??= new Set()).add(frame);
+    // Another version (2.1.312 has the same rows), or no CLI: display-only.
+    assert.equal(classifyPrompt(s.rows.join("\n"), { ...at, version: s.cli === "agy" ? "1.4.8" : "2.1.312" }).actionable, false, s.name);
+    assert.equal(classifyPrompt(s.rows.join("\n"), { cursor: s.cursor }).actionable, false, s.name);
+  }
+  // One frame per folder, whatever the width or the selected row (and the launch line).
+  for (const [k, set] of Object.entries(frames)) assert.equal(set.size, 1, k);
+  const plain = (n, extra = {}) => {
+    const s = live(n);
+    return { s, at: { cli: s.cli, version: want[s.cli].version, cursor: s.cursor, ...extra } };
+  };
+  // Claude Code: the cursor must be on the marked row; another place makes the selection unknown.
+  let { s, at } = plain("claude-2.1.314-trust-w120");
+  assert.equal(classifyPrompt(s.rows.join("\n"), { ...at, cursor: { x: 1, y: s.cursor.y + 1 } }).selected, null);
+  assert.equal(classifyPrompt(s.rows.join("\n"), { ...at, cursor: { x: 5, y: s.cursor.y } }).selected, null);
+  // Not this dialog: the permission variant, a row more after the footer, a footer that differs,
+  // the dialog above other rows (a transcript quoting it).
+  assert.equal(classifyPrompt(live("claude-2.1.314-trust-settings-allow-w120").rows.join("\n"), { cli: "claude", version: "2.1.314" }).actionable, false);
+  assert.equal(classifyPrompt([...s.rows, "", "more"].join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt(s.rows.map((x) => x.replace("Esc to cancel", "Esc to exit")).join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt(s.rows.map((x) => x.replace("Enter to confirm · Esc to cancel", "Press Ctrl-C again to exit")).join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt([...s.rows, "", "❯ ", "", "  some transcript"].join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt(s.rows.map((x) => x.replace("Security guide", "Security guide (updated)")).join("\n"), at)?.actionable ?? false, false);
+  // agy: with or without its status row the same frame; ctrl+c once, two rows after the footer,
+  // or another row there: not this dialog.
+  ({ s, at } = plain("agy-1.4.11-trust-w120"));
+  const full = classifyPrompt(s.rows.join("\n"), at);
+  const bare = classifyPrompt(s.rows.slice(0, -1).join("\n"), at);
+  assert.deepEqual([bare.actionable, bare.frame, bare.dialog], [true, full.frame, full.dialog]);
+  assert.equal(classifyPrompt(live("agy-1.4.11-trust-ctrlc-once-w200").rows.join("\n"), at).actionable, false);
+  assert.equal(classifyPrompt([...s.rows, s.rows.at(-1)].join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt([...s.rows.slice(0, -1), "press ctrl+c again to exit"].join("\n"), at)?.actionable ?? false, false);
+  assert.equal(classifyPrompt(s.rows.map((x) => x.replace("> Yes", "* Yes")).join("\n"), at)?.actionable ?? false, false);
+  // agy's input once trusted, and its logo: not a prompt.
+  assert.equal(classifyPrompt(live("agy-1.4.11-session-trusted-input-w120").rows.join("\n"), at)?.actionable ?? false, false);
 });

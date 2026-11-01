@@ -1296,10 +1296,15 @@ try {
       break;
     }
     case "prompt-wait": {
-      // The agent's tmux window after the agent exited (lib/tmux.js agentCommand): a short wait
+      // The agent's tmux window after the agent exited (lib/tmux.js agentCommand), told its exit
+      // status: it notes that the agent ended (lib/startgate.js writeExit), then waits a short
       // while its prompt answer is carried out or its result is not reported yet.
       const { reportSettled } = await import("../lib/promptexec.js");
-      if (args[0]) await reportSettled(home(), checkName(args[0]));
+      const { writeExit } = await import("../lib/startgate.js");
+      if (args[0]) {
+        writeExit(home(), checkName(args[0]), args[1], args[2]);
+        await reportSettled(home(), checkName(args[0]));
+      }
       break;
     }
     case "inject": {
@@ -1325,9 +1330,12 @@ try {
         // The owner's answers to a prompt card come to the control connection (lib/promptexec.js),
         // with the receiving connection's {name, member, realm}; a result not reported yet goes
         // out again when it connects again.
+        // What the relay could not take while it was down is sent again then too (lib/tmux.js waitSurface).
         let answers = null;
+        let waits = null;
         const onMessage = (m, confirm, me) => (answers ? answers.onMessage(m, confirm, me) : confirm());
-        control = createControl({ home: home(), name: args[0], client, policy: () => policy(), onMessage, onReady: () => answers?.flush({ force: true }), log: (l) => console.log(new Date().toISOString(), l) });
+        const onReady = () => Promise.all([answers?.flush({ force: true }), waits?.retry()]);
+        control = createControl({ home: home(), name: args[0], client, policy: () => policy(), onMessage, onReady, log: (l) => console.log(new Date().toISOString(), l) });
         let team = null;
         if (st.teamMember?.team) {
           const { readState } = await import("../lib/teams.js");
@@ -1344,7 +1352,8 @@ try {
         surface = (gate, { ops, hold }) => {
           answers = promptAnswers(home(), args[0], { gate, ops, hold, report: resultReport(args[0], { control, team }), log });
           const cards = cardPublisher(home(), args[0], { control, gate, team: team?.team ?? null, profile: st.relay.profile ?? null, log });
-          return { ...waitSurface(home(), args[0], { control, team, folder: path.basename(process.cwd()), cards }), tick: () => answers.flush(), drain: () => answers.flush({ force: true }) };
+          waits = waitSurface(home(), args[0], { control, team, folder: path.basename(process.cwd()), cards });
+          return { ...waits, tick: () => Promise.all([waits.tick(), answers.flush()]), drain: () => answers.flush({ force: true }) };
         };
       }
       try {

@@ -86,9 +86,11 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles imp
    Outside a team, send the patch (`hoptell worktree diff alice-impl-1 > <file outside the
    worktree>`) with its base and head named (hoptell-reviewers skill). Reviewers answer approve
    or changes.
-5. Send findings back to the implementer. A restarted implementer knows only its task and
-   branch: restart it (`hoptell team restart <name>`, or the same `hoptell tmux` line), then send
-   it the findings with `send_message`. A new head means a new review request.
+5. Send findings back to the implementer. `hoptell team restart <name>` stops it if it still
+   runs and starts it again; a team implementer continues its conversation when hoptell can
+   confirm it, otherwise the restart says it starts fresh, and then it knows only its task and
+   branch (so does a restart with the same `hoptell tmux` line). Then send it the findings with
+   `send_message`. A new head means a new review request.
 6. When the reviewers approve, tell the user the branch and head commit, and ask them to land it
    (section 6). Never merge, push or tag yourself.
 

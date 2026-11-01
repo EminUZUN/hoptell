@@ -472,10 +472,24 @@ experimental: `hoptell mcp-hosted --experimental`.
 
 **Names.** Each agent has a peer name: letters, digits, `_` and `-`. Set it with
 `HOPTELL_NAME`, or leave it unset and the relay assigns one: `<member>-<host>-<n>` with a
-member token, `<host>-<n>` with the shared token. `list_peers` shows the name in use. A
-session without `HOPTELL_NAME` takes a new automatic name whenever its hoptell MCP server
-restarts (for example after `/mcp`), so give a team lead, or any long-running session that
-others message, a fixed `HOPTELL_NAME`.
+member token, `<host>-<n>` with the shared token. `list_peers` shows the name in use.
+
+**Kept names (Claude Code).** With a 0.4.0 relay or later and hoptell's Claude Code hooks
+installed, a Claude Code session without `HOPTELL_NAME` can keep its automatic name when its
+MCP server restarts in the same Claude Code process and the recorded session events identify
+one conversation. It also keeps the name when the relay restarts.
+The relay gives the session a random ticket for the name, and the MCP server stores it in
+`~/.hoptell/names/`. A later server of the same conversation shows the ticket to get the name
+back. While the ticket is valid, other sessions get other automatic names. A ticket ends after
+7 days without use. If the earlier server still holds the name, the new one waits up to 20
+seconds for it.
+
+Whenever hoptell cannot tell for sure that a start continues the same conversation, the session
+takes a new automatic name, as before, and `list_peers` says why once. This includes a session
+started without the hooks, a Claude Code process that switched conversations, or a relay before
+0.4.0. Which Claude Code commands keep the name is still being checked, so don't rely on it
+yet. For a team lead, or any long-running session that others message, set a fixed
+`HOPTELL_NAME`. A fixed name is also how a new conversation gets a known name from the start.
 
 A session holds its name with a lease. While it is online, another connection cannot take
 the name: a second agent session with the same name waits until the name is free, and
@@ -611,11 +625,13 @@ For separate teams, run separate relays. A relay is a single small process.
 hoptell tmux alice-planner  --roles planner  -- claude
 hoptell tmux alice-codex-1  --roles backend  -- codex
 hoptell tmux alice-codex-2  --roles backend  -- codex
-hoptell tmux alice-reviewer --roles reviewer -- claude
+hoptell tmux alice-reviewer --roles reviewer -- claude --permission-mode plan "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
 ```
 
 Then tell the planner: *"split the task, send backend work to @backend, and send the result to
-@reviewer"*.
+@reviewer"*. Give each agent a launch prompt like the reviewer's, naming the session whose
+requests are its task: an agent started without one asks you before it acts on a peer's
+request.
 
 **Guard rails.** Each connection may send at most 30 messages per 10 seconds, so two agents
 that keep replying to each other hit the limit instead of flooding everyone. Messages are
@@ -1199,14 +1215,20 @@ line wins over both.
 `tmux attach -t '=hoptell-<name>'`. The injector wakes a reviewer whether or not you are attached.
 The `hoptell-reviewers` skill has an iTerm2 recipe that opens the splits for you.
 
-**Sessions that wait.** The injector also looks at its pane, normally every 15 seconds, or every 2 seconds while it watches Codex's startup trust prompt. When the agent
+**Sessions that wait.** The injector also looks at its pane, normally every 15 seconds, or every 2 seconds while it watches an agent's startup trust prompt. When the agent
 shows a prompt that needs you (a folder trust question, an approval, a sign-in, an update) or its
 screen has not changed for 10 minutes while it works (`HOPTELL_STALL_MINUTES`), `hoptell team
 status` shows it, for example `waiting for you: Codex folder trust (P3, 2 min)`, with the attach
 command. A team member's lead gets one inbox message about it, and your Telegram owner channel
 gets a short note that names the session but never shows its screen: at most one per session and
 kind every 5 minutes, and 20 such notes an hour, followed by one line saying notes are paused. The injector sends these through a connection of its
-own, named after your member with `-c` and a random suffix. Nothing is answered for you.
+own, named after your member with `-c` and a random suffix. If the relay cannot be reached when
+the prompt appears (a network drop), or the bridge or the lead is not back on it yet after a relay
+restart, the injector tries again every 15 seconds while the prompt is
+still on the screen, and sends the lead's message, the note or the card once the relay is back; a
+prompt that is gone by then is not reported. A card or note that may already have arrived is sent
+again as the same one, which the bridge shows once; the lead's message may arrive twice after a
+lost connection. A credential the relay refuses is not tried again. Nothing is answered for you.
 
 **Codex's folder trust from Telegram.** One prompt can be answered from the owner channel: the
 folder trust question of Codex 0.165.0 right after `hoptell tmux` started it, in the folder it was
@@ -1226,12 +1248,30 @@ chose, and only in that session's own terminal, while the dialog it watched sinc
 still on the screen, nobody typed or scrolled in that terminal since the card was made, and the
 tap is at most 2 minutes old. Trust is "1" (which only selects it), a fresh look that shows the
 same dialog with Trust selected, then Enter; anything else on that look and Enter is not sent.
-Quit is "2". The first answer wins, and an answer is never tried twice: the card then says
-whether hoptell pressed it, pressed nothing, or may have pressed part of it (look at the terminal
-then). If no result comes back from the Mac within 3 minutes of your tap, the card says "No
+Quit is "2". The first answer wins, and an answer is never tried twice. After the last key
+hoptell looks for up to 5 seconds: the card says it pressed the option only when it saw it take
+(after Trust, the agent's empty input; after Quit, the agent's end). Otherwise it says hoptell
+pressed nothing, or may have pressed it, with what it saw (look at the terminal then). If no result comes back from the Mac within 3 minutes of your tap, the card says "No
 result came back from the Mac. Look at its terminal on the Mac."; a result that arrives later
-still replaces that. A team member's lead is told too, when it can be reached. Anything else (an
-approval, a sign-in, Claude Code's own trust question) stays a note.
+still replaces that. A card delayed by a relay outage is made only if every rule above still
+holds then, and it still closes at the latest 12 minutes after the launch; otherwise you get the note instead. A team member's lead is told too, when it can be reached. Anything else (an
+approval, a sign-in) stays a note.
+
+**Claude Code's and agy's folder trust from Telegram.** Claude Code 2.1.314 and agy 1.4.11 get the
+same kind of card, under the same rules, when `hoptell tmux` or `hoptell team up` / `team restart`
+started them fresh in their folder. Claude Code may have `--permission-mode`, `--model`,
+`--effort`, `--append-system-prompt` and one trailing prompt (and, in a team launch, the
+`--session-id` hoptell assigned and `-n` with the member's name); agy `--mode`, `--model`,
+`--sandbox`, `--dangerously-skip-permissions` and `-i` with the prompt. Anything else, a resumed
+conversation, a wrapper in front of the CLI (`env`, a shell, `npx`) or a launch in your home
+folder gets the note. A team member's launch must be, word for word, the line `team up` built for
+it. Neither CLI shows digits, so the buttons are the rows. Quit is Esc for both, checked live.
+Trust is not checked live yet, so it shows only in test mode: for Claude Code it is Down (only
+from "No, exit", the row selected at the start), a fresh look with "Yes, I trust this folder"
+selected, then Enter; for agy, whose "Yes" is selected at the start, a fresh look, then Enter.
+The card says what the trust covers. Claude Code records it under the repository's main folder,
+so trusting from a worktree or a subfolder covers the whole repository and its worktrees; agy
+records the folder it shows, and starts its own global MCP servers before it asks.
 hoptell sees the screen in snapshots, so if Codex was already past its startup prompt before
 hoptell's first look and later shows text that looks the same, a tap could type a stray "1" and
 Enter, or "2", into the session; and between its last look and the key, hoptell does not see the
@@ -1410,7 +1450,8 @@ Two implementers whose `owns` may name the same file are refused (an implementer
 may change anything, so it overlaps every other one); agy implementers are refused, and agy
 members are refused while the repository has an `.agents/mcp_config.json`. `base` (default
 `HEAD`) is the one commit all worktrees start from; `worktrees` puts them in another folder than
-`<repo>-wt`.
+`<repo>-wt`. `resume` (`auto` or `never`) says whether `team restart` continues the member's
+conversation; by default implementers do (`auto`) and reviewers start fresh (`never`).
 
 **Before `team up`.** hoptell's git reads no global configuration, so set these in the
 repository's own config: `user.name` and `user.email` (without them `worktree commit` refuses:
@@ -1439,7 +1480,7 @@ hoptell team up team.json --dry-run   # every worktree add and tmux command it w
 hoptell team up team.json             # asks you, since implementers can write; --yes answers yes
 hoptell team status n11
 hoptell team stop alice-n11-impl-1    # before you commit, diff or land its work
-hoptell team restart alice-n11-impl-1 # a fresh session in the same worktree, same task
+hoptell team restart alice-n11-impl-1 # stops it if it runs, then starts it: same worktree and task
 hoptell team down n11                 # stops everyone; removes what is safe to remove
 ```
 
@@ -1447,12 +1488,16 @@ hoptell team down n11                 # stops everyone; removes what is safe to 
 `<role>,<team>` (so `@n11` reaches the whole team), its preset flags, role template and task.
 Members run in your terminal with your account, like any `hoptell tmux` session. `status` shows
 each member's state, CLI, the model and effort it was started with, its branch and commits, and
-uncommitted changes; it runs git only while no implementer runs. `stop`, `restart` and `down` act
+uncommitted changes; it runs git only while no implementer runs. Once hoptell removed a worktree
+(after a landing or `down`), its branch shows as `(deleted: it landed)`, `(deleted: it had no
+commits)` or `(kept: <why>)`. `stop`, `restart` and `down` act
 on the tmux session id and the process hoptell recorded at launch, never on a name pattern; a
 session someone else replaced under the same name is left alone. A session is ended only while
 its pane's process is still the one hoptell recorded; when hoptell cannot tell, it sends no
-signal and says so. `restart` starts the CLI fresh (no conversation is resumed) and tells it its
-branch and head. `down` removes a worktree only when the member is confirmed stopped and the
+signal and says so. `restart` stops a member that still runs and starts nothing when that stop
+is not confirmed, or when a process of yours still runs in the member's worktree (or hoptell
+cannot check); it then starts the CLI again and tells it its branch and head (see "Restart and
+the member's conversation" below). `down` removes a worktree only when the member is confirmed stopped and the
 worktree is clean, and its branch only when nothing on it is unlanded; whatever it keeps, it
 names; `down --keep-worktrees` stops the members and removes no worktree or branch. A team whose
 stops are not all confirmed stays `stopping`, and `down` can be run again. A member name belongs
@@ -1465,6 +1510,33 @@ A team is `starting` while `up` starts its members, `up` once all started, `part
 idleness or lifetime; a confirmed manual stop shows as `exited`. `unknown` means hoptell cannot
 confirm that process's state and sends it no signal; an unknown implementer also blocks the
 commands that run git in its repository.
+
+**Restart and the member's conversation.** `hoptell team restart <member>` continues the member's
+conversation when its team file says `resume: auto` (implementers by default) and hoptell can
+confirm which conversation that is; otherwise the member starts with a fresh conversation, the
+command says why, and the member is told it remembers nothing of before. `--fresh` always starts
+fresh; `--resume` refuses instead of starting fresh, and starts nothing. hoptell resumes only a
+conversation it can tie to the member's last launch and folder:
+
+- Claude Code: hoptell starts each Claude Code member with its own conversation id
+  (`--session-id`, and `-n <member>` as the name `/resume` shows) and restarts it with
+  `--resume <id>`. Because `/clear`, `/compact`, `/resume` and `/branch` change the conversation
+  inside a running session, the choice needs the member's session-start events, which
+  hoptell's Claude Code hooks record (with the plugin installed). They count only when exactly
+  one Claude Code process ran under the member's name since its launch; otherwise, or without
+  the hooks, the member restarts fresh.
+- Codex: the member's hoptell MCP server records the conversation id Codex sends with the
+  member's first `read_task` call, and hoptell checks it against Codex's own session file (same
+  id, same folder, started during that launch and unchanged since). The restart runs
+  `codex resume <id>`.
+- agy members always restart fresh.
+
+A resumed CLI that quits within 10 seconds with an error status is started once more, fresh; one
+that quits with status 0, or whose status is unknown, is reported and not started again.
+A resume warns when the CLI's version changed since the conversation's last launch, and for
+Claude Code when the role template changed since the conversation started: Claude Code keeps the
+system prompt it started with, so only `--fresh` applies the new template. `team down` forgets
+the conversations, so a later `team up` starts everyone fresh.
 
 **Lifetimes and idle reviewers.** With `lifetimeMinutes` (team-wide or per member) or
 `idleMinutes.reviewer`, `up` starts a supervisor in its own tmux session. A reviewer whose pane
@@ -2197,7 +2269,7 @@ hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   #
 hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>] [--lead <name> [--template <t>]]   # flags for hoptell tmux ... --
 hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>] [--repo <dir>]   # an implementer's worktree (see "Working with implementer agents")
 hoptell worktree list | commit <member> -m <message> [--allow-outside] | diff <member> [--stat] | remove <member>
-hoptell team up <team file> [--dry-run] [--yes] | status [<team>] [--json] | stop <member> | restart <member>   # see "Agent teams"
+hoptell team up <team file> [--dry-run] [--yes] | status [<team>] [--json] | stop <member> | restart <member> [--fresh | --resume]   # see "Agent teams"
 hoptell team down [<team>] [--keep-worktrees]
 hoptell team land <member> --target <branch> -m <message> | --approve <T> <C> | --confirm <T> <C> | --abandon <id> | --discard   # the owner's landing, in a terminal
 hoptell review request --team <team> --base <commit> --head <commit> [--to <reviewer>]...

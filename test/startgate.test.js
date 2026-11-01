@@ -4,11 +4,12 @@
 // (TMUX_TMPDIR) and temporary homes; sessions are ended by their exact names.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { DIALOG_MS, FIRST_READ_MS, GAP_MS, claimFileOf, codexVersion, freshProblem, launchFileOf, launchGate, readLaunch, resolveCli, startGate, trustRootOf, writeLaunch } from "../lib/startgate.js";
+import { DIALOG_MS, FIRST_READ_MS, GAP_MS, agyFreshProblem, claimFileOf, claudeFreshProblem, cliVersion, codexVersion, freshProblem, launchFileOf, launchGate, readExit, readLaunch, resolveCli, startGate, trustRootOf, trustScopeOf, writeExit, writeLaunch } from "../lib/startgate.js";
 import { CARD_MS, START_MS } from "../lib/promptcards.js";
 import { classifyPrompt } from "../lib/prompts.js";
 import { waitWatch } from "../lib/tmux.js";
@@ -82,13 +83,14 @@ test("arming: only a launch of Codex on a recorded version, run by the path that
   const { bin, file } = fakeCodex(dir);
   const env = { PATH: [bin, process.env.PATH].join(path.delimiter), HOME: os.tmpdir() };
   const g = launchGate(["codex", "-m", "gpt-5", "--sandbox=workspace-write"], { folder: dir, env, now: () => 7 });
-  assert.deepEqual(g, { cli: { name: "codex", path: file, version: "0.165.0" }, root: dir, gate: { state: "armed", why: null, at: 7 }, argv: [file, "-m", "gpt-5", "--sandbox=workspace-write"] });
+  assert.deepEqual(g, { cli: { name: "codex", path: file, version: "0.165.0" }, root: dir, scope: null, built: null, gate: { state: "armed", why: null, at: 7 }, argv: [file, "-m", "gpt-5", "--sandbox=workspace-write"] });
   const off = (cmd, e = env) => {
     const r = launchGate(cmd, { folder: dir, env: e, now: () => 7 });
     assert.deepEqual(r.argv, cmd, "unchanged");
     return [r.gate.state, r.gate.why];
   };
-  assert.deepEqual(off(["claude"]), ["off", "not codex"]);
+  assert.deepEqual(off(["gemini"]), ["off", "not codex, claude or agy"]);
+  assert.deepEqual(off(["env", "codex"]), ["off", "not codex, claude or agy"], "a wrapper in front: off, whatever follows");
   assert.deepEqual(off(["codex"], { PATH: path.join(dir, "none") }), ["off", "codex not found"]);
   const other = fakeCodex(path.join(dir, "o"), "0.166.0");
   assert.deepEqual(off([other.file]), ["off", "version not recorded"]);
@@ -491,4 +493,199 @@ test("hoptell tmux with a recorded Codex: the launch record names the pane, its 
   const r2 = await w.cli(["tmux", name, "--cwd", dir, "--", "codex"], env);
   assert.match(r2.stderr, /attach with: tmux attach/);
   assert.notEqual(readLaunch(w.home, name).id, rec.id);
+});
+
+// ---- Claude Code 2.1.314 and agy 1.4.11 (design 10, trust buttons) ----------------------------
+
+/** A stand-in for `cli` in `dir`/bin answering --version as `out` does, and sleeping otherwise. */
+function fakeCli(dir, cli, out) {
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const file = path.join(bin, cli);
+  fs.writeFileSync(file, `#!/bin/sh\n[ "$1" = --version ] && echo '${out}' && exit 0\nexec sleep 60\n`, { mode: 0o755 });
+  return { bin, file };
+}
+const UUID = "0b9c5e4e-6a51-4d6f-8f1e-3c2a7d9e1f00";
+
+test("Claude Code and agy: their --version, and what the trust covers: a folder, a repository, a repository member, the home folder", (t) => {
+  const dir = tmp(t);
+  const run = (out) => () => out;
+  assert.equal(cliVersion("/x", { env: {}, cli: "claude", run: run("2.1.314 (Claude Code)\n") }), "2.1.314");
+  assert.equal(cliVersion("/x", { env: {}, cli: "claude", run: run("2.1.314\n") }), null, "only the exact form");
+  assert.equal(cliVersion("/x", { env: {}, cli: "agy", run: run("1.4.11\n") }), "1.4.11");
+  assert.equal(cliVersion("/x", { env: {}, cli: "agy", run: run("agy 1.4.11\n") }), null);
+  assert.equal(cliVersion("/x", { env: {}, cli: "gemini", run: run("1.4.11\n") }), null);
+  const plain = path.join(dir, "plain");
+  fs.mkdirSync(plain);
+  const repo = path.join(dir, "repo");
+  fs.mkdirSync(path.join(repo, "sub"), { recursive: true });
+  git(repo, "init", "-q");
+  git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x");
+  const wt = path.join(dir, "wt");
+  git(repo, "worktree", "add", "-q", wt);
+  const o = { envPath: process.env.PATH, home: path.join(dir, "home") };
+  fs.mkdirSync(o.home);
+  assert.deepEqual(trustScopeOf("claude", plain, o), { root: plain, kind: "folder" });
+  assert.deepEqual(trustScopeOf("claude", repo, o), { root: repo, kind: "repo" });
+  assert.deepEqual(trustScopeOf("claude", wt, o), { root: repo, kind: "repo-member" });
+  assert.deepEqual(trustScopeOf("claude", path.join(repo, "sub"), o), { root: repo, kind: "repo-member" });
+  assert.deepEqual(trustScopeOf("claude", o.home, o), { root: o.home, kind: "home" });
+  assert.deepEqual(trustScopeOf("agy", wt, o), { root: wt, kind: "folder" }, "agy: the folder it shows");
+  assert.deepEqual(trustScopeOf("codex", wt, o), { root: repo, kind: null });
+  assert.equal(trustScopeOf("claude", path.join(dir, "missing"), o), null);
+});
+
+test("arming Claude Code and agy: a fresh launch of a recorded version; their own fresh rules; the home folder and anything else off", (t) => {
+  const dir = tmp(t);
+  const c = fakeCli(dir, "claude", "2.1.314 (Claude Code)");
+  const a = fakeCli(dir, "agy", "1.4.11");
+  const env = { PATH: [c.bin, process.env.PATH].join(path.delimiter), HOME: path.join(dir, "home") };
+  fs.mkdirSync(env.HOME);
+  const g = launchGate(["claude", "--permission-mode", "plan", "fix the tests"], { folder: dir, env, now: () => 7 });
+  assert.deepEqual(g, { cli: { name: "claude", path: c.file, version: "2.1.314" }, root: dir, scope: "folder", built: null, gate: { state: "armed", why: null, at: 7 }, argv: [c.file, "--permission-mode", "plan", "fix the tests"] });
+  const ga = launchGate(["agy", "--mode", "plan", "--sandbox", "--dangerously-skip-permissions", "-i", "review this"], { folder: dir, env, now: () => 7 });
+  assert.deepEqual([ga.cli, ga.root, ga.scope, ga.gate.state], [{ name: "agy", path: a.file, version: "1.4.11" }, dir, "folder", "armed"]);
+  const off = (cmd, o = {}) => {
+    const r = launchGate(cmd, { folder: dir, env, now: () => 7, ...o });
+    if (r.gate.state === "off") assert.deepEqual(r.argv, cmd, "unchanged");
+    return r.gate.state === "off" ? r.gate.why : "armed";
+  };
+  assert.equal(off(["claude"], { folder: env.HOME }), "the home folder (Claude Code trusts it for the session only)");
+  // A version the table was not recorded on (2.1.312 shows the same dialog: display-only).
+  fs.writeFileSync(c.file, "#!/bin/sh\necho '2.1.312 (Claude Code)'\n", { mode: 0o755 });
+  assert.equal(off(["claude"]), "version not recorded");
+  fs.writeFileSync(c.file, "#!/bin/sh\n[ \"$1\" = --version ] && echo '2.1.314 (Claude Code)' && exit 0\nexec sleep 60\n", { mode: 0o755 });
+  // Claude Code's fresh rules.
+  for (const ok of [[], ["--permission-mode", "acceptEdits"], ["--permission-mode=manual", "--model", "opus", "--effort", "high"], ["--append-system-prompt", "Be brief.", "Review what me-lead sends."], ["-n", "me-alice"], ["--name=me-alice"]]) assert.equal(claudeFreshProblem(ok, { name: "me-alice" }), null, ok.join(" "));
+  const claudeOff = {
+    "--permission-mode bypassPermissions": [["--permission-mode", "bypassPermissions"]],
+    "a --session-id hoptell did not assign to this launch": [["--session-id", UUID]],
+    "another session name": [["-n", "me-bob"]],
+    "a subcommand or a one-word prompt": [["mcp"], ["--model", "x", "hello"]],
+    "a subcommand or a prompt before other words": [["a prompt here", "--model", "x"]],
+    "-n without a value": [["-n"]],
+  };
+  for (const flag of ["-c", "--continue", "-r", "--resume", "--fork-session", "--add-dir", "--settings", "--setting-sources", "--mcp-config", "--strict-mcp-config", "--plugin-dir", "--dangerously-skip-permissions", "-p", "--print", "--bg"]) claudeOff[`the flag ${flag}`] = [[flag, "x y"]];
+  for (const [why, cases] of Object.entries(claudeOff)) {
+    for (const x of cases) {
+      assert.equal(claudeFreshProblem(x, { name: "me-alice" }), why, x.join(" "));
+      assert.equal(off(["claude", ...x], { name: "me-alice" }), `not a fresh interactive launch: ${why}`, x.join(" "));
+    }
+  }
+  // agy's: the prompt is -i's value; a bare word is not one.
+  for (const ok of [["--mode", "accept-edits"], ["--mode=auto", "--model", "gemini-4"], ["--prompt-interactive", "do it"]]) assert.equal(agyFreshProblem(ok), null, ok.join(" "));
+  assert.equal(agyFreshProblem(["-i", "x", "trailing"]), "a subcommand or another word");
+  assert.equal(agyFreshProblem(["--mode", "yolo"]), "--mode yolo");
+  for (const flag of ["--settings", "--add-dir", "-c", "--continue", "--conversation", "--project", "--new-project", "--agent", "-p", "--print", "--prompt", "--remote-control"]) assert.equal(agyFreshProblem([flag, "x"]), `the flag ${flag}`, flag);
+  assert.equal(off(["agy", "--settings", '{"trustedWorkspaces":["/"]}']), "not a fresh interactive launch: the flag --settings");
+  // Wrappers are none of the three, whatever follows them; Part C's forms with them.
+  for (const w of [["env", "claude"], ["env", "-u", "CODEX_HOME", "CODEX_HOME=/x", "codex"], ["sh", "-c", "agy"], ["npx", "claude"]]) assert.equal(off(w), "not codex, claude or agy", w.join(" "));
+  assert.equal(off(["codex", "--no-daemon"]), "not a fresh interactive launch: the flag --no-daemon");
+});
+
+test("a team member's launch: the CLI and its words from `built`; fresh and restart-fresh armed, resume off; --session-id only the one assigned; the record keeps built's digest", (t) => {
+  const dir = tmp(t);
+  const c = fakeCli(dir, "claude", "2.1.314 (Claude Code)");
+  const env = { PATH: [c.bin, process.env.PATH].join(path.delimiter), HOME: os.tmpdir() };
+  // Part R's fresh line (design 10, containment and resume), composed: its --session-id and -n.
+  const argv = ["claude", "--session-id", UUID, "-n", "me-alice", "--permission-mode", "plan", "--effort", "high", "--append-system-prompt", "Role text.", "Read your task."];
+  const gate = (built, cmd = argv, name = "me-alice") => launchGate(cmd, { folder: dir, env, built, name, now: () => 7 });
+  for (const mode of ["fresh", "restart-fresh"]) {
+    const g = gate({ cli: "claude", mode, argv, session_id: UUID });
+    assert.equal(g.gate.state, "armed", mode);
+    assert.deepEqual(g.built, { cli: "claude", mode, argv: crypto.createHash("sha256").update(JSON.stringify(argv)).digest("hex") });
+  }
+  const why = (...a) => gate(...a).gate.why;
+  assert.equal(why({ cli: "claude", mode: "resume", argv, session_id: UUID }), "a resumed conversation");
+  assert.equal(why({ cli: "claude", mode: "fresh", argv, session_id: "1b9c5e4e-6a51-4d6f-8f1e-3c2a7d9e1f00" }), "not a fresh interactive launch: a --session-id hoptell did not assign to this launch");
+  assert.equal(why({ cli: "claude", mode: "fresh", argv, session_id: null }), "not a fresh interactive launch: a --session-id hoptell did not assign to this launch");
+  const upper = argv.map((x) => (x === UUID ? UUID.toUpperCase() : x));
+  assert.equal(why({ cli: "claude", mode: "fresh", argv: upper, session_id: UUID.toUpperCase() }, upper), "not a fresh interactive launch: a --session-id hoptell did not assign to this launch", "a canonical, lowercase UUID only");
+  assert.equal(why({ cli: "claude", mode: "fresh", argv, session_id: UUID }, argv, "me-bob"), "not a fresh interactive launch: another session name");
+  // The words must be built's exactly: a wrapper or anything added in between turns it off.
+  assert.equal(why({ cli: "claude", mode: "fresh", argv, session_id: UUID }, ["env", ...argv]), "not the launch hoptell built");
+  assert.equal(why({ cli: "claude", mode: "fresh", argv, session_id: UUID }, [...argv.slice(0, -1), "--add-dir", "/", argv.at(-1)]), "not the launch hoptell built");
+  assert.equal(why({ cli: "codex", mode: "fresh", argv, session_id: null }), "not the launch hoptell built", "another CLI than its command");
+  assert.equal(why({ cli: "claude", mode: "fresh", argv }), "not the launch hoptell built", "not a builder's account");
+  // Typed by hand (no built): a --session-id turns it off.
+  assert.equal(why(null), "not a fresh interactive launch: a --session-id hoptell did not assign to this launch");
+  // The record keeps scope and built; armed Claude Code needs its scope.
+  const home = tmp(t);
+  const g = gate({ cli: "claude", mode: "fresh", argv, session_id: UUID });
+  const rec = writeLaunch(home, "me-alice", { cli: g.cli, root: g.root, scope: g.scope, built: g.built, gate: g.gate, folder: dir, tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST });
+  assert.deepEqual(readLaunch(home, "me-alice"), rec);
+  fs.writeFileSync(launchFileOf(home, "me-alice"), JSON.stringify({ ...rec, scope: null }));
+  assert.equal(readLaunch(home, "me-alice"), null, "armed Claude Code without its scope");
+  fs.writeFileSync(launchFileOf(home, "me-alice"), JSON.stringify({ ...rec, scope: "home" }));
+  assert.equal(readLaunch(home, "me-alice"), null, "home is never armed");
+  fs.writeFileSync(launchFileOf(home, "me-alice"), JSON.stringify({ ...rec, built: { ...rec.built, argv: "x" } }));
+  assert.equal(readLaunch(home, "me-alice"), null);
+  // The note that the agent ended: only for the launch whose record is there.
+  writeLaunch(home, "me-alice", { cli: g.cli, root: g.root, scope: g.scope, built: g.built, gate: g.gate, folder: dir, tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST });
+  const id = readLaunch(home, "me-alice").id;
+  assert.equal(readExit(home, "me-alice", id), null);
+  assert.equal(writeExit(home, "me-alice", id, "130", { now: () => 9 }), true);
+  assert.deepEqual(readExit(home, "me-alice", id), { status: 130, at: 9 });
+  assert.equal(readExit(home, "me-alice", "f".repeat(32)), null, "another launch's");
+  writeExit(home, "me-alice", id, "x");
+  assert.equal(readExit(home, "me-alice", id).status, null, "a status that is not one: unknown");
+});
+
+test("Claude Code's install is a link to a file named by its version: it resolves and reports 2.1.314, and the gate arms from the launch, never the pane's command", (t) => {
+  const dir = tmp(t);
+  const versions = path.join(dir, "share", "claude", "versions");
+  fs.mkdirSync(versions, { recursive: true });
+  const real = path.join(versions, "2.1.314");
+  fs.writeFileSync(real, "#!/bin/sh\n[ \"$1\" = --version ] && echo '2.1.314 (Claude Code)' && exit 0\nexec sleep 60\n", { mode: 0o755 });
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(real, path.join(bin, "claude"));
+  const g = launchGate(["claude"], { folder: dir, env: { PATH: [bin, process.env.PATH].join(path.delimiter), HOME: os.tmpdir() } });
+  assert.deepEqual([g.gate.state, g.cli.name, g.cli.version, path.basename(g.argv[0])], ["armed", "claude", "2.1.314", "claude"]);
+});
+
+test("the gate over a Claude Code and an agy launch: the dialog naming the launch folder arms it, the selection may move, another frame ends it", (t) => {
+  const screens = JSON.parse(fs.readFileSync(new URL("./fixtures/prompt-screens.json", import.meta.url), "utf8")).screens;
+  for (const [cli, version, name, moved] of [["claude", "2.1.314", "claude-2.1.314-trust-w120", "claude-2.1.314-trust-selected-yes-w120"], ["agy", "1.4.11", "agy-1.4.11-trust-w120", "agy-1.4.11-trust-selected-no-w120"]]) {
+    const home = tmp(t);
+    const read = (n) => {
+      const s = screens.find((x) => x.name === n);
+      const screen = s.rows.join("\n");
+      return { screen, inputShown: false, prompt: classifyPrompt(screen, { cli, version, cursor: s.cursor }) };
+    };
+    const first = read(name);
+    const folder = first.prompt.folders[0];
+    const launch = (o = {}) => relaunch(home, "me-alice", { cli: { name: cli, path: `/x/${cli}`, version }, root: folder, scope: "folder", gate: { state: "armed", why: null, at: 1 }, folder, tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST, ...o });
+    let r = launch();
+    let g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
+    g.observe(first);
+    g.observe(read(moved));
+    assert.deepEqual([g.armed(), g.cli(), g.version()], [true, cli, version], cli);
+    g.observe(read(cli === "claude" ? "claude-2.1.314-trust-subdir-w120" : "agy-1.4.11-trust-subdir-w120"));
+    assert.equal(readLaunch(home, "me-alice").gate.why, "the startup dialog ended", cli);
+    // A launch folder the dialog does not name (Claude Code's repository root, for instance): never armed.
+    r = launch({ folder: "/private/tmp/elsewhere" });
+    g = startGate(home, "me-alice", injectorAt({ now: () => r.started }));
+    g.observe(first);
+    assert.equal(readLaunch(home, "me-alice").gate.why, "startup not observed", cli);
+  }
+});
+
+test("the note that an agent ended is its own launch's: a late prompt-wait of an earlier launch whose name was reused writes nothing", (t) => {
+  const home = tmp(t);
+  const o = { cli: { name: "claude", path: "/x/claude", version: "2.1.314" }, root: "/x", scope: "folder", gate: { state: "armed", why: null, at: 1 }, folder: "/x", tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST };
+  const a = relaunch(home, "me-alice", o);
+  const b = relaunch(home, "me-alice", { ...o, tmux: { ...o.tmux, session: "$2", pane: "%4" } });
+  assert.notEqual(a.id, b.id);
+  assert.equal(writeExit(home, "me-alice", a.id, "0"), false, "A's prompt-wait, late");
+  assert.equal(readExit(home, "me-alice", b.id), null);
+  assert.equal(writeExit(home, "me-alice", "-", "0"), false, "no launch id (a window started before this release)");
+  assert.equal(writeExit(home, "me-alice", undefined, "0"), false);
+  assert.equal(readExit(home, "me-alice", b.id), null);
+  assert.equal(writeExit(home, "me-alice", b.id, "0"), true);
+  assert.equal(readExit(home, "me-alice", b.id).status, 0);
+  // The id hoptell tmux made before the pane started is the record's.
+  const id = "a".repeat(32);
+  assert.equal(relaunch(home, "me-alice", { ...o, id }).id, id);
+  assert.throws(() => relaunch(home, "me-alice", { ...o, id: "x" }), /not a launch id/);
 });

@@ -992,7 +992,8 @@ test("tmux: the agent exiting by itself ends its session by session id; hoptell 
   assert.equal(agentCommand(["codex", "-c", "x=1"], "hoptell-a"), "'codex' '-c' 'x=1'; tmux kill-session -t '=hoptell-a'");
   assert.equal(agentCommand(["node", "bin", "agents", "exec"], "hoptell-a", { endByName: false }), "'node' 'bin' 'agents' 'exec'");
   // hoptell tmux waits, briefly, for a prompt answer's result to go out before it ends the session (a Quit).
-  assert.equal(agentCommand(["codex"], "hoptell-a", { name: "me-a" }), `'codex'; '${process.execPath}' '${BIN}' prompt-wait 'me-a'; tmux kill-session -t '=hoptell-a'`);
+  assert.equal(agentCommand(["codex"], "hoptell-a", { name: "me-a" }), `'codex'; '${process.execPath}' '${BIN}' prompt-wait 'me-a' - "$?"; tmux kill-session -t '=hoptell-a'`);
+  assert.equal(agentCommand(["codex"], "hoptell-a", { name: "me-a", launchId: "b".repeat(32) }), `'codex'; '${process.execPath}' '${BIN}' prompt-wait 'me-a' ${"b".repeat(32)} "$?"; tmux kill-session -t '=hoptell-a'`, "the launch's own id");
   assert.equal(agentCommand(["codex"], "hoptell-a", { endByName: false, name: "me-a" }), "'codex'");
   const w = agentsWorld(t);
   const name = `t7x${crypto.randomBytes(3).toString("hex")}-e5f6`;
