@@ -8,6 +8,7 @@ import path from "node:path";
 import { openBound } from "../lib/session.js";
 import { openStore, processConsumer } from "../lib/store.js";
 import { DecisionError, KEY_MAX_MESSAGES, openContacts } from "../lib/quarantine.js";
+import { managedStoreWitness } from "../lib/contacts.js";
 
 const R = "a".repeat(32);
 const ALICE = "m_aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -87,6 +88,19 @@ test("held messages: quarantine, one request per sender, one rate-limited notifi
   assert.equal(alice.items, KEY_MAX_MESSAGES);
   assert.equal(alice.dropped, 1);
   assert.equal(after.dropped.blocked, 1);
+});
+
+test("files beside the session stores (v2/waits/, lib/waits.js) are skipped, never listed as folders", async (t) => {
+  const home = tmpHome(t);
+  const c = await openContacts(home, { notifier: () => {} });
+  const { bound } = await sessionStore(home, "s");
+  await c.hold(bound.dir, session("s"), fromAlice("one"), "ask");
+  fs.mkdirSync(path.join(home, "v2", "waits"), { recursive: true });
+  for (const f of ["budget.json", "counter.json"]) fs.writeFileSync(path.join(home, "v2", "waits", f), "{}");
+  fs.writeFileSync(path.join(home, "v2", R, "stray.json"), "{}");
+  assert.equal((await c.status()).requests.length, 1);
+  assert.equal((await (await openContacts(home, { notifier: () => {} })).status()).requests[0].items, 1);
+  assert.equal(managedStoreWitness(home, { strict: true }), true);
 });
 
 test("decisions: stale tokens are refused; allow-once releases exactly its cohort with approval; allow grants; block deletes", async (t) => {
