@@ -298,7 +298,9 @@ test("prompt requests the bridge refuses: malformed, not from the control name i
   await s.ask(m);
   await until(() => drops("prompt_again") === 1, 4000, "again");
   // Late.
-  await s.ask(manifestFor({ created_at: Date.now() - CARD_MS - 1000, expires_at: Date.now() - 1000 }));
+  // One clock reading: two could differ by a millisecond and stretch the card past CARD_MS.
+  const past = Date.now();
+  await s.ask(manifestFor({ created_at: past - CARD_MS - 1000, expires_at: past - 1000 }));
   await until(() => drops("prompt_late") === 1, 4000, "late");
   // Dated more than a minute ahead of the bridge's clock: not shown.
   const ahead = Date.now() + 7 * 86400_000;
