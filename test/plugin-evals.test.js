@@ -245,7 +245,7 @@ test("launch and stop graders: real calls pass; quoted commands, one reviewer, w
     assert.ok(passes(dir, { ...ok, calls: [PEERS, FLAGS, bash(both.replaceAll("-a never ", `-a never -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"' `))] }), `${dir}: a model and effort`);
   }
   const claudeDir = "hoptell-reviewers/start-claude-code-reviewer";
-  const CL = `claude --allowedTools ${MEMBER_ALLOWED_TOOLS} --disallowedTools Edit,Write,NotebookEdit --permission-mode default`;
+  const CL = `claude --allowedTools ${MEMBER_ALLOWED_TOOLS} --disallowedTools Edit,Write,NotebookEdit --permission-mode manual`;
   const plan = launch("dana-reviewer-1", CL);
   const claudeFlags = bash("hoptell agents flags claude --role reviewer");
   assert.ok(passes(claudeDir, { calls: [claudeFlags, bash(plan)], reply: "Started dana-reviewer-1." }));
@@ -258,7 +258,7 @@ test("launch and stop graders: real calls pass; quoted commands, one reviewer, w
   assert.ok(!passes(claudeDir, { calls: [bash(launch("reviewer-1", CL))], reply: "" }), "claude: no member prefix");
   assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", "claude"))], reply: "" }), "claude: with its editing tools");
   assert.ok(!passes(claudeDir, { calls: [claudeFlags, bash(launch("dana-reviewer-1", "claude --permission-mode plan"))], reply: "" }), "claude: plan mode, where every reply asks");
-  assert.ok(!passes(claudeDir, { calls: [claudeFlags, bash(launch("dana-reviewer-1", "claude --disallowedTools Edit,Write,NotebookEdit --permission-mode default"))], reply: "" }), "claude: no hoptell tools allowed, so every reply asks");
+  assert.ok(!passes(claudeDir, { calls: [claudeFlags, bash(launch("dana-reviewer-1", "claude --disallowedTools Edit,Write,NotebookEdit --permission-mode manual"))], reply: "" }), "claude: no hoptell tools allowed, so every reply asks");
   assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", CL, ""))], reply: "Started dana-reviewer-1." }), "claude: no initial prompt");
   assert.ok(!passes(claudeDir, { calls: [bash(launch("dana-reviewer-1", CL, taskFor("dana-other")))], reply: "Started dana-reviewer-1." }), "claude: a prompt for another lead");
   assert.ok(!passes(claudeDir, { calls: [bash(plan), bash(launch("dana-reviewer-2", "claude --dangerously-skip-permissions"))], reply: "" }), "claude: plus an unsafe launch");

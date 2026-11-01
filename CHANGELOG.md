@@ -23,7 +23,7 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   `<hoptell home>/presets/roles.json` overrides them per CLI and role. agy takes its effort in
   the model id and never gets `--effort`. agy reviewers start in plan mode with `--sandbox` and
   without per-tool prompts; agy implementers are not offered.
-  Claude Code reviewers start in default mode without the Edit, Write and NotebookEdit tools,
+  Claude Code reviewers start in manual mode without the Edit, Write and NotebookEdit tools,
   with the hoptell tools allowed: in plan mode Claude Code 2.1.316 asked before every
   `send_message`, so a reviewer could not reply unattended. Your Claude Code permission rules
   still decide each shell command; it is not an OS sandbox. The MCP server marks `list_peers` and

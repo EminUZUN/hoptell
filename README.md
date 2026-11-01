@@ -625,7 +625,7 @@ For separate teams, run separate relays. A relay is a single small process.
 hoptell tmux alice-planner  --roles planner  -- claude
 hoptell tmux alice-codex-1  --roles backend  -- codex
 hoptell tmux alice-codex-2  --roles backend  -- codex
-hoptell tmux alice-reviewer --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode default "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
+hoptell tmux alice-reviewer --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode manual "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
 ```
 
 Then tell the planner: *"split the task, send backend work to @backend, and send the result to
@@ -1160,7 +1160,7 @@ below). With the shipped presets that is:
 
 ```sh
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
@@ -1170,7 +1170,7 @@ them; a reviewer started without such a prompt asks you whether it may review.
 
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
 Claude Code reviews with the hoptell messaging tools allowed and without its file-editing tools
-(`--disallowedTools Edit,Write,NotebookEdit`), in default mode: plan mode runs only tools marked
+(`--disallowedTools Edit,Write,NotebookEdit`), in manual mode: plan mode runs only tools marked
 read-only, so every reply would ask. A reviewer compares a review's file with its local copy
 through the read-only `check_snapshot` tool, which reads only files in the session's folder. Your
 Claude Code permission rules decide each shell command: one no rule allows asks first, and Claude

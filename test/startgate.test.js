@@ -568,7 +568,7 @@ test("arming Claude Code and agy: a fresh launch of a recorded version; their ow
   assert.equal(off(["claude", "--allowedTools", "Bash", "--model", "x", "fix the tests"]), "not a fresh interactive launch: an --allowedTools list hoptell did not build");
   assert.equal(off(["claude", "--allowedTools", V, "--model", "x", "fix the tests"]), "armed");
   // The reviewer preset's --disallowedTools: exactly NO_EDIT_TOOLS, before another option.
-  assert.equal(claudeFreshProblem(["--disallowedTools", NO_EDIT_TOOLS, "--permission-mode", "default", "--allowedTools", V, "--session-id", UUID, "Read your task."], { built: { session_id: UUID } }), null);
+  assert.equal(claudeFreshProblem(["--disallowedTools", NO_EDIT_TOOLS, "--permission-mode", "manual", "--allowedTools", V, "--session-id", UUID, "Read your task."], { built: { session_id: UUID } }), null);
   for (const x of [["--disallowedTools", "Edit", "--model", "x"], ["--disallowedTools", `${NO_EDIT_TOOLS},Bash`, "--model", "x"], ["--disallowedTools", NO_EDIT_TOOLS, "Read your task."], ["--disallowedTools", NO_EDIT_TOOLS]]) assert.equal(claudeFreshProblem(x), "a --disallowedTools list hoptell did not build", x.join(" "));
   for (const ok of [[], ["--permission-mode", "acceptEdits"], ["--permission-mode=manual", "--model", "opus", "--effort", "high"], ["--append-system-prompt", "Be brief.", "Review what me-lead sends."], ["-n", "me-alice"], ["--name=me-alice"]]) assert.equal(claudeFreshProblem(ok, { name: "me-alice" }), null, ok.join(" "));
   const claudeOff = {

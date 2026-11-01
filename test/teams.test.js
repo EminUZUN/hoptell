@@ -82,7 +82,7 @@ function fakeClis(root) {
   fs.mkdirSync(bin, { recursive: true });
   const help = {
     codex: "Usage: codex [OPTIONS] [PROMPT]\n  -c, --config <key=value>\n  -m, --model <MODEL>\n  -s, --sandbox <SANDBOX_MODE>  [possible values: read-only, workspace-write, danger-full-access]\n  -a, --ask-for-approval <APPROVAL_POLICY>  [possible values: untrusted, on-request, never]\n",
-    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n  --allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow\n  --disallowedTools, --disallowed-tools <tools...>  Comma or space-separated list of tool names to deny\n',
+    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "manual")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n  --allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow\n  --disallowedTools, --disallowed-tools <tools...>  Comma or space-separated list of tool names to deny\n',
   };
   const version = { codex: "codex-cli 0.164.0", claude: "2.1.311 (Claude Code)" };
   for (const cli of ["codex", "claude"]) {
@@ -169,7 +169,7 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.match(dry.out, /hoptell worktree add dana-n1-impl-1 --team n1 --cli codex --owns 'lib\/\*\*'/);
   assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-impl-1 --roles implementer,n1 --cwd ${s.root}/repo-wt/dana-n1-impl-1 --task \\S+impl.md -- codex -s workspace-write -a never`));
   // The hoptell messaging tools without a prompt: one argument, before a single-value option.
-  assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \\S+ --task \\S+rev\\.md -- claude --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high --allowedTools ${MEMBER_ALLOWED_TOOLS} --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt`));
+  assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \\S+ --task \\S+rev\\.md -- claude --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high --allowedTools ${MEMBER_ALLOWED_TOOLS} --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt`));
   assert.match(dry.out, /read your task with the hoptell read_task tool/);
   assert.match(dry.warn, /dana-n1-impl-1 \(codex\) gets write access to its worktree/);
   assert.match(dry.out, /Dry run: nothing was started/);

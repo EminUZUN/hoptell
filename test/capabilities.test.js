@@ -255,7 +255,7 @@ test("launch validation: the default mixed team (codex, claude and agy reviewers
     got[cli] = r;
   }
   assert.deepEqual(got.codex.args, ["-s", "read-only", "-a", "never", "-c", 'model_reasoning_effort="high"']);
-  assert.deepEqual(got.claude.args, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default", "--effort", "high"]);
+  assert.deepEqual(got.claude.args, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "manual", "--effort", "high"]);
   assert.deepEqual(got.agy.args, ["--mode", "plan", "--sandbox", "--dangerously-skip-permissions"]);
   for (const cli of ["codex", "claude"]) assert.ok(got[cli].warnings.includes("effort high unchecked (model from your CLI settings)"), cli);
   assert.ok(!got.agy.args.includes("--effort") && got.agy.effort === null);
@@ -318,7 +318,7 @@ test("presets: the shipped file names no model, gives reviewers high (never agy)
   const { presets, warnings } = loadPresets(fs.mkdtempSync(path.join(os.tmpdir(), "hcap-shipped-")));
   assert.deepEqual(warnings, []);
   assert.deepEqual(presets.codex.reviewer.flags, ["-s", "read-only", "-a", "never"]);
-  assert.deepEqual(presets.claude.reviewer.flags, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default"]);
+  assert.deepEqual(presets.claude.reviewer.flags, ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "manual"]);
   assert.deepEqual(presets.agy.reviewer.flags, ["--mode", "plan", "--sandbox", "--dangerously-skip-permissions"]);
   assert.equal(presets.codex.reviewer.effort, "high");
   assert.equal(presets.claude.reviewer.effort, "high");
@@ -413,7 +413,7 @@ test("hoptell agents flags and capabilities: the line to launch with, warnings a
   assert.equal(r.failed.c, 2);
   r = await run(["flags", "claude", "--role", "reviewer", "--model", "opus", "--json"]);
   const j = JSON.parse(r.out.join("\n"));
-  assert.deepEqual(j.args, ["--allowedTools", MEMBER_ALLOWED_TOOLS, "--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default", "--model", "opus", "--effort", "high"]);
+  assert.deepEqual(j.args, ["--allowedTools", MEMBER_ALLOWED_TOOLS, "--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "manual", "--model", "opus", "--effort", "high"]);
   assert.equal(j.preset.from, "shipped");
   r = await run(["capabilities", "agy"]);
   assert.match(r.out[0], /^agy 1\.4\.8 {2}/);
@@ -583,7 +583,7 @@ test("discovery failures are unknown parts with warnings, never a failed launch:
   const lines = [];
   const warns = [];
   await agentsCommand({ args: ["flags", "claude", "--role", "reviewer"], home: path.join(file, "home"), env: { PATH: f.pathVar }, homedir: h.homedir, out: (l) => lines.push(l), warn: (l) => warns.push(l), fail: (m) => assert.fail(m), sources: { capabilities: { tmpdir: path.join(file, "tmp") } } });
-  assert.deepEqual(lines, ["claude --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high"]);
+  assert.deepEqual(lines, ["claude --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high"]);
   assert.ok(warns.some((w) => /no empty temporary folder|unknown/.test(w)), warns.join("\n"));
 });
 
@@ -598,7 +598,7 @@ test("hoptell agents flags: a Claude Code reviewer allows the hoptell tools, onl
     return { out, warn };
   };
   let r = await run(["flags", "claude", "--role", "reviewer"]);
-  assert.deepEqual(r.out, [`claude --allowedTools ${MEMBER_ALLOWED_TOOLS} --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high`]);
+  assert.deepEqual(r.out, [`claude --allowedTools ${MEMBER_ALLOWED_TOOLS} --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high`]);
   // An owner's preset without flags: nothing after the list would end it, so no list, and a warning.
   put(path.join(home, "presets", "roles.json"), JSON.stringify({ version: 1, presets: { claude: { implementer: { flags: [] } } } }));
   r = await run(["flags", "claude", "--role", "implementer"]);

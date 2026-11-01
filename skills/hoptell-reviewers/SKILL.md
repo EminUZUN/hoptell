@@ -47,7 +47,7 @@ presets this gives:
 
 ```sh
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode manual --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
@@ -58,7 +58,7 @@ env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles
 
 - `-s read-only` keeps Codex in its read-only sandbox, and `-a never` means Codex never asks to
   leave it. Use `-a never` only together with `-s read-only`.
-- Start Claude Code with the flags shown: no editing tools, default mode (plan mode asks before
+- Start Claude Code with the flags shown: no editing tools, manual mode (plan mode asks before
   every reply). Allow edits only if the user asks. Add no channel flag: `hoptell tmux` delivers.
 - Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt in
   `--start`, never `-i` (agy acts on `-i` before its folder trust dialog is answered).

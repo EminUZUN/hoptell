@@ -20,7 +20,7 @@ Arguments: $ARGUMENTS
   skill shows, also when no model or effort is given (it applies the presets and checks the
   CLI), and tell the user its warnings. If it refuses, say why and start nothing.
 - The reviewer flags are Codex `-s read-only -a never`, Claude Code `--allowedTools <hoptell's
-  tools> --disallowedTools Edit,Write,NotebookEdit --permission-mode default` and agy `--mode plan
+  tools> --disallowedTools Edit,Write,NotebookEdit --permission-mode manual` and agy `--mode plan
   --sandbox --dangerously-skip-permissions`; Codex and Claude Code may differ only when the user
   asks for edits, and agy always stays in plan mode. End
   each launch with the initial prompt from the skill (for agy in `--start`), naming this session as

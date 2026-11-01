@@ -178,8 +178,8 @@ test("recipes: reviewer launches set HOPTELL_PUSH=tmux, Codex is read-only, Clau
         assert.ok(!/--effort|accept-edits|--mode auto|server:hoptell|--channels/.test(agent), `${f}: ${line}`);
       }
       if (/^claude\b/.test(agent)) {
-        // Default mode without editing tools: plan mode runs only read-only tools, so every reply would ask.
-        assert.match(agent, /^claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,\S+ --disallowedTools Edit,Write,NotebookEdit --permission-mode default\b/, `${f}: ${line}`);
+        // Manual mode without editing tools: plan mode runs only read-only tools, so every reply would ask.
+        assert.match(agent, /^claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,\S+ --disallowedTools Edit,Write,NotebookEdit --permission-mode manual\b/, `${f}: ${line}`);
         // Exactly the list hoptell builds (lib/startgate.js), which its start gate accepts.
         assert.equal(agent.split(" ")[2], MEMBER_ALLOWED_TOOLS, `${f}: ${line}`);
         assert.ok(!/server:hoptell|--channels|dangerously|bypassPermissions|acceptEdits/.test(agent), `${f}: ${line}`);

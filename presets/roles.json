@@ -21,7 +21,7 @@
     },
     "claude": {
       "reviewer": {
-        "flags": ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "default"],
+        "flags": ["--disallowedTools", "Edit,Write,NotebookEdit", "--permission-mode", "manual"],
         "effort": "high",
         "source": "https://code.claude.com/docs/en/best-practices",
         "checked": "2026-11-01"

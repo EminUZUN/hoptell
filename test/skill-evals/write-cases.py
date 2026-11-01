@@ -77,11 +77,11 @@ def safe_codex(n):
     # (group 2: the alternatives share one group numbering)
     by_number = rf'{loop_head}\b{n}\b{loop_do}{BODY_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]*?\$\{{?\2\}}? {SAFE_CODEX_TAIL}'
     return f'{CMD_START}(?:{literal}|{by_name}|{by_number})'
-# Claude Code: the hoptell tools allowed (so a reply never asks), no editing tools, default mode
+# Claude Code: the hoptell tools allowed (so a reply never asks), no editing tools, manual mode
 # (plan mode asks before every reply); `hoptell agents flags` adds the model and effort.
 CLAUDE_ALLOW = r"""--allowedTools [^"'#&;|\s\\]*\bmcp__plugin_hoptell_hoptell__send_message\b[^"'#&;|\s\\]*\s+"""
 CLAUDE_MODEL = r"""(?:--model [^"'#&;|\s\\]+\s+)?(?:--effort [a-z]+\s+)?"""
-SAFE_CLAUDE = rf'{CMD_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]+ --roles reviewer -- claude {ARG}{CLAUDE_ALLOW}--disallowedTools Edit,Write,NotebookEdit\s+--permission-mode default\s+{CLAUDE_MODEL}{TASK_WORD}{END}'
+SAFE_CLAUDE = rf'{CMD_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]+ --roles reviewer -- claude {ARG}{CLAUDE_ALLOW}--disallowedTools Edit,Write,NotebookEdit\s+--permission-mode manual\s+{CLAUDE_MODEL}{TASK_WORD}{END}'
 # agy: plan mode with its sandbox, the model asked for, the prompt after -i.
 SAFE_AGY = rf'{CMD_START}HOPTELL_PUSH=tmux hoptell tmux dana-[\w-]+ --roles reviewer -- agy {ARG}--mode plan {ARG}--sandbox {ARG}--model gemini-4-argon-high {ARG}-i{TASK}{END}'
 UNSAFE_AGY = r'hoptell tmux [^"]*-- agy[^"&;|]*(--effort|accept-edits|--mode auto|server:hoptell|--channels)'
@@ -154,7 +154,7 @@ case("hoptell-reviewers/start-two-codex-reviewers",
      ["reviewers", "trigger", "behaviour"])
 
 case("hoptell-reviewers/start-claude-code-reviewer",
-     "A Claude Code reviewer for a source review starts without editing tools in default mode, without a hoptell channel flag, through hoptell tmux.",
+     "A Claude Code reviewer for a source review starts without editing tools in manual mode, without a hoptell channel flag, through hoptell tmux.",
      "Start one Claude Code reviewer for this repo over hoptell. It should only review, not edit.",
      [SKILL("hoptell-reviewers"),
       used("Bash", SAFE_CLAUDE), never("Bash", WRONG_NAME), never("Bash", UNSAFE_CLAUDE),
