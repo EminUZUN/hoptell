@@ -55,7 +55,7 @@ test("file tools are off unless approved folders are configured; messaging still
   assert.match(plainSend, /Snapshot command: .* snapshot`/); // the CLI fallback
   const m = machine(w, "on");
   const on = await w.mcp("on", m.env);
-  assert.deepEqual((await tools(on)).filter((n) => /file|snapshot/.test(n)), ["send_file", "verify_snapshot"]);
+  assert.deepEqual((await tools(on)).filter((n) => /file|snapshot/.test(n)), ["send_file", "verify_snapshot", "check_snapshot"]);
   assert.match(on.client.getInstructions(), /call send_file for one named peer/);
 });
 

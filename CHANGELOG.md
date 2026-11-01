@@ -28,6 +28,10 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   `send_message`, so a reviewer could not reply unattended. Your Claude Code permission rules
   still decide each shell command; it is not an OS sandbox. The MCP server marks `list_peers` and
   `read_task` as read-only.
+- `check_snapshot`: a session started with `hoptell mcp` checks whether a file in its own folder
+  still has a snapshot's sha256, the `snapshot --check` step as a read-only tool. Claude Code
+  members and reviewers get it allowed with the messaging tools, so a review needs no shell
+  prompt. Runs, hosted and HTTP sessions do not offer it.
 - `/hoptell:reviewers` now supports agy and optional model and effort arguments
   (`[count] [codex|claude|agy] [model] [effort]`); the `hoptell-reviewers` skill takes each
   launch's flags from `hoptell agents flags`.

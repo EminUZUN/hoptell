@@ -96,6 +96,7 @@ export const GROUPS = {
       "lib/backup.js",
       "lib/broker.js",
       "lib/capabilities.js",
+      "lib/checksnapshot.js",
       "lib/claims.js",
       "lib/clihelp.js",
       "lib/composer.js",

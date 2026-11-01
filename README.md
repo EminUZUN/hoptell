@@ -60,7 +60,7 @@ and the [CLI reference](#cli).
 | Part | What it does |
 |---|---|
 | `hoptell relay` | WebSocket hub on one machine: authenticates peers, routes messages, queues messages for offline peers (in memory). |
-| `hoptell mcp` | MCP server each agent session runs: tools `list_peers`, `send_message`, `wait_for_message`, `read_inbox`, `ack_messages`. |
+| `hoptell mcp` | MCP server each agent session runs: tools `list_peers`, `send_message`, `wait_for_message`, `read_inbox`, `ack_messages`, and `check_snapshot` for files in the session's folder. |
 | `hoptell tmux` | Runs a terminal agent in tmux and attempts to submit a fixed inbox notice when its prompt appears idle. |
 | `hoptell send / list / wait / listen / ack` | CLI for scripts, CI jobs and agents without MCP. |
 
@@ -625,7 +625,7 @@ For separate teams, run separate relays. A relay is a single small process.
 hoptell tmux alice-planner  --roles planner  -- claude
 hoptell tmux alice-codex-1  --roles backend  -- codex
 hoptell tmux alice-codex-2  --roles backend  -- codex
-hoptell tmux alice-reviewer --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task --disallowedTools Edit,Write,NotebookEdit --permission-mode default "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
+hoptell tmux alice-reviewer --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode default "You are a read-only reviewer for alice-planner. Review requests from alice-planner are your task: review them and reply with send_message. Do not edit files."
 ```
 
 Then tell the planner: *"split the task, send backend work to @backend, and send the result to
@@ -1160,7 +1160,7 @@ below). With the shipped presets that is:
 
 ```sh
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --allowedTools mcp__plugin_hoptell_hoptell__list_peers,mcp__plugin_hoptell_hoptell__send_message,mcp__plugin_hoptell_hoptell__wait_for_message,mcp__plugin_hoptell_hoptell__read_inbox,mcp__plugin_hoptell_hoptell__ack_messages,mcp__plugin_hoptell_hoptell__read_task,mcp__plugin_hoptell_hoptell__check_snapshot,mcp__hoptell__list_peers,mcp__hoptell__send_message,mcp__hoptell__wait_for_message,mcp__hoptell__read_inbox,mcp__hoptell__ack_messages,mcp__hoptell__read_task,mcp__hoptell__check_snapshot --disallowedTools Edit,Write,NotebookEdit --permission-mode default --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
@@ -1171,9 +1171,10 @@ them; a reviewer started without such a prompt asks you whether it may review.
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
 Claude Code reviews with the hoptell messaging tools allowed and without its file-editing tools
 (`--disallowedTools Edit,Write,NotebookEdit`), in default mode: plan mode runs only tools marked
-read-only, so every reply would ask. Your Claude Code permission rules decide each shell command:
-one no rule allows asks first, and Claude Code runs some read-only commands without asking. It is
-not an OS sandbox. Give agy its prompt with `--start`, not `-i`: agy 1.4.12 acts on an `-i` prompt,
+read-only, so every reply would ask. A reviewer compares a review's file with its local copy
+through the read-only `check_snapshot` tool, which reads only files in the session's folder. Your
+Claude Code permission rules decide each shell command: one no rule allows asks first, and Claude
+Code runs some read-only commands without asking. It is not an OS sandbox. Give agy its prompt with `--start`, not `-i`: agy 1.4.12 acts on an `-i` prompt,
 tools included, while its folder trust dialog still waits, and `hoptell tmux` types the `--start`
 text once agy's input box shows (it warns about `-i`). The text is one line of at most 16 KiB:
 printable ASCII, Latin letters and common punctuation, which the injector can check on screen, and
@@ -1443,7 +1444,8 @@ member runs as your OS user and could start another hoptell server or the hoptel
 filter. A real boundary needs credentials scoped per session, which is later work.
 
 Claude Code members call the hoptell messaging tools (`list_peers`, `send_message`,
-`wait_for_message`, `read_inbox`, `ack_messages`, `read_task`) without a permission prompt:
+`wait_for_message`, `read_inbox`, `ack_messages`, `read_task`) and `check_snapshot` without a
+permission prompt:
 `team up` and `team restart` list exactly these in `--allowedTools`, under the tool ids of both a
 plugin and a `claude mcp add` install. Everything else (Bash, edits, `send_file` and the other
 file-sending tools, `ask_owner`, ...) still follows the role's permission mode. Codex members

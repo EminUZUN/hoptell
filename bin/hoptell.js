@@ -1511,11 +1511,7 @@ try {
       if (args[0] === "--check") {
         if (args.length !== 3) fail("snapshot --check needs a digest and a file\nusage: hoptell snapshot --check <sha256:...> <file>", 2);
         const r = snap.checkSnapshot(args[1], args[2]);
-        console.log(
-          r.matches
-            ? `unchanged: ${args[2]} still matches ${r.expected}`
-            : `changed: ${args[2]} is now ${r.current}, not ${r.expected}. Ask for a new review, or reconcile the change deliberately.`,
-        );
+        console.log(snap.checkText(r, args[2]));
         process.exitCode = r.matches ? 0 : 1;
       } else {
         if (args.length !== 1) fail("snapshot needs one file\nusage: hoptell snapshot <file>\n       hoptell snapshot --check <sha256:...> <file>", 2);
