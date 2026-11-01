@@ -26,10 +26,10 @@ const LIVE = JSON.parse(fs.readFileSync(new URL("./fixtures/prompt-screens.json"
 const live = (name) => LIVE.find((x) => x.name === name);
 
 test("prompts: Codex 0.165.0's startup folder trust from live captures at three widths and both launches; actionable only on the tested version", () => {
-  for (const s of LIVE.filter((x) => x.cli === "codex")) {
+  for (const s of LIVE.filter((x) => x.cli === "codex" && !x.name.includes("-worktree-"))) {
     const { dialog, frame, folders, ...r } = classifyPrompt(s.rows.join("\n"), { cli: "codex", version: "0.165.0" });
     const quit = s.launch === "hoptell tmux";
-    // Trust takes "1" (it only selects), a fresh read, then Enter; option 2 is "2" alone. Only Back was checked live.
+    // Trust takes "1" (it only selects), a fresh read, then Enter; option 2 is "2" alone. All three were checked live.
     const trust = { key: "1", action: "trust", label: "Trust folder", steps: [["1"], "revalidate", ["Enter"]], live: true };
     assert.deepEqual(r, { subtype: "codex-startup-trust", actionable: true, options: [trust, quit ? { key: "2", action: "quit", label: "Quit", steps: [["2"]], live: true } : { key: "2", action: "back", label: "Back to Agent Command Center", steps: [["2"]], live: true }], selected: 1 }, s.name);
     // The folder Codex asks about, read back from its rows however the width wrapped it.
@@ -62,11 +62,67 @@ test("prompts: Codex 0.165.0's startup folder trust from live captures at three 
     assert.equal(classifyPrompt(s.rows.join("\n")).subtype, "codex-startup-trust");
   }
   // The same dialog at 80, 120 and 200 columns: one dialog digest, however the width wrapped it.
-  const direct = LIVE.filter((x) => x.cli === "codex" && x.launch === "direct").map((x) => classifyPrompt(x.rows.join("\n"), { cli: "codex", version: "0.165.0" }).dialog);
+  const direct = LIVE.filter((x) => x.cli === "codex" && x.launch === "direct" && !x.name.includes("-worktree-")).map((x) => classifyPrompt(x.rows.join("\n"), { cli: "codex", version: "0.165.0" }).dialog);
   assert.equal(direct.length, 3);
   assert.equal(new Set(direct).size, 1);
   // Claude Code's workspace trust (No first and selected, no digits): display-only.
   assert.deepEqual(classifyPrompt(live("claude-trust-w120").rows.join("\n"), { cli: "claude", version: "2.1.312" }), { subtype: "folder-trust", actionable: false, options: [], selected: null });
+});
+
+test("prompts: Codex 0.165.0's worktree variant from live captures at two widths: its own shape; the folder is the repository root; the note is part of the dialog", () => {
+  const at = { cli: "codex", version: "0.165.0" };
+  const wt = LIVE.filter((x) => x.name.includes("-worktree-"));
+  assert.equal(wt.length, 2);
+  const repo = `/private/tmp/${"x".repeat(85)}/wtprobe/repo`;
+  for (const s of wt) {
+    const { dialog, frame, folders, ...r } = classifyPrompt(s.rows.join("\n"), at);
+    // Trust, Quit and Back were all checked live on this variant.
+    const trust = { key: "1", action: "trust", label: "Trust folder", steps: [["1"], "revalidate", ["Enter"]], live: true };
+    assert.deepEqual(r, { subtype: "codex-startup-trust", actionable: true, options: [trust, { key: "2", action: "back", label: "Back to Agent Command Center", steps: [["2"]], live: true }], selected: 1 }, s.name);
+    // The folder Codex trusts: the repository root's rows, never the worktree's.
+    assert.deepEqual(folders, [repo], s.name);
+    const again = (rows) => classifyPrompt(rows.join("\n"), at);
+    const moved = s.rows.map((x) => x.replace(/^› 1\./, "  1.").replace(/^ {2}2\./, "› 2."));
+    assert.equal(again(moved).selected, 2);
+    assert.notEqual(again(moved).dialog, dialog);
+    assert.equal(again(moved).frame, frame);
+    // Another root, another worktree folder: another dialog and frame.
+    for (const other of [s.rows.map((x) => x.replace("wtprobe/repo", "wtprobe/rep2")), s.rows.map((x) => x.replace("wtprobe/wt1", "wtprobe/wt2"))]) {
+      assert.notEqual(again(other).dialog, dialog, s.name);
+      assert.notEqual(again(other).frame, frame, s.name);
+    }
+    // The note changed: not this shape, and the plain one never takes a screen with a note.
+    for (const note of [s.rows.map((x) => x.replace("repository root:", "repository roots:")), s.rows.map((x) => x.replace("Trusting will apply", "Trusting applies"))]) {
+      const p = again(note);
+      assert.equal(p?.actionable ?? false, false, s.name);
+    }
+    // No root below the note, or a blank row inside the root: not this shape.
+    const noteAt = s.rows.findIndex((x) => x.startsWith("  Note: "));
+    assert.equal(again(s.rows.filter((_, i) => i !== noteAt + 1))?.actionable ?? false, false);
+    // Another version: display-only.
+    assert.equal(classifyPrompt(s.rows.join("\n"), { cli: "codex", version: "0.166.0" }).actionable, false);
+  }
+  // The same dialog at 120 and 200 columns: one dialog digest.
+  assert.equal(new Set(wt.map((x) => classifyPrompt(x.rows.join("\n"), at).dialog)).size, 1);
+  // Narrower, the note and the paths wrap (not captured live: the 120-column rows wrapped by
+  // hand, the note at any word, "root:" alone included): the same dialog still.
+  const w120 = live("codex-0.165.0-trust-worktree-w120").rows;
+  const noteAt = w120.findIndex((x) => x.startsWith("  Note: "));
+  const wrap = (rows, cut) => rows.flatMap((x, i) => (i === noteAt ? cut(x) : i === noteAt + 1 || i === noteAt - 2 ? [x.slice(0, 70), `  ${x.slice(70)}`] : [x]));
+  const base = classifyPrompt(w120.join("\n"), at).dialog;
+  for (const cut of [(x) => [x.slice(0, x.indexOf(" Trusting")), `  ${x.slice(x.indexOf("Trusting"))}`], (x) => [x.slice(0, x.indexOf(" root:")), "  root:"]]) {
+    const p = classifyPrompt(wrap(w120, cut).join("\n"), at);
+    assert.equal(p?.dialog, base);
+    assert.deepEqual(p.folders, [repo, `${repo.slice(0, 68)} ${repo.slice(68)}`]);
+  }
+  // The plain dialog's digests are those of 0.4.0: the variant changed nothing there.
+  for (const [name, dialog, frame] of [
+    ["codex-0.165.0-trust-w120", "ea7f9daf7efbf96c5295abbbfea21dc6686c9fb16bca198567eefdeca277f792", "f10106ba02eba3256a41337580f79253047c3013875b9f1f9944488373b61cd4"],
+    ["codex-0.165.0-trust-hoptelltmux-w200", "818b36912c01df9e67065f0e46543f50089288dcba4ef739d41e71fd7417977a", "8e65d91c2982acbd4687da52122fec4f30cf32eaa5d6ef5872f74b250d6575e6"],
+  ]) {
+    const p = classifyPrompt(live(name).rows.join("\n"), at);
+    assert.deepEqual([p.dialog, p.frame], [dialog, frame], name);
+  }
 });
 
 test("prompts: spoofed trust text in agent output, a changed selection and other dialogs", () => {

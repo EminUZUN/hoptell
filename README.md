@@ -1210,12 +1210,17 @@ own, named after your member with `-c` and a random suffix. Nothing is answered 
 
 **Codex's folder trust from Telegram.** One prompt can be answered from the owner channel: the
 folder trust question of Codex 0.165.0 right after `hoptell tmux` started it, in the folder it was
-started for (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto` or
-`--dangerously-bypass-approvals-and-sandbox` on its command line). Instead of the note you get a
+started for (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto`,
+`--dangerously-bypass-approvals-and-sandbox`, `-c`/`--config` for `model`, `model_reasoning_effort`
+or `developer_instructions`, and an optional non-empty trailing prompt; a prompt made only of ASCII
+letters, digits, `_` or `-` stays notification-only. That is how `hoptell team up` starts its members). Instead of the note you get a
 card with a button for each option whose keys were checked live on that Codex version, worded as
-on the screen, for at most 10 minutes; on 0.165.0 that is Trust folder and Quit. Test mode is only
-for an option not checked live yet: `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` shows and presses
-those too, and its card says it is in test mode. Your tap
+on the screen, for at most 10 minutes; on 0.165.0 that is Trust folder and Quit. In a worktree or
+another subfolder of a repository, Codex asks about the repository's root instead, with a note
+that says so, and the card names that root, with the same buttons. Test mode is only
+for an option not checked live yet: `HOPTELL_PROMPT_UNTESTED=1 hoptell tmux ...` (or `hoptell team
+up` with it in the environment, for every member) shows and presses those too, and its card says
+it is in test mode. Your tap
 is signed by the bridge and goes only to that session's injector; it presses only the option you
 chose, and only in that session's own terminal, while the dialog it watched since the start is
 still on the screen, nobody typed or scrolled in that terminal since the card was made, and the

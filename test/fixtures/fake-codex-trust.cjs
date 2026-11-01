@@ -8,12 +8,20 @@
 // program's approval prompt for a moment, then the dialog again with Trust selected. A line "redraw <folder>" in the
 // control file (argv[4]) redraws with another folder (the screen changed between the card and the
 // tap). argv[5], when given, is the folder the dialog names from the start (a real launch's).
+// argv[6], when given, is a repository root: the dialog is then the worktree variant (live
+// capture codex-0.165.0-trust-worktree-w200), whose note names that root, the folder Codex trusts.
 const fs = require("node:fs");
 const path = require("node:path");
 
-const [log, mode = "normal", ctl = null, folder = null] = process.argv.slice(2);
+const [log, mode = "normal", ctl = null, folder = null, root = null] = process.argv.slice(2);
 const screens = JSON.parse(fs.readFileSync(path.join(__dirname, "prompt-screens.json"), "utf8")).screens;
 const rows = screens.find((s) => s.name === "codex-0.165.0-trust-hoptelltmux-w200").rows.slice();
+if (root) {
+  // The worktree variant's rows above the risk text, with this root; the rest as under hoptell tmux.
+  const wt = screens.find((s) => s.name === "codex-0.165.0-trust-worktree-w200").rows;
+  const note = wt.findIndex((r) => r.startsWith("  Note: "));
+  rows.splice(0, rows.findIndex((r) => r.startsWith("  Trust this folder?")), ...wt.slice(0, note + 1), `  ${root}`, "");
+}
 let selected = mode === "start-on-2" || mode === "foreign-after-one" ? 2 : 1;
 let folderRows = folder ? [`  ${folder}`, ""] : null;
 const note = (line) => fs.appendFileSync(log, `${line}\n`);

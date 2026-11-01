@@ -1,5 +1,5 @@
 {
- "source": "Live captures of codex-cli 0.165.0 and Claude Code 2.1.312 (macOS, tmux), 2026-10-29: the startup folder-trust prompt of each, nothing answered and nothing saved to the trust config. Codex run directly in tmux (w80, w120, w200) and through hoptell tmux (option 2 is Quit there, Back to Agent Command Center otherwise). Rows: capture-pane -p; cursor: cursor_x, cursor_y; size: the pane size. Temporary paths are replaced with same-length placeholders.",
+ "source": "Live captures of codex-cli 0.165.0 and Claude Code 2.1.312 (macOS, tmux), 2026-10-29: the startup folder-trust prompt of each, nothing answered and nothing saved to the trust config. Codex run directly in tmux (w80, w120, w200) and through hoptell tmux (option 2 is Quit there, Back to Agent Command Center otherwise). Rows: capture-pane -p; cursor: cursor_x, cursor_y; size: the pane size. Temporary paths are replaced with same-length placeholders. Codex in a linked worktree of an untrusted repository (w120, w200, 2026-10-30), run directly in tmux with a prompt: the variant that also names the repository root, the folder Codex trusts; no cursor recorded (cursor: null).",
  "screens": [
   {
    "name": "claude-trust-w120",
@@ -127,6 +127,55 @@
     "  permission settings. Folder settings can run code automatically, even",
     "  without a model request. Continue only if you trust these files. Your trust",
     "  decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Back to Agent Command Center",
+    "",
+    "  enter continue · esc back"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-worktree-w120",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "direct",
+   "size": "120x50",
+   "cursor": null,
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/wtprobe/wt1",
+    "",
+    "  Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/wtprobe/repo",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings",
+    "  can run code automatically, even without a model request. Continue only if you trust these files. Your trust",
+    "  decision will be saved.",
+    "",
+    "› 1. Trust and continue",
+    "  2. Back to Agent Command Center",
+    "",
+    "  enter continue · esc back"
+   ]
+  },
+  {
+   "name": "codex-0.165.0-trust-worktree-w200",
+   "cli": "codex",
+   "version": "0.165.0",
+   "launch": "direct",
+   "size": "200x50",
+   "cursor": null,
+   "rows": [
+    "",
+    "  Folder access",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/wtprobe/wt1",
+    "",
+    "  Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+    "  /private/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/wtprobe/repo",
+    "",
+    "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you",
+    "  trust these files. Your trust decision will be saved.",
     "",
     "› 1. Trust and continue",
     "  2. Back to Agent Command Center",

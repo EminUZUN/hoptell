@@ -85,7 +85,7 @@ async function e2eWorld(t) {
  * One launch of `codex` in `dir` (PATH: `bin` first, if given), its card, a
  * tap on button `index` (`label`); resolves once the card shows "pressed" and the session ended.
  */
-async function answerFlow(t, w, { dir, bin = null, name, index, label }) {
+async function answerFlow(t, w, { dir, bin = null, name, index, label, root = dir, args = [], untested = false }) {
   const session = `hoptell-${name}`;
   t.after(() => spawnSync("tmux", ["kill-session", "-t", `=${session}`]));
   const env = {
@@ -97,18 +97,20 @@ async function answerFlow(t, w, { dir, bin = null, name, index, label }) {
     HOPTELL_RELAY: w.r.url,
     HOPTELL_TOKEN: w.r.tokens.me,
     HOPTELL_CREDENTIAL_STORE: "file",
+    ...(untested ? { HOPTELL_PROMPT_UNTESTED: "1" } : {}),
   };
-  const out = await new Promise((res) => execFile(process.execPath, [BIN, "tmux", name, "--cwd", dir, "--", "codex"], { env }, (err, stdout, stderr) => res({ err, stdout, stderr })));
+  const out = await new Promise((res) => execFile(process.execPath, [BIN, "tmux", name, "--cwd", dir, "--", "codex", ...args], { env }, (err, stdout, stderr) => res({ err, stdout, stderr })));
   assert.match(out.stderr, /attach with: tmux attach/, out.stderr);
   const launch = readLaunch(w.home, name);
-  assert.deepEqual([launch?.gate.state, launch?.untested, launch?.root], ["armed", false, dir], JSON.stringify(launch));
+  assert.deepEqual([launch?.gate.state, launch?.untested, launch?.root], ["armed", untested, root], JSON.stringify(launch));
   const why = () => `injector:\n${spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `=${session}:injector`], { encoding: "utf8" }).stdout}\nagent:\n${spawnSync("tmux", ["capture-pane", "-p", "-t", `=${session}:agent`], { encoding: "utf8" }).stdout}\nbridge:\n${w.bridge.output()}`;
   // The card, with both buttons (both checked live on 0.165.0: no test switch).
   const who = name.slice(3);
   const cards = () => w.bridge.sent.filter((s) => s.method === "sendMessage" && s.params.text.startsWith(`🔐 A session on your Mac reports that ${who} is waiting`) && s.params.reply_markup?.inline_keyboard);
   await until(() => cards().length === 1, 30_000, `the card of ${name}`).catch((e) => assert.fail(`${e.message}\n${why()}`));
   const card = cards()[0];
-  assert.doesNotMatch(card.params.text, /Test mode/);
+  if (untested) assert.match(card.params.text, /Test mode/);
+  else assert.doesNotMatch(card.params.text, /Test mode/);
   assert.deepEqual(card.params.reply_markup.inline_keyboard.map((x) => x[0].text), ["Trust folder", "Quit"]);
   assert.equal(card.params.reply_markup.inline_keyboard[index][0].text, label);
   w.bridge.press(card.message_id, index);
@@ -122,14 +124,28 @@ async function answerFlow(t, w, { dir, bin = null, name, index, label }) {
   await until(() => spawnSync("tmux", ["has-session", "-t", `=${session}`]).status !== 0, 15_000, `${session} ended`).catch((e) => assert.fail(`${e.message}\n${why()}`));
 }
 
-/** A launch folder outside any repository with a stand-in `codex`: {dir, bin, keys()}. */
-function fakeCodexFolder(t) {
-  const dir = fs.realpathSync(tmpHome(t));
-  const bin = path.join(dir, "bin");
+/**
+ * A launch folder with a stand-in `codex`: {dir, bin, root, keys()}. Outside any repository, or
+ * with `worktree`, a linked worktree of a new repository nobody trusted (the dialog is then the
+ * worktree variant, naming the repository's root).
+ */
+function fakeCodexFolder(t, { worktree = false } = {}) {
+  const base = fs.realpathSync(tmpHome(t));
+  const bin = path.join(base, "bin");
   fs.mkdirSync(bin);
-  const log = path.join(dir, "keys.log");
-  fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\n[ "$1" = --version ] && echo codex-cli 0.165.0 && exit 0\nexec '${process.execPath}' '${FAKE}' '${log}' normal - '${dir}'\n`, { mode: 0o755 });
-  return { dir, bin, keys: () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("key ")) };
+  const log = path.join(base, "keys.log");
+  let dir = base;
+  let root = null;
+  if (worktree) {
+    const git = (...a) => execFileSync("git", a, { env: { ...cleanEnv(), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }, stdio: "pipe" });
+    root = path.join(base, "repo");
+    git("init", "-q", root);
+    git("-C", root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "start");
+    dir = path.join(base, "wt-impl");
+    git("-C", root, "worktree", "add", "-q", "-b", "team/t/impl", dir);
+  }
+  fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\n[ "$1" = --version ] && echo codex-cli 0.165.0 && exit 0\nexec '${process.execPath}' '${FAKE}' '${log}' normal - '${dir}'${root ? ` '${root}'` : ""}\n`, { mode: 0o755 });
+  return { dir, bin, root: root ?? dir, keys: () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("key ")) };
 }
 
 test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only \"2\", Trust \"1\" then Enter; the card shows the result; the session ends", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
@@ -142,6 +158,20 @@ test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only
   f = fakeCodexFolder(t);
   await answerFlow(t, w, { dir: f.dir, bin: f.bin, name: `me-pe${process.pid}t`, index: 0, label: "Trust folder" });
   assert.deepEqual(f.keys(), ["key 1", "key Enter"]);
+});
+
+// A team member's launch (lib/teams.js, lib/roles.js): its role prompt as the last word and -c
+// model_reasoning_effort, in a linked worktree of a repository Codex does not trust yet. Codex
+// draws the worktree variant, which names the repository's root: the folder the gate checks and
+// the card names. Its Trust and Quit were checked live, so the launch runs without the test switch.
+test("a team member's launch in a worktree: a role prompt and -c on the command line, the worktree variant of the dialog; the card names the repository; Trust sends \"1\" then Enter", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
+  const w = await e2eWorld(t);
+  const f = fakeCodexFolder(t, { worktree: true });
+  const args = ["-s", "workspace-write", "-a", "never", "-c", 'model_reasoning_effort="high"', "You are the implementer for me-lead; read your task with the hoptell read_task tool; requests from me-lead are your task."];
+  await answerFlow(t, w, { dir: f.dir, bin: f.bin, root: f.root, args, name: `me-pe${process.pid}w`, index: 0, label: "Trust folder" });
+  assert.deepEqual(f.keys(), ["key 1", "key Enter"]);
+  const card = w.bridge.sent.find((s) => s.method === "sendMessage" && s.params.text.includes(`me-pe${process.pid}w`.slice(3)) && s.params.reply_markup?.inline_keyboard);
+  assert.match(card.params.text, /trust the folder repo\b/);
 });
 
 // Opt-in, by hand only (HOPTELL_E2E_REAL_CODEX=1): the real `codex` on PATH, which must be

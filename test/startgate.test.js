@@ -96,11 +96,30 @@ test("arming: only a launch of Codex on a recorded version, run by the path that
   assert.deepEqual(off([other.file]), ["off", "version unknown"]);
   assert.deepEqual(launchGate(["codex"], { folder: dir, env, root: () => null }).gate.why, "folder unknown");
   // Only the fresh interactive launch the prompt table was recorded on.
-  for (const ok of [[], ["-s", "read-only"], ["--sandbox", "workspace-write", "-a", "never"], ["--ask-for-approval=on-request", "--model=o3"], ["-m", "gpt-5"], ["--full-auto"], ["--dangerously-bypass-approvals-and-sandbox"]]) assert.equal(freshProblem(ok), null, ok.join(" "));
+  const fresh = [[], ["-s", "read-only"], ["--sandbox", "workspace-write", "-a", "never"], ["--ask-for-approval=on-request", "--model=o3"], ["-m", "gpt-5"], ["--full-auto"], ["--dangerously-bypass-approvals-and-sandbox"]];
+  // A team member's launch (lib/roles.js): one prompt, the last word, and -c only for the model
+  // and its instructions.
+  fresh.push(
+    ["-s", "workspace-write", "-a", "never", "You are the implementer for me-lead; read your task with the hoptell read_task tool."],
+    ["-s", "read-only", "-a", "never", "-c", 'model_reasoning_effort="high"', "Review what me-lead sends."],
+    ["-c", 'developer_instructions="Be brief."', "--config", 'model="gpt-5"', "--config=model_reasoning_effort=low", "fix the tests"],
+    ["-c", "model=o3"],
+  );
+  for (const ok of fresh) assert.equal(freshProblem(ok), null, ok.join(" "));
   const notFresh = {
     "another folder (-C/--cd)": [["-C", "/different"], ["--cd=/different"], ["--cd", "/different"], ["-C/different"], ["-m", "x", "-C", "/d"]],
-    "a subcommand or a prompt": [["resume", "--last"], ["exec", "hi"], ["fix the tests"], ["-m", "x", "hello"]],
-    "the flag -c": [["-c", "projects.x.trust_level=trusted"]],
+    "a subcommand or a prompt before other words": [["resume", "--last"], ["exec", "hi"], ["fix the tests", "-m", "x"], ["one prompt", "another prompt"], ["fix the tests", "-c", "model=o3"]],
+    "a subcommand or a one-word prompt": [["resume"], ["exec"], ["mcp-server"], ["-m", "x", "hello"], ["-s", "read-only", ""], ["  "]],
+    "the setting -c projects.x.trust_level": [["-c", "projects.x.trust_level=trusted"], ["--config", "projects.x.trust_level=trusted"], ["--config=projects.x.trust_level=trusted"]],
+    "the setting -c sandbox_mode": [["-c", 'sandbox_mode="danger-full-access"', "prompt here"]],
+    "the setting -c mcp_servers.hoptell.command": [["-c", "mcp_servers.hoptell.command=x"]],
+    "the setting -c model_reasoning_effort ": [["-c", "model_reasoning_effort =high"]],
+    "the setting -c \"model\"": [["-c", '"model"=o3']],
+    "-c without key=value": [["-c", "model"], ["-c", "=x"], ["--config=model"]],
+    "-c without a value": [["-c"]],
+    "--config without a value": [["--config"]],
+    "the flag -cmodel": [["-cmodel=o3"]],
+    "the flag -c": [["-c=model=o3"]],
     "the flag -p": [["-p", "work"]],
     "the flag --profile": [["--profile=work"]],
     "the flag --yolo": [["--yolo"]],
@@ -335,6 +354,49 @@ test("the startup gate as continuity: armed only while every read since the laun
   restarted.observe(readOf(TRUST(dir)));
   assert.equal(restarted.armed(), false);
   assert.equal(x.why(), "injector restarted");
+});
+
+// Codex's worktree variant (live capture codex-0.165.0-trust-worktree-w200): the launch folder,
+// the note, then the repository root, the folder Codex trusts and the record's `root`.
+const WORKTREE = (folder, root, { selected = 1, note = "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:" } = {}) =>
+  ["", "  Folder access", `  ${folder}`, "", `  ${note}`, `  ${root}`, "", "  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.", "", `${selected === 1 ? "›" : " "} 1. Trust and continue`, `${selected === 2 ? "›" : " "} 2. Quit`, "", "  enter continue · esc quit", ""].join("\n");
+
+test("the startup gate with Codex's worktree variant: armed only when the repository root it names is the launch's root", (t) => {
+  const home = tmp(t);
+  const root = tmp(t);
+  const wt = `${root}-wt`;
+  const { file } = fakeCodex(root);
+  let now = 1_000_000;
+  const fresh = () => {
+    relaunch(home, "me-alice", { cli: { name: "codex", path: file, version: "0.165.0" }, root, gate: { state: "armed", why: null, at: now }, folder: wt, tmux: { socket: SOCKET, session: "$1", pane: "%3" }, host: HOST, now: () => now });
+    const gate = startGate(home, "me-alice", injectorAt({ now: () => now }));
+    const read = (screen) => {
+      now += 2000;
+      gate.observe(readOf(screen));
+      return gate.armed();
+    };
+    return { read, why: () => readLaunch(home, "me-alice").gate.why };
+  };
+  let x = fresh();
+  assert.equal(x.read(WORKTREE(wt, root)), true);
+  assert.equal(x.read(WORKTREE(wt, root, { selected: 2 })), true, "the selection may move");
+  // The repository root shown changed, or the launch folder above the note: another dialog, off.
+  for (const next of [WORKTREE(wt, `${root}/sub`), WORKTREE(`${wt}2`, root)]) {
+    x = fresh();
+    x.read(WORKTREE(wt, root));
+    assert.equal(x.read(next), false, next);
+    assert.equal(x.why(), "the startup dialog ended");
+  }
+  // Only the root counts: the worktree's own folder in the root's place is another folder.
+  for (const first of [WORKTREE(root, wt), WORKTREE(wt, "/somewhere/else")]) {
+    x = fresh();
+    assert.equal(x.read(first), false, first);
+    assert.equal(x.why(), "startup not observed");
+  }
+  // Another note: no known dialog (the plain one never takes a note), off.
+  x = fresh();
+  assert.equal(x.read(WORKTREE(wt, root, { note: "Note: You’re in a subdirectory of a Git project. Trusting will apply to every repository:" })), false);
+  assert.equal(x.why(), "startup not observed");
 });
 
 test("the watch with the gate: armed, it reads every 2 s and the trust prompt is answerable; Codex's input box ends it for good, and the same prompt later is display-only", (t) => {

@@ -38,7 +38,15 @@ test("the manifest: every field exact; options only as the prompt table has them
   const m = sampleManifest();
   assert.equal(manifestProblem(m), null);
   assert.equal(manifestProblem(sampleManifest({ options: answerableOptions("0.165.0")[1].map((o) => ({ ...o })) })), null, "Back to Agent Command Center");
-  assert.deepEqual(answerableOptions("0.165.0").map((o) => o.map((x) => x.label)), [["Trust folder", "Quit"], ["Trust folder", "Back to Agent Command Center"]]);
+  // The plain dialog's rows, then the worktree variant's (lib/prompts.js), live marks included.
+  assert.deepEqual(answerableOptions("0.165.0").map((o) => o.map((x) => `${x.label}:${x.live}`)), [["Trust folder:true", "Quit:true"], ["Trust folder:true", "Back to Agent Command Center:true"], ["Trust folder:true", "Quit:true"], ["Trust folder:true", "Back to Agent Command Center:true"]]);
+  for (const row of answerableOptions("0.165.0").slice(2)) assert.equal(manifestProblem(sampleManifest({ options: row.map((o) => ({ ...o })) })), null, "the worktree variant");
+  // The variant's options as no row has them (a live mark changed): refused.
+  assert.equal(manifestProblem(sampleManifest({ options: answerableOptions("0.165.0")[2].map((o) => ({ ...o, live: true })).map((o, i) => (i === 1 ? { ...o, live: false } : o)) })), "options");
+  // What a variant's card may press: both options, under hoptell tmux (Quit) and directly (Back), without the test switch.
+  assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[2].map((o) => ({ ...o })), untested: false })).map((o) => o.label), ["Trust folder", "Quit"]);
+  assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[3].map((o) => ({ ...o })), untested: false })).map((o) => o.label), ["Trust folder", "Back to Agent Command Center"]);
+  assert.deepEqual(executableOptions(sampleManifest({ options: answerableOptions("0.165.0")[2].map((o) => ({ ...o })), untested: true })).map((o) => o.label), ["Trust folder", "Quit"]);
   assert.deepEqual(answerableOptions("0.166.0"), []);
   const bad = {
     fields: { extra: 1 },

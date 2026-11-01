@@ -169,9 +169,14 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   a connection of its own, named after your member with `-c` and a random suffix; peer lists, the
   bot and `@all` or `@<role>` sends leave it out.
 - Codex's folder trust from Telegram: for the folder trust question of Codex 0.165.0, right after
-  `hoptell tmux` started it in its folder (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`, `-m`/`--model`, `--full-auto` or
-  `--dangerously-bypass-approvals-and-sandbox`), the owner channel gets a card with Trust folder
-  and Quit instead of the note, for at most 10 minutes. Your tap is signed by the bridge and
+  `hoptell tmux` started it in its folder (with only `-s`/`--sandbox`, `-a`/`--ask-for-approval`,
+  `-m`/`--model`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `-c`/`--config` for
+  `model`, `model_reasoning_effort` or `developer_instructions`, and an optional non-empty trailing
+  prompt; a prompt made only of ASCII letters, digits, `_` or `-` stays notification-only. That is
+  how `hoptell team up` starts its members), the owner channel gets a card with Trust folder
+  and Quit instead of the note, for at most 10 minutes. In a worktree or another subfolder of a
+  repository, Codex asks about the repository's root, and the card names it, with the same
+  buttons. Your tap is signed by the bridge and
   goes only to that session's injector, which presses only that option, only in that session's
   terminal, while the same dialog is on the screen, nobody typed or scrolled there since the card
   was made, and the tap is at most 2 minutes old. Trust is "1", a fresh look that shows Trust

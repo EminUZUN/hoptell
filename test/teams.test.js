@@ -21,6 +21,7 @@ import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { MEMBER_HIDDEN, serveEngine } from "../lib/mcp.js";
+import { readLaunch } from "../lib/startgate.js";
 import { sleep, world } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-teams-"));
@@ -245,10 +246,13 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   fs.writeFileSync(path.join(s.root, "tasks", "rev.md"), "Review requests.\n");
   const file = path.join(s.root, "team.json");
   fs.writeFileSync(file, JSON.stringify(teamDoc({ members: [memberOf(), { name: "dana-n1-rev-1", role: "reviewer", cli: "claude", task: "tasks/rev.md", lifetimeMinutes: 600 }] })));
-  const env = { PATH: f.PATH, HOME: s.homedir, HOPTELL_PUSH: "" };
+  // HOPTELL_PROMPT_UNTESTED in the lead's environment (the startup trust prompt's test switch,
+  // lib/startgate.js) reaches every member's launch record, through team up and team restart.
+  const env = { PATH: f.PATH, HOME: s.homedir, HOPTELL_PUSH: "", HOPTELL_PROMPT_UNTESTED: "1" };
   const cli = (...args) => w.cli(["team", ...args], env);
   const up = await cli("up", file, "--yes");
   assert.equal(up.code, 0, up.stderr);
+  assert.deepEqual(["dana-n1-impl-1", "dana-n1-rev-1"].map((n) => readLaunch(w.home, n)?.untested), [true, true]);
   assert.match(up.stdout, /started dana-n1-impl-1 \(tmux session \$\d+\)/);
   assert.match(up.stdout, /started the supervisor/);
   // No session of the lead is online at the test relay: a warning after the start.
@@ -295,6 +299,7 @@ test("team: up, status, stop, commit, restart, land (owner approval of exactly T
   assert.equal(re.code, 0, re.stderr);
   const again = readState(w.home, "n1").members[0];
   assert.notEqual(again.session.id, impl.session.id);
+  assert.equal(readLaunch(w.home, impl.name)?.untested, true, "the restart's launch record too");
   assert.match(show(again.session.pane, "#{pane_start_command}"), new RegExp(`restarted in your worktree; your branch is team/n1/dana-n1-impl-1 at ${commit.commit}`));
   assert.match(execFileSync("tmux", ["show-environment", "-t", again.session.id], { encoding: "utf8" }), /^HOPTELL_TEAM_MEMBER=implementer:n1$/m);
   assert.equal((await cli("stop", impl.name)).code, 0);
