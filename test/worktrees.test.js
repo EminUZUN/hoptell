@@ -11,7 +11,7 @@ import { BIN } from "../lib/config.js";
 import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { currentBoot, parseLsofCwds, processCwds, processCwdsScan, processIdentity, processTable } from "../lib/host.js";
 import { withLock } from "../lib/locks.js";
-import { addWorktree, bindContainedCodex, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberContainment, memberState, processIn, readWorktreeRecord, recordProblem, removeWorktree, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
+import { addWorktree, bindContainedCodex, checkOwns, commitWorktree, diffWorktree, globRe, keyAllowed, listWorktrees, memberContainment, memberState, processIn, readWorktreeRecord, recordProblem, removeWorktree, signingProblem, startMemberSession, worktreeAt, worktreePaths, worktreePins } from "../lib/worktrees.js";
 import { sleep } from "./helpers.js";
 import { MECHANISM } from "../lib/contain.js";
 
@@ -445,6 +445,9 @@ test("a commit leaves a running member alone only while its launch counted as co
   // Every other command still waits for it to stop.
   await refusal(() => diffWorktree(s.home, "dana-impl-1"), "member_running");
   await refusal(() => removeWorktree(s.home, "dana-impl-1"), "member_running");
+  await refusal(() => signingProblem(s.home, s.repo), "member_running");
+  // The process checks it is given are the ones it uses: a table that cannot be read refuses.
+  await refusal(() => signingProblem(s.home, s.repo, { procs: { table: () => null } }), "member_unknown");
   // A failed recheck refuses with its reason and records the member as uncontained.
   fs.writeFileSync(path.join(codex.path, "lib", "x.js"), "again\n");
   const failing = { verified: table, recheck: () => ({ ok: false, why: "row X: process 7 (sh) runs outside the sandbox" }) };

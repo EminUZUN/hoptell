@@ -1529,7 +1529,8 @@ repository's own config: `user.name` and `user.email` (without them `worktree co
 "the repository's config has no user.name; hoptell's git reads no global configuration, so set it
 with: git config user.name ..."), and for landing SSH signing: `gpg.format ssh`,
 `user.signingkey` and `gpg.ssh.allowedSignersFile` (without them `team land` refuses with
-`signing_required`). `worktree add` records the signing settings, so set them before `team up`.
+`signing_required`). `worktree add` records the signing settings, and a worktree keeps them, so
+set them before `team up`; `team up` warns when they are missing.
 
 The lead must be a session connected to the relay under the lead name: an agent session, or
 `hoptell wait`. `hoptell listen` only reads a local inbox, so the members' messages to a lead that

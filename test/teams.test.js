@@ -63,7 +63,14 @@ function repoSetup(t, { signing = false } = {}) {
   git(repo, "commit", "-q", "-m", "init");
   const s = { root, repo, home: path.join(root, "home"), homedir: path.join(root, "userhome") };
   fs.mkdirSync(s.homedir);
-  if (signing) {
+  // Without signing: true, the settings only (team up warns about a repository without them);
+  // signing: "none" leaves them out.
+  if (signing === false) {
+    git(repo, "config", "gpg.format", "ssh");
+    git(repo, "config", "user.signingkey", "~/.ssh/id_ed25519");
+    git(repo, "config", "gpg.ssh.allowedSignersFile", "~/.ssh/allowed_signers");
+  }
+  if (signing === true) {
     const key = path.join(s.homedir, ".ssh", "id_ed25519");
     fs.mkdirSync(path.dirname(key), { mode: 0o700 });
     execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "lead", "-f", key]);
@@ -143,6 +150,46 @@ test("team file: the fields, the member prefix, roles and CLIs, owns that do not
   assert.ok(ownsOverlap(["**/*.md"], ["docs/a.md"]), "a glob that starts with a wildcard overlaps everything");
   assert.ok(!ownsOverlap(["lib/a.js"], ["lib/ab.js"]));
   assert.ok(ownsOverlap(null, ["lib/**"]));
+});
+
+test("team up warns before anything starts when the repository lacks SSH signing settings: this run's work could not land with hoptell", async (t) => {
+  const s = repoSetup(t, { signing: "none" });
+  const f = fakeClis(s.root);
+  fs.mkdirSync(path.join(s.root, "tasks"));
+  fs.writeFileSync(path.join(s.root, "tasks", "impl.md"), "Implement it.\n");
+  fs.writeFileSync(path.join(s.root, "tasks", "rev.md"), "Review requests.\n");
+  const file = path.join(s.root, "team.json");
+  const run = async (doc) => {
+    fs.writeFileSync(file, JSON.stringify(doc));
+    const warn = [];
+    await teamCommand({ args: ["up", file, "--dry-run"], home: s.home, homedir: s.homedir, env: { PATH: f.PATH, LANG: "C" }, out: () => {}, warn: (l) => warn.push(l), fail: (m) => assert.fail(m) });
+    return warn.filter((l) => /cannot land/.test(l)).join("\n");
+  };
+  assert.ok((await run(teamDoc())).endsWith(`: git -C ${fs.realpathSync(s.repo)} config gpg.format ssh; git -C ${fs.realpathSync(s.repo)} config user.signingkey <your public key file>; git -C ${fs.realpathSync(s.repo)} config gpg.ssh.allowedSignersFile <your allowed signers file>`));
+  assert.match(await run(teamDoc()), /^warning: hoptell cannot land this run's work \(you merge it yourself\): the repository's own config lacks gpg\.format=ssh, user\.signingkey, gpg\.ssh\.allowedSignersFile\. .*set them before team up \(hoptell's git reads no global configuration\)/);
+  // Only what is missing is named.
+  git(s.repo, "config", "gpg.format", "ssh");
+  git(s.repo, "config", "user.signingkey", "~/.ssh/id_ed25519");
+  assert.match(await run(teamDoc()), /lacks gpg\.ssh\.allowedSignersFile\. /);
+  git(s.repo, "config", "gpg.ssh.allowedSignersFile", "~/.ssh/allowed_signers");
+  assert.equal(await run(teamDoc()), "");
+  git(s.repo, "config", "--unset", "gpg.format");
+  assert.match(await run(teamDoc()), /lacks gpg\.format=ssh\. /);
+  git(s.repo, "config", "gpg.format", "ssh");
+  // This worktree's config.worktree (copied into a new worktree) is read after the repository's.
+  git(s.repo, "config", "extensions.worktreeConfig", "true");
+  git(s.repo, "config", "--worktree", "user.signingkey", "");
+  assert.match(await run(teamDoc()), new RegExp(`lacks user\\.signingkey\\. ${path.join(fs.realpathSync(s.repo), ".git", "config.worktree").replace(/[.]/g, "\\.")} sets user\\.signingkey for this worktree, over the repository's config: change it there \\(git config --worktree\\) or remove it\\. `));
+  git(s.repo, "config", "--worktree", "user.signingkey", "~/.ssh/id_ed25519");
+  assert.equal(await run(teamDoc()), "");
+  // Without extensions.worktreeConfig, git copies no config.worktree: a leftover one counts for nothing.
+  git(s.repo, "config", "--worktree", "user.signingkey", "");
+  git(s.repo, "config", "--unset", "extensions.worktreeConfig");
+  assert.equal(await run(teamDoc()), "");
+  git(s.repo, "config", "--unset", "user.signingkey");
+  assert.match(await run(teamDoc()), /lacks user\.signingkey\. Landing/);
+  // A team of reviewers lands nothing: no warning.
+  assert.equal(await run(teamDoc({ members: [{ name: "dana-n1-rev-1", role: "reviewer", cli: "claude", task: "tasks/rev.md" }] })), "");
 });
 
 test("team up --dry-run prints every command and starts nothing; write access needs a terminal yes or --yes", async (t) => {
@@ -519,7 +566,7 @@ test("landing refuses: no signing settings, a target that moved from the base, a
   await refusal(() => landCandidate(s.home, "dana-impl-1", { target: "main", message: "Land", landRef, bound: reg(s.home) }, opts), "target_moved", /touch the same paths: lib\/x\.js; hoptell builds a candidate on the moved target only when no path overlaps/);
   assert.notEqual(git(s.repo, "rev-parse", "main"), c.C);
   // A repository without SSH signing cannot land.
-  const u = repoSetup(t);
+  const u = repoSetup(t, { signing: "none" });
   const urec = await addWorktree(u.home, { repo: u.repo, member: "dana-impl-1", team: "n1", cli: "codex" });
   fs.writeFileSync(path.join(urec.path, "lib", "x.js"), "2\n");
   await commitWorktree(u.home, "dana-impl-1", { message: "m" });
