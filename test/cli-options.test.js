@@ -15,6 +15,7 @@ import { BIN } from "../lib/config.js";
 import { missingValue, unknownFlag } from "../lib/clihelp.js";
 import { relayDiscovery } from "../lib/login.js";
 import { telegramCommand } from "../lib/ownerchannelcli.js";
+import { TEAM_SWITCHES, TEAM_VALUE_OPTIONS } from "../lib/teams.js";
 
 const freePort = () =>
   new Promise((resolve) => {
@@ -84,10 +85,22 @@ test("team evidence: a --command left unquoted is refused with how to quote it; 
   assert.match(ok.stderr, /is in no active team/);
 });
 
+test("hoptell team: the CLI's option check knows every option the team command reads (team restart --fresh and --resume)", () => {
+  for (const flag of [...TEAM_SWITCHES, ...TEAM_VALUE_OPTIONS].filter((f) => f.startsWith("--"))) assert.equal(unknownFlag("team", ["restart", "m", flag]), null, flag);
+  for (const flag of ["--fresh", "--resume"]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-restart-"));
+    const r = spawnSync(process.execPath, [BIN, "team", "restart", "dana-n1-impl-1", flag], { env: { ...process.env, HOPTELL_HOME: home, HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-only-pass" }, encoding: "utf8" });
+    fs.rmSync(home, { recursive: true, force: true });
+    assert.doesNotMatch(r.stderr, /unknown option/, flag);
+  }
+});
+
 test("missingValue: per command, before a lone --, a value that is another option", () => {
   assert.equal(missingValue("ui", ["--port"]), "--port");
   assert.equal(missingValue("ui", ["--port", "--open"]), "--port");
   assert.equal(missingValue("ui", ["--port", "0"]), null);
+  assert.equal(missingValue("agents", ["trust-cli", "--revoke"]), "--revoke");
+  assert.equal(missingValue("agents", ["trust-cli", "--revoke", "ab12"]), null);
   assert.equal(missingValue("grants", ["allow", "*", "--until"]), "--until");
   assert.equal(missingValue("local-relay", ["install", "--port"]), "--port");
   // --purge takes an id in relay apps, nothing in local-relay uninstall.
