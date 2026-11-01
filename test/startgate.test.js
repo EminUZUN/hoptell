@@ -9,12 +9,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { DIALOG_MS, FIRST_READ_MS, GAP_MS, agyFreshProblem, claimFileOf, claudeFreshProblem, cliVersion, codexVersion, freshProblem, launchFileOf, launchGate, readExit, readLaunch, resolveCli, startGate, trustRootOf, trustScopeOf, writeExit, writeLaunch } from "../lib/startgate.js";
+import { DIALOG_MS, FIRST_READ_MS, GAP_MS, MEMBER_ALLOWED_TOOLS, agyFreshProblem, claimFileOf, claudeFreshProblem, cliVersion, codexVersion, freshProblem, launchFileOf, launchGate, readExit, readLaunch, resolveCli, startGate, trustRootOf, trustScopeOf, writeExit, writeLaunch } from "../lib/startgate.js";
 import { CARD_MS, START_MS } from "../lib/promptcards.js";
 import { classifyPrompt } from "../lib/prompts.js";
 import { waitWatch } from "../lib/tmux.js";
 import { processIdentity } from "../lib/host.js";
 import { readOccurrence } from "../lib/waits.js";
+import { RUN_TOOLS } from "../lib/mcp.js";
 import { sleep, world } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-gate-"));
@@ -557,6 +558,15 @@ test("arming Claude Code and agy: a fresh launch of a recorded version; their ow
   assert.equal(off(["claude"]), "armed");
   fs.writeFileSync(c.file, "#!/bin/sh\n[ \"$1\" = --version ] && echo '2.1.314 (Claude Code)' && exit 0\nexec sleep 60\n", { mode: 0o755 });
   // Claude Code's fresh rules.
+  // A team member's --allowedTools: exactly the list hoptell builds, before another option.
+  const V = MEMBER_ALLOWED_TOOLS;
+  assert.deepEqual(V.split(","), ["mcp__plugin_hoptell_hoptell__", "mcp__hoptell__"].flatMap((p) => RUN_TOOLS.map((x) => p + x)), "lib/mcp.js RUN_TOOLS under both ids");
+  assert.doesNotMatch(V, /send_file|send_review_set|send_transfer|ask_owner|spawn_agent|_agent|\*/);
+  for (const ok of [["--allowedTools", V, "--session-id", UUID, "Read your task."], [`--allowedTools=${V}`, "--append-system-prompt", "Be brief.", "Read your task."]]) assert.equal(claudeFreshProblem(ok, { built: { session_id: UUID } }), null, ok.join(" "));
+  for (const x of [["--allowedTools", "Bash", "--model", "x"], ["--allowedTools", `${V},Bash`, "--model", "x"], ["--allowedTools", `${V},mcp__hoptell__send_file`, "--model", "x"], ["--allowedTools", V.split(",").slice(1).join(","), "--model", "x"], ["--allowedTools", V, "Read your task."], ["--allowedTools", V]]) assert.equal(claudeFreshProblem(x), "an --allowedTools list hoptell did not build", x.join(" "));
+  assert.equal(claudeFreshProblem(["--allowed-tools", V, "--model", "x"]), "the flag --allowed-tools");
+  assert.equal(off(["claude", "--allowedTools", "Bash", "--model", "x", "fix the tests"]), "not a fresh interactive launch: an --allowedTools list hoptell did not build");
+  assert.equal(off(["claude", "--allowedTools", V, "--model", "x", "fix the tests"]), "armed");
   for (const ok of [[], ["--permission-mode", "acceptEdits"], ["--permission-mode=manual", "--model", "opus", "--effort", "high"], ["--append-system-prompt", "Be brief.", "Review what me-lead sends."], ["-n", "me-alice"], ["--name=me-alice"]]) assert.equal(claudeFreshProblem(ok, { name: "me-alice" }), null, ok.join(" "));
   const claudeOff = {
     "--permission-mode bypassPermissions": [["--permission-mode", "bypassPermissions"]],

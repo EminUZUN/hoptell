@@ -82,6 +82,14 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   calls to them; owner questions and new agents go through the lead. `team up` and `team restart`
   set `HOPTELL_TEAM_MEMBER` in the session's environment. This is a policy, not a security boundary: a
   member runs as your OS user and could start an unfiltered server of its own.
+- Claude Code team members call the hoptell messaging tools (`list_peers`, `send_message`,
+  `wait_for_message`, `read_inbox`, `ack_messages`, `read_task`) without a permission prompt:
+  `team up` and `team restart` pass them in `--allowedTools`, under both the plugin's and a
+  `claude mcp add` install's tool ids, when the CLI's `--help` lists the flag (otherwise they
+  warn). Every other tool still follows the role's permission mode, and the folder trust card
+  still comes only for that exact list. `team up` warns when Codex's `[mcp_servers.hoptell]` does
+  not set `default_tools_approval_mode = "approve"`, without which Codex members under `-a never`
+  have their hoptell tool calls refused.
 - Review queue: `hoptell review request --team <team> --base <c> --head <c> [--to <reviewer>]`
   records a request for a member's recorded commits (or a landing candidate's `T..C`) in the team's state and sends it to the
   team's reviewers; the lead records each reply with `hoptell review verdict --team <team> <request>
@@ -177,6 +185,13 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   repository nor a Codex member's folder trusted. hoptell never trusts a folder for you. `team
   stop` and `team down` wait, within one time budget, for processes still working in the
   worktree. `hoptell worktree add` says so when the name is not a member of the running team.
+- `team restart` of an implementer whose worktree hoptell removed after its work landed (branch
+  deleted) makes it a new worktree where `team up` put it, on a new branch from the target's
+  current tip, and starts it fresh. A kept branch, a pending landing or a worktree record that
+  cannot be read still refuses, and the refusal names why and what to do. `hoptell worktree add
+  --team` uses the team's `worktrees` folder for one of its implementers, and takes the new
+  `--worktrees <dir>`; the `worktree add` lines of `team up --dry-run` name the folder, base and
+  repository, so they make the worktree where their comment says.
 - `hoptell worktree commit` commits a file replaced by a folder, or a folder replaced by a file,
   in one commit, and refuses a nested repository (a folder holding a `.git`) anywhere it reads.
 - Sessions that wait: the injector of a `hoptell tmux` session normally looks at its pane every
@@ -230,6 +245,25 @@ tmux` before the upgrade keeps its old injector, which does not watch for prompt
   look at the terminal, with what it saw: the prompt still there, the agent ended after Trust,
   still running after Quit, or nothing it could read. Claude Code drops an Enter that comes as
   its dialog draws, so a key sent is not a key taken.
+- agy's first prompt is typed after its folder trust dialog: agy 1.4.12 acts on an `-i` prompt,
+  shell commands included, while that dialog still waits (seen live). `hoptell team` starts agy
+  members without `-i` and `hoptell tmux --start <text>` types the role template and launch
+  prompt, on one line, once agy's input box shows; no notice goes before it. `hoptell tmux`
+  warns when agy is given `-i`. The start text takes only characters the injector can check on
+  screen and no approval-prompt wording; `team up` and `team restart` refuse a role template
+  that breaks this before anything starts or stops. A start text over 1000 characters, which agy
+  and Codex show folded as `[Pasted text #1 1100 chars]`, is checked by that marker's length
+  when no key came since the paste (after one, it waits for a person);
+  Claude Code folds a paste over 800 characters without its length, so `hoptell tmux` refuses a
+  longer `--start` for it.
+- On Node 24, CLI commands with a state directory too long for the admin socket said "the admin
+  socket failed (EINVAL)" instead of working offline: Node 24 reports connecting to such a path
+  as EINVAL. The relay never serves a socket there, so hoptell now treats it as not running.
+- The injector wakes agy in plan, accept-edits and auto mode: agy draws those modes' placeholder
+  in grey, not dim, and an agy reviewer's empty input was taken for a draft. The same fix makes a
+  Trust answered on Telegram count as done for agy in those modes.
+- `team evidence`: each `--command` is one quoted command (the help said `<command>...`); a
+  command left unquoted is refused with how to quote it.
 - The waiting-session watch takes the agent's CLI from the launch record when the record names
   it (a launch the start gate resolved), not from tmux's name for the pane's program: for Claude Code installed as `~/.local/bin/claude`,
   a link to a file named by its version, that name is `2.1.314`.

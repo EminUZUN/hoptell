@@ -294,12 +294,12 @@ test("row T: canonical paths (absent parts kept), overlaps by components either 
   if (process.getuid() !== 0) {
     fs.mkdirSync(path.join(root, "closed"));
     fs.chmodSync(path.join(root, "closed"), 0o000);
-    t.after(() => {
-      try {
-        fs.chmodSync(path.join(root, "closed"), 0o700);
-      } catch {}
-    });
-    assert.match(row(() => T([path.join(root, "closed", "x", "y")])).why, /EACCES/);
+    // Opened again before the folder's cleanup, whatever order the after hooks run in (Node 24).
+    try {
+      assert.match(row(() => T([path.join(root, "closed", "x", "y")])).why, /EACCES/);
+    } finally {
+      fs.chmodSync(path.join(root, "closed"), 0o700);
+    }
   }
   // Recheck: an absent protected component later created as a symbolic link.
   const input = { writable: [wt], protected: [path.join(root, "later", ".codex")] };

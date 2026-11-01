@@ -57,7 +57,7 @@ if (process.argv[2] === "hook-header" && !process.argv.slice(3).some((a) => a ==
   if (p) await print(p.help ? cli.commandHelp(p.help, p.args) : cli.usage(), 0);
   const bad = cli.unknownFlag(argv[0], argv.slice(1));
   const where = `hoptell ${argv[0]}${argv[0] === "relay" && ["admin", "apps", "broker-reset"].includes(argv[1]) ? ` ${argv[1]}` : ""}`;
-  if (bad) await print(`hoptell: unknown option ${bad} for ${where} (see hoptell ${argv[0]} --help)`, 2);
+  if (bad) await print(`hoptell: unknown option ${bad} for ${where}${cli.unquotedCommandHint(argv, bad)} (see hoptell ${argv[0]} --help)`, 2);
   const empty = cli.missingValue(argv[0], argv.slice(1));
   if (empty) await print(`hoptell: ${empty} needs a value (see ${where} --help); nothing was done`, 2);
 }
@@ -1190,7 +1190,7 @@ try {
       const opts = {};
       let bad = sep < 0 || head.length % 2 !== 1 || head[0].startsWith("-");
       for (let i = 1; !bad && i < head.length; i += 2) {
-        if (!["--roles", "--cwd", "--task"].includes(head[i]) || head[i] in opts || head[i + 1].startsWith("--")) bad = true;
+        if (!["--roles", "--cwd", "--task", "--start"].includes(head[i]) || head[i] in opts || head[i + 1].startsWith("--")) bad = true;
         else opts[head[i]] = head[i + 1];
       }
       if (bad) fail(`tmux needs a peer name, then -- and the agent's command\nusage: ${TMUX_USAGE}`, 2);
@@ -1199,8 +1199,11 @@ try {
       // new home look like an old one.
       // A launch prompt (hoptell agents flags --lead) sends the agent to read_task, which only a
       // session started with --task has.
-      if (!opts["--task"] && args.slice(sep + 1).some((w) => w.includes("read_task"))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
-      await launch(head[0], args.slice(sep + 1), opts["--roles"] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), cwd: opts["--cwd"] ?? null, task: opts["--task"] ?? null });
+      if (!opts["--task"] && [opts["--start"] ?? "", ...args.slice(sep + 1)].some((w) => w.includes("read_task"))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
+      // agy 1.4.12 acts on -i, tools included, while its folder trust dialog still waits.
+      const agent = args.slice(sep + 1);
+      if (path.basename(agent[0] ?? "") === "agy" && agent.some((w) => /^(-i|--prompt-interactive)(=|$)/.test(w))) console.error("warning: agy acts on its -i prompt before its folder trust dialog is answered; give the prompt with --start <text> instead, which hoptell types once agy's input box shows");
+      await launch(head[0], args.slice(sep + 1), opts["--roles"] ?? process.env.HOPTELL_ROLES ?? "", { env: { ...process.env }, home: home(), prepare: () => contactsOf(), cwd: opts["--cwd"] ?? null, task: opts["--task"] ?? null, start: opts["--start"] ?? null });
       break;
     }
     case "worktree": {

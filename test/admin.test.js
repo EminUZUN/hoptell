@@ -513,6 +513,8 @@ test("relay: a state directory too long for the admin socket stops startup befor
     assert.doesNotMatch(`${r.stdout}${r.stderr}`, /listening/);
     assert.match(r.stderr, /the admin socket's path ".+admin\.sock" is \d+ bytes; keep it within hoptell's 103-byte cross-platform limit for Unix socket paths by using a shorter state directory \(--state-dir or HOPTELL_STATE_DIR\)/);
     assert.equal(fs.existsSync(state), false, "nothing was created");
+    // So the CLI finds no relay there, on every Node (24 reports connecting to such a path as EINVAL).
+    await assert.rejects(adminRequest(state, "members"), (e) => e.code === "not_running");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

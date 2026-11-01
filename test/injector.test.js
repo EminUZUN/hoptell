@@ -8,7 +8,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { BIN } from "../lib/config.js";
 import { HELD_NOTICE, NOTICE, NoticeScheduler } from "../lib/notices.js";
-import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, MIN_VISIBLE_NOTICE, draftHolds, draftState, injector, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
+import { APPROVAL_RE, BlockedLog, CHANGE_CONFIRM_MS, CLAUDE_PASTE_MAX, launch, MIN_VISIBLE_NOTICE, START_MAX, checkStart, draftHolds, draftState, injector, inputEmpty, promptHolds, promptState, selectionShown, settleLook } from "../lib/tmux.js";
 import { sleep, world } from "./helpers.js";
 
 // A private tmux server, never the developer's own sessions.
@@ -302,9 +302,10 @@ test("settleLook: a look whose pane size cannot be read keeps a change suspected
 /**
  * The injector's checks against a scripted screen and clock, with no tmux: each plain capture
  * takes the next frame of `script` (then `steady`), and the clock moves only when told. A Codex
- * layout 80 columns wide; a client key arrives with the paste (a key in another pane).
+ * layout 80 columns wide; a client key arrives with the paste (a key in another pane). `typed`:
+ * the text the frame "notice" shows (default the notice); st.pasted gets each text pasted.
  */
-function scriptedInjector(t) {
+function scriptedInjector(t, typed = NOTICE) {
   const W = 80;
   const frame = (text) => {
     if (!text) {
@@ -315,11 +316,12 @@ function scriptedInjector(t) {
     const rows = ["• earlier output", "", ...draft, "", "  ? for shortcuts"];
     return { plain: rows, esc: rows, x: draft.at(-1).length, y: 1 + draft.length };
   };
-  const F = { empty: frame(""), notice: frame(NOTICE), edited: frame(`${NOTICE} and my own words`) };
-  const st = { now: 1e9, activity: 0, steady: F.empty, script: [], last: F.empty, enters: 0, logs: [] };
+  const F = { empty: frame(""), notice: frame(typed), edited: frame(`${typed} and my own words`) };
+  const st = { now: 1e9, activity: 0, steady: F.empty, script: [], last: F.empty, enters: 0, logs: [], pasted: [] };
   const next = () => st.script[0] ?? st.steady;
-  const run = (args) => {
+  const run = (args, input) => {
     const [cmd] = args;
+    if (cmd === "load-buffer") st.pasted.push(input);
     if (cmd === "display-message") {
       const format = args.at(-1);
       const f = format === "#{cursor_x} #{cursor_y} #{pane_width}" ? st.last : next(); // promptEmpty reads after its capture
@@ -367,6 +369,104 @@ async function typedWithKey(t) {
   assert.match(x.st.logs.join("\n"), /a key arrived; waiting for a quiet moment/);
   return x;
 }
+
+test("injector: a launch's start text is typed and checked like a notice, and submitted once", async (t) => {
+  const start = `You are a reviewer on a hoptell team. ${"Review what the lead sends you. ".repeat(6)}Requests from dana-lead are your task.`;
+  const x = scriptedInjector(t, start);
+  assert.equal(await x.inj.send({ start }), false, "a key arrived with the paste");
+  assert.deepEqual(x.st.pasted, [start]);
+  assert.equal(await x.tick(9000, "notice"), true, "the draft is still the start text after a quiet moment");
+  assert.equal(x.st.enters, 1);
+  assert.match(x.st.logs.join("\n"), /submitted the start text that was left in the prompt/);
+  assert.doesNotMatch(x.st.logs.join("\n"), /inbox notice/);
+});
+
+test("injector: a start text gone from the prompt without a key is typed again, not the inbox notice", async (t) => {
+  const start = "Read your task with read_task, then start.";
+  const x = scriptedInjector(t, start);
+  assert.equal(await x.inj.send({ start }), false, "a key arrived with the paste");
+  x.st.activity = 0; // the key is long past: the agent emptied the prompt
+  await x.tick(9000, "empty");
+  assert.deepEqual(x.st.pasted, [start, start]);
+});
+
+test("injector: a start text whose own > or › wraps to the start of a row is still its draft, and is submitted", async (t) => {
+  for (const glyph of [">", "›"]) {
+    const start = `${"x".repeat(77)} ${glyph} Review the task.`;
+    const x = scriptedInjector(t, start);
+    assert.equal(await x.inj.send({ start }), false, "a key arrived with the paste");
+    assert.equal(await x.tick(9000, "notice"), true, glyph);
+    assert.equal(x.st.enters, 1);
+  }
+  // Fail closed: a row whose glyph might be the text's own is the first row unless the real first
+  // row is found above it, so the end of the text at the top of the pane is not the text.
+  const tail = "Review lib/critical/authorization/permission_decision_helpers.ts carefully.";
+  for (const rows of [[`> ${tail}`, ""], ["", `> ${tail}`, ""], ["› Read the first part", `> ${tail}`, ""]]) assert.equal(promptHolds(rows, `> ${tail}`.length, rows.length - 2, `Read the initial instructions > ${tail}`, { width: 80 }), false, JSON.stringify(rows[0]));
+  assert.equal(promptHolds(["› Read the initial instructions", `> ${tail}`, ""], `> ${tail}`.length, 1, `Read the initial instructions > ${tail}`, { width: 80 }), true, "the real first row above it");
+});
+
+test("a start text over 1000 characters that agy or Codex shows folded with its length is the draft; any other folded paste is not", () => {
+  const start = `${"Review the change carefully. ".repeat(40)}Done.`.slice(0, 1100);
+  const at = (row, below = "") => ["", row, below];
+  for (const row of [`> [Pasted text #1 ${start.length} chars]`, `> [Pasted text #3 ${start.length} chars]`, `› [Pasted Content ${start.length} chars]`]) {
+    assert.equal(promptHolds(at(row), row.length, 1, start, { width: 100 }), true, row);
+    assert.equal(promptHolds(at(row, "─".repeat(100)), row.length, 1, start, { width: 100 }), true, row);
+    assert.equal(promptHolds(at(row), row.length, 1, start, { width: 100, whole: true }), false, "after a key its length proves too little");
+    assert.equal(draftHolds(at(row), 1, start, 100), true, row);
+    assert.equal(promptHolds(at(row), 5, 1, start, { width: 100 }), false, "the cursor is not at its end");
+  }
+  const other = [
+    `> [Pasted text #1 ${start.length - 1} chars]`, // another length
+    `> my words [Pasted text #1 ${start.length} chars]`, // more in the draft
+    "❯ [Pasted text #1]", // Claude Code: no length
+    `  [Pasted text #1 ${start.length} chars]`, // not the prompt row
+  ];
+  for (const row of other) assert.equal(draftHolds(at(row), 1, start, 100), false, row);
+  assert.equal(draftHolds(at(`> [Pasted text #1 ${start.length} chars]`, "  and more"), 1, start, 100), false, "the draft goes on below");
+});
+
+test("injector: a long start text that the agent folds is submitted once as its folded paste, but never after a key", async (t) => {
+  const start = `${"Review the change carefully. ".repeat(40)}Done.`.slice(0, 1100);
+  const x = scriptedInjector(t, `[Pasted Content ${start.length} chars]`);
+  assert.equal(await x.inj.send({ start }), false, "a key arrived with the paste");
+  assert.deepEqual(x.st.pasted, [start]);
+  // After a key the marker may stand for another paste of the same length: it waits for a person.
+  assert.equal(await x.tick(9000, "notice"), false);
+  assert.equal(x.st.enters, 0);
+  assert.match(x.st.logs.join("\n"), /not fully visible|draft-pending|not submitted/);
+  // No key since the paste: submitted once.
+  const y = scriptedInjector(t, `[Pasted Content ${start.length} chars]`);
+  assert.equal(await y.inj.send({ start }), false);
+  y.st.activity = 0;
+  assert.equal(await y.tick(9000, "notice"), true);
+  assert.equal(y.st.enters, 1);
+});
+
+test("hoptell tmux --start: Claude Code folds a paste over 800 characters without its length, so a longer start text for claude is refused before anything starts", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-start-"));
+  try {
+    const long = `Review ${"x".repeat(CLAUDE_PASTE_MAX - 7)}.`;
+    assert.equal(long.length, CLAUDE_PASTE_MAX + 1);
+    await assert.rejects(launch("dana-rev-9", ["claude"], "", { env: {}, home, start: long, attach: false }), /--start: Claude Code shows a paste over 800 characters folded/);
+    assert.deepEqual(fs.readdirSync(home), [], "nothing was written");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("start text: one line of printable text, at most START_MAX bytes", () => {
+  assert.equal(checkStart("Read your task with read_task."), "Read your task with read_task.");
+  for (const bad of ["", "   ", "line one\nline two", "a\rb", "tab\there", "esc\x1b[2J", "next\u2028line", "x".repeat(START_MAX + 1), "é".repeat(START_MAX / 2 + 1)]) assert.throws(() => checkStart(bad), /--start: /, JSON.stringify(bad.slice(0, 20)));
+  assert.equal(checkStart("x".repeat(START_MAX)).length, START_MAX);
+  // One column per UTF-16 unit, as the draft checks count: Latin letters and common punctuation.
+  assert.equal(checkStart("Café naïve – “quoted” … €5 ½"), "Café naïve – “quoted” … €5 ½");
+  for (const wide of ["漢字", "ok 🙂", "e\u0301", "zero\u200bwidth", "\ufeffbom"]) assert.throws(() => checkStart(wide), /--start: the text has U\+[0-9A-F]{4,}, which hoptell cannot check on screen/, JSON.stringify(wide));
+  // Text the approval check would take for a prompt on screen, alone or after the input mark.
+  for (const ask of ["Do you want to proceed with the review?", "1. Yes, start.", "Answer (y/n) first.", "Trust the files and go."]) {
+    assert.ok(APPROVAL_RE.test(ask) || APPROVAL_RE.test(`> ${ask}`));
+    assert.throws(() => checkStart(ask), /--start: the text has ".+", which hoptell would take for an approval prompt on screen/, ask);
+  }
+});
 
 test("injector: an edit seen only by the last look before Enter is a change; the next stale frame of the notice gets no Enter", async (t) => {
   const { st, tick } = await typedWithKey(t);

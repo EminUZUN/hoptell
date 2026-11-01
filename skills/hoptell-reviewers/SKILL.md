@@ -48,24 +48,24 @@ presets this gives:
 ```sh
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer -- agy --mode plan --sandbox --dangerously-skip-permissions -i "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+env -u TMUX -u TMUX_PANE HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
-- The quoted prompt at the end is the user's instruction to the reviewer: it makes review
+- The quoted prompt (agy: in `--start`) is the user's instruction to the reviewer: it makes review
   requests from this session the reviewer's task. hoptell tells every agent to handle peer
   requests only within the task its user gave it, so a reviewer started without this prompt
-  asks the user whether it may review. Put this session's own name in place of `alice-lead`.
+  asks the user whether it may review. Use this session's own name instead of `alice-lead`.
 
 - `-s read-only` keeps Codex in its read-only sandbox, and `-a never` means Codex never asks to
   leave it. Use `-a never` only together with `-s read-only`.
 - Start Claude Code in plan mode for a source review. Its usual tool permissions still apply.
   Do not switch to an editing mode unless the user asks for edits. Do not add a hoptell channel
   flag: `hoptell tmux` supplies tmux delivery.
-- Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt after `-i`
-  (it then stays interactive). `--dangerously-skip-permissions` stops the prompt per tool; plan
-  mode keeps agy to reading and planning. Plan mode is agy's own rule and `--sandbox` does not confine writes or the network, so an
-  agy reviewer is limited by policy, like Claude Code in plan mode, not by an OS sandbox. Never
-  start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
+- Start agy with `--mode plan --sandbox --dangerously-skip-permissions` and the prompt in
+  `--start`, never `-i` (agy acts on `-i` before its folder trust dialog is answered).
+  `--dangerously-skip-permissions` stops the prompt per tool; plan mode keeps agy to reading and
+  planning. Plan mode is agy's own rule and `--sandbox` confines neither writes nor the network:
+  policy limits an agy reviewer, as with Claude Code. Never start an agy reviewer in `accept-edits` or `auto` mode. agy joins hoptell through its global MCP
   registration, which the user sets up once (see hoptell's README).
 - Run the command from the project folder. The reviewer starts there.
 - `env -u TMUX -u TMUX_PANE` matters when this session runs inside tmux: otherwise the launcher

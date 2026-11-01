@@ -69,6 +69,21 @@ function tree(dir) {
   return out;
 }
 
+test("team evidence: a --command left unquoted is refused with how to quote it; a quoted one is taken", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-evidence-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const run = (...words) => spawnSync(process.execPath, [BIN, "team", "evidence", "dana-n1-impl-1", "--candidate", "abc", "--tests", "pass", "--command", ...words, "--report", "r.txt"], { env: { ...process.env, HOPTELL_HOME: home, HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-only-pass" }, encoding: "utf8" });
+  const hint = /each --command takes the whole command as one quoted argument, e\.g\. --command "npm test"/;
+  for (const words of [["node", "--test", "x.js"], ["npm", "test"]]) {
+    const r = run(...words);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, hint, words.join(" "));
+  }
+  const ok = run("npm test");
+  assert.doesNotMatch(ok.stderr, hint);
+  assert.match(ok.stderr, /is in no active team/);
+});
+
 test("missingValue: per command, before a lone --, a value that is another option", () => {
   assert.equal(missingValue("ui", ["--port"]), "--port");
   assert.equal(missingValue("ui", ["--port", "--open"]), "--port");

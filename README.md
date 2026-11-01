@@ -1161,7 +1161,7 @@ below). With the shipped presets that is:
 ```sh
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-1 --roles reviewer -- codex -s read-only -a never -c 'model_reasoning_effort="high"' "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
 HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-2 --roles reviewer -- claude --permission-mode plan --effort high "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
-HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer -- agy --mode plan --sandbox --dangerously-skip-permissions -i "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files."
+HOPTELL_PUSH=tmux hoptell tmux alice-reviewer-3 --roles reviewer --start "You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files." -- agy --mode plan --sandbox --dangerously-skip-permissions
 ```
 
 The quoted prompt is your instruction to the reviewer, so review requests from your session
@@ -1170,7 +1170,15 @@ them; a reviewer started without such a prompt asks you whether it may review.
 
 `-a never` stops Codex from asking to leave its sandbox, so use it only with `-s read-only`.
 Plan mode suits a source review: Claude Code's usual tool permissions still apply, and it is not
-an OS sandbox. agy takes its launch prompt with `-i`. In plan mode it reads and plans, and
+an OS sandbox. Give agy its prompt with `--start`, not `-i`: agy 1.4.12 acts on an `-i` prompt,
+tools included, while its folder trust dialog still waits, and `hoptell tmux` types the `--start`
+text once agy's input box shows (it warns about `-i`). The text is one line of at most 16 KiB:
+printable ASCII, Latin letters and common punctuation, which the injector can check on screen, and
+no wording its approval check would take for a prompt (such as "Do you want to proceed"); a role
+template that breaks these is refused when the team plans the launch. agy and Codex show a paste
+over 1000 characters folded, as `[Pasted text #1 1100 chars]`; hoptell checks that marker's length.
+Claude Code folds a paste over 800 characters without its length, so `--start` for Claude Code takes
+at most 800 characters. In plan mode agy reads and plans, and
 `--dangerously-skip-permissions` stops it from asking about each tool. Plan mode is agy's own rule,
 and in hoptell's test (agy 1.4.8) `--sandbox` did not keep writes in the folder or block the
 network, so an agy reviewer is limited by policy, like Claude Code in plan mode. hoptell does not
@@ -1262,7 +1270,8 @@ same kind of card, under the same rules, when `hoptell tmux` or `hoptell team up
 started them fresh in their folder. Claude Code may have `--permission-mode`, `--model`,
 `--effort`, `--append-system-prompt` and one trailing prompt (and, in a team launch, the
 `--session-id` hoptell assigned and `-n` with the member's name); agy `--mode`, `--model`,
-`--sandbox`, `--dangerously-skip-permissions` and `-i` with the prompt. Anything else, a resumed
+`--sandbox`, `--dangerously-skip-permissions` and, if given, `-i` with the prompt (a team launch
+gives agy none: its prompt is typed after the dialog). Anything else, a resumed
 conversation, a wrapper in front of the CLI (`env`, a shell, `npx`) or a launch in your home
 folder gets the note. A team member's launch must be, word for word, the line `team up` built for
 it. Neither CLI shows digits, so the buttons are the rows. Quit is Esc for both. Trust for Claude
@@ -1349,12 +1358,17 @@ hoptell agents flags codex --role implementer --lead alice-lead
 HOPTELL_PUSH=tmux hoptell tmux alice-impl-1 --roles implementer --cwd ../app-wt/alice-impl-1 --task task.md -- <its output>
 ```
 
+For agy the output has a second line with the `--start` option to give `hoptell tmux`: agy gets
+its prompt typed after its folder trust dialog, not with `-i`.
+
 `--cwd` starts the agent in its worktree; `hoptell tmux` refuses a member's worktree for another
 name or another CLI than the one `worktree add` recorded. The role templates (`reviewer`,
 `implementer`, `tester`) are short texts: who the lead is, what counts as the task, how to reply,
 and what never to do (commit, push, tag, change git config, ask the owner directly). Claude Code
 gets the template with `--append-system-prompt`; Codex with `-c developer_instructions` on the
-versions where hoptell verified that it applies (otherwise in the prompt); agy in its `-i` prompt.
+versions where hoptell verified that it applies (otherwise in the prompt); agy in its first prompt,
+which `hoptell tmux --start` types once agy's input box shows (agy acts on `-i` before its folder
+trust dialog is answered).
 `~/.config/hoptell/roles/<role>.md` replaces the shipped text for a role, with `{{lead}}` for the
 lead's name. hoptell never writes `AGENTS.md`, `CLAUDE.md`, `~/.codex` or `~/.claude`.
 
@@ -1424,6 +1438,15 @@ its environment (`HOPTELL_TEAM_MEMBER`); a peer message cannot set or clear that
 own session and other sessions keep every tool. This is a policy, not a security boundary: a
 member runs as your OS user and could start another hoptell server or the hoptell CLI without the
 filter. A real boundary needs credentials scoped per session, which is later work.
+
+Claude Code members call the hoptell messaging tools (`list_peers`, `send_message`,
+`wait_for_message`, `read_inbox`, `ack_messages`, `read_task`) without a permission prompt:
+`team up` and `team restart` list exactly these in `--allowedTools`, under the tool ids of both a
+plugin and a `claude mcp add` install. Everything else (Bash, edits, `send_file` and the other
+file-sending tools, `ask_owner`, ...) still follows the role's permission mode. Codex members
+under `-a never` have hoptell tool calls that need an approval refused unless
+`[mcp_servers.hoptell]` in `~/.codex/config.toml` sets `default_tools_approval_mode = "approve"`;
+`team up` warns when it does not.
 
 **The team file.** JSON, checked before anything starts (`schema/team.schema.json`):
 
@@ -1505,7 +1528,10 @@ its pane's process is still the one hoptell recorded; when hoptell cannot tell, 
 signal and says so. `restart` stops a member that still runs and starts nothing when that stop
 is not confirmed, or when a process of yours still runs in the member's worktree (or hoptell
 cannot check); it then starts the CLI again and tells it its branch and head (see "Restart and
-the member's conversation" below). `down` removes a worktree only when the member is confirmed stopped and the
+the member's conversation" below). After a landing removed an implementer's worktree and deleted
+its branch, `restart` makes it a new worktree in the team's folder, on a new branch from the
+target's current tip, and starts it fresh; `hoptell worktree add <member> --team <team>` also
+uses the team's `worktrees` folder for an implementer of a team that is up. `down` removes a worktree only when the member is confirmed stopped and the
 worktree is clean, and its branch only when nothing on it is unlanded; whatever it keeps, it
 names; `down --keep-worktrees` stops the members and removes no worktree or branch. A team whose
 stops are not all confirmed stays `stopping`, and `down` can be run again. A member name belongs
@@ -2257,7 +2283,7 @@ hoptell logout                        # removes the stored sign-in and revokes i
 hoptell mcp
 hoptell mcp-http [--port 7790]        # the same over HTTP on 127.0.0.1 (see "MCP over HTTP on this machine")
 hoptell mcp-http client add <label> [--name <peer>] [--roles a,b] [--agents] | list | remove <label>
-hoptell tmux <name> [--roles a,b] [--cwd <dir>] [--task <file>] -- <agent command...>
+hoptell tmux <name> [--roles a,b] [--cwd <dir>] [--task <file>] [--start <text>] -- <agent command...>
 hoptell list [--relay <alias>]
 hoptell send [--relay <alias>] [--ttl 10m] [--reply-to <reference>] [--] <to> <message...>
                                       # to: name, @role or @all; sends as $HOPTELL_NAME without going online
@@ -2275,7 +2301,7 @@ hoptell agents profile approve <id> [--accept-read-risk]
 hoptell agents trust-cli <profile> | --list | --revoke <digest prefix>   # approve an untested Codex binary once (asks in the terminal)
 hoptell agents capabilities [codex|claude|agy] [--refresh] [--diff] [--json]   # what each agent CLI offers and what changed
 hoptell agents flags <codex|claude|agy> --role <reviewer|implementer|lead> [--model <m>] [--effort <e>] [--lead <name> [--template <t>]]   # flags for hoptell tmux ... --
-hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>] [--repo <dir>]   # an implementer's worktree (see "Working with implementer agents")
+hoptell worktree add <member> --team <team> --cli <codex|claude> [--base <commit>] [--folder <name>] [--owns <globs>] [--worktrees <dir>] [--repo <dir>]   # an implementer's worktree (see "Working with implementer agents")
 hoptell worktree list | commit <member> -m <message> [--allow-outside] | diff <member> [--stat] | remove <member>
 hoptell team up <team file> [--dry-run] [--yes] | status [<team>] [--json] | stop <member> | restart <member> [--fresh | --resume]   # see "Agent teams"
 hoptell team down [<team>] [--keep-worktrees]

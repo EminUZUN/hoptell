@@ -11,7 +11,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { currentBoot, identityState, processIdentity, processInfo } from "../lib/host.js";
 import { BIN } from "../lib/config.js";
-import { MANIFEST_FIT, NOTICE_MS, launchExit, leadCheck, memberSessionEvents, checkTeam, landedFor, launchPreflight, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamApply, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
+import { MANIFEST_FIT, NOTICE_MS, launchExit, leadCheck, memberSessionEvents, checkTeam, landedFor, launchPreflight, memberCommand, ownsOverlap, readState, stateProblem, superviseTick, teamApproveView, teamCommand, teamDown, teamApply, teamEvidence, ingestLandingDecision, teamLandAbandon, teamLandApprove, teamLandCandidate, teamLandDiscard, teamLandPrepare, teamLandRequest, teamPaths, teamRestart, teamStatus, teamStop, teamUp, reviewCommand, reviewDiff, reviewRequest, reviewVerdict } from "../lib/teams.js";
 import { APPLY_WINDOW_MS, decisionText, newActionId, parseLandingRequest, parseLandingStatus, readTombstone, teamOfAction } from "../lib/landings.js";
 import * as ownersig from "../lib/ownersig.js";
 import { grantText, newGrantId, noticeText, parseNotice, readGrantState, storeGrant, writeGrantState } from "../lib/grants.js";
@@ -21,7 +21,7 @@ import { controlledGit, findGit } from "../lib/gitsafe.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { MEMBER_HIDDEN, serveEngine } from "../lib/mcp.js";
-import { launchGate, readLaunch, writeExit, writeLaunch } from "../lib/startgate.js";
+import { MEMBER_ALLOWED_TOOLS, claudeFreshProblem, launchGate, readLaunch, writeExit, writeLaunch } from "../lib/startgate.js";
 import { ensureWakeDir } from "../lib/wake.js";
 import { writeNamesStatus } from "../lib/names.js";
 import { appendSessionEvent } from "../lib/sessionevents.js";
@@ -82,7 +82,7 @@ function fakeClis(root) {
   fs.mkdirSync(bin, { recursive: true });
   const help = {
     codex: "Usage: codex [OPTIONS] [PROMPT]\n  -c, --config <key=value>\n  -m, --model <MODEL>\n  -s, --sandbox <SANDBOX_MODE>  [possible values: read-only, workspace-write, danger-full-access]\n  -a, --ask-for-approval <APPROVAL_POLICY>  [possible values: untrusted, on-request, never]\n",
-    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n',
+    claude: 'Usage: claude [options] [prompt]\n  --permission-mode <mode>  (choices: "acceptEdits", "plan", "default")\n  --append-system-prompt <prompt>\n  --model <model>\n  --effort <level>\n  --session-id <uuid>\n  -r, --resume [value]\n  -n, --name <name>\n  --allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow\n',
   };
   const version = { codex: "codex-cli 0.164.0", claude: "2.1.311 (Claude Code)" };
   for (const cli of ["codex", "claude"]) {
@@ -168,7 +168,8 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.equal(dry.failed, null, dry.failed?.m);
   assert.match(dry.out, /hoptell worktree add dana-n1-impl-1 --team n1 --cli codex --owns 'lib\/\*\*'/);
   assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-impl-1 --roles implementer,n1 --cwd ${s.root}/repo-wt/dana-n1-impl-1 --task \\S+impl.md -- codex -s workspace-write -a never`));
-  assert.match(dry.out, /hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \S+ --task \S+rev\.md -- claude --permission-mode plan --effort high --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt/);
+  // The hoptell messaging tools without a prompt: one argument, before a single-value option.
+  assert.match(dry.out, new RegExp(`hoptell tmux dana-n1-rev-1 --roles reviewer,n1 --cwd \\S+ --task \\S+rev\\.md -- claude --permission-mode plan --effort high --allowedTools ${MEMBER_ALLOWED_TOOLS} --session-id [0-9a-f-]{36} -n dana-n1-rev-1 --append-system-prompt`));
   assert.match(dry.out, /read your task with the hoptell read_task tool/);
   assert.match(dry.warn, /dana-n1-impl-1 \(codex\) gets write access to its worktree/);
   assert.match(dry.out, /Dry run: nothing was started/);
@@ -179,6 +180,7 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   assert.ok(dry.warn.includes(`warning: Codex will ask you to trust ${s.repo} in a pane before it starts (dana-n1-impl-1); Codex (checked with 0.165.0) asks once per repository: its worktrees count as trusted after that`), dry.warn);
   assert.doesNotMatch(dry.warn, /has no reviewer/);
   assert.match(dry.warn, /could not check which hoptell the Codex members run as their MCP server: \S+config\.toml: it does not exist/);
+  assert.ok(dry.warn.includes(`warning: could not check whether Codex members (dana-n1-impl-1) may call hoptell tools without an approval: ${path.join(s.homedir, ".codex", "config.toml")}: it does not exist`), dry.warn);
   // A trusted folder, and Codex's hoptell: another install (named, with its version), then this one.
   const codexHome = path.join(s.homedir, ".codex");
   fs.mkdirSync(codexHome, { recursive: true });
@@ -196,6 +198,16 @@ test("team up --dry-run prints every command and starts nothing; write access ne
   w = (await run(["up", file, "--dry-run"])).warn;
   assert.doesNotMatch(w, /MCP server/);
   assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), before, "read only");
+  // Without default_tools_approval_mode = "approve", Codex under -a never refuses their hoptell
+  // tool calls that need an approval; set, no warning.
+  assert.ok(w.includes(`warning: Codex members (dana-n1-impl-1) need default_tools_approval_mode = "approve" in [mcp_servers.hoptell] of ${path.join(codexHome, "config.toml")}: without it, Codex under -a never refuses their hoptell tool calls that need an approval`), w);
+  for (const line of ['default_tools_approval_mode = "prompt"\n', "default_tools_approval_mode = approve\n"]) {
+    fs.writeFileSync(path.join(codexHome, "config.toml"), before + line);
+    assert.match((await run(["up", file, "--dry-run"])).warn, /need default_tools_approval_mode = "approve"/, line);
+  }
+  fs.writeFileSync(path.join(codexHome, "config.toml"), before + 'default_tools_approval_mode = "approve" # hoptell\n');
+  assert.doesNotMatch((await run(["up", file, "--dry-run"])).warn, /default_tools_approval_mode/);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), before);
   // A config that cannot be read: Codex may ask.
   fs.chmodSync(path.join(codexHome, "config.toml"), 0);
   w = (await run(["up", file, "--dry-run"])).warn;
@@ -237,6 +249,39 @@ test("team up --dry-run prints every command and starts nothing; write access ne
     assert.equal(r.failed?.c, 2, `${args.join(" ")}: ${r.failed?.m}`);
     assert.match(r.failed.m, re);
   }
+});
+
+test("a Claude Code member's --allowedTools: the hoptell messaging tools, one argument, directly before a single-value option; the prompt stays the last word; none (warned) without the flag or such an option", (t) => {
+  const s = repoSetup(t);
+  const f = fakeClis(s.root);
+  const m = { name: "dana-n1-rev-1", role: "reviewer", cli: "claude", template: "reviewer" };
+  const cmd = (session, home = s.home) => memberCommand({ lead: "dana-lead" }, m, { home, homedir: s.homedir, env: { PATH: f.PATH, LANG: "C" }, session });
+  const id = crypto.randomUUID();
+  for (const [session, next] of [[{ mode: "fresh", id }, "--session-id"], [{ mode: "restart-fresh", id }, "--session-id"], [{ mode: "resume", id }, "--resume"], [null, "--append-system-prompt"]]) {
+    const c = cmd(session);
+    const i = c.argv.indexOf("--allowedTools");
+    assert.equal(c.argv.filter((w) => w.startsWith("--allowed")).length, 1, c.line);
+    assert.deepEqual(c.argv.slice(i, i + 3), ["--allowedTools", MEMBER_ALLOWED_TOOLS, next], c.line);
+    assert.ok(c.line.includes(` --allowedTools ${MEMBER_ALLOWED_TOOLS} ${next} `), c.line);
+    // The words after it: options with their values, then the prompt alone at the end.
+    assert.deepEqual(c.argv.slice(-3, -1), ["--append-system-prompt", c.argv.at(-2)]);
+    assert.match(c.argv.at(-1), /read_task/);
+    assert.ok(!c.warnings.some((w) => w.includes("allowedTools")), c.warnings.join("\n"));
+    if (session?.mode !== "resume") assert.equal(claudeFreshProblem(c.argv.slice(1), { built: c.built, name: m.name }), null, c.line);
+  }
+  // Without --append-system-prompt: before --session-id still; with no option left, no flag.
+  const other = path.join(s.root, "home2");
+  fs.writeFileSync(path.join(f.bin, "claude.help"), fs.readFileSync(path.join(f.bin, "claude.help"), "utf8").replace(/ {2}--append-system-prompt.*\n/, ""));
+  let c = cmd({ mode: "fresh", id }, other);
+  assert.equal(c.argv[c.argv.indexOf("--allowedTools") + 2], "--session-id", c.line);
+  c = cmd(null, other);
+  assert.ok(!c.argv.includes("--allowedTools"), c.line);
+  assert.ok(c.warnings.includes("dana-n1-rev-1: claude 2.1.311: no option to put --allowedTools before (the prompt would become one of its values); every hoptell tool call of this member asks for permission in its pane"), c.warnings.join("\n"));
+  // A --help without --allowedTools: no flag, a warning.
+  fs.writeFileSync(path.join(f.bin, "claude.help"), fs.readFileSync(path.join(f.bin, "claude.help"), "utf8").replace(/ {2}--allowedTools.*\n/, ""));
+  c = cmd({ mode: "fresh", id }, path.join(s.root, "home3"));
+  assert.ok(!c.argv.some((w) => w.startsWith("--allowed")), c.line);
+  assert.ok(c.warnings.includes("dana-n1-rev-1: claude 2.1.311 --help does not list --allowedTools; every hoptell tool call of this member asks for permission in its pane"), c.warnings.join("\n"));
 });
 
 test("team: up, status, stop, commit, restart, land (owner approval of exactly T and C), down; provenance and cleanup", { skip: !hasTmux && "tmux not installed" }, async (t) => {
@@ -673,6 +718,62 @@ const writeTeam = (home, s) => {
   fs.writeFileSync(teamPaths(home, s.team).state, JSON.stringify(s), { mode: 0o600 });
 };
 
+test("worktree add --team: an implementer of an active team whose file names a worktrees folder goes there, with its folder and owns; any other name, team or repository the default place", async (t) => {
+  const s = repoSetup(t);
+  const parent = path.join(s.root, "team-wt");
+  const dflt = (member) => path.join(s.root, "repo-wt", member);
+  writeTeam(s.home, stateOf("n1", [memberRow("dana-impl-1", "implementer", null, { cli: "codex", folder: "one", owns: ["lib/**"] }), memberRow("dana-rev-1", "reviewer", null)], { repo: s.repo, worktrees: parent }));
+  writeTeam(s.home, stateOf("n2", [memberRow("dana-impl-3", "implementer", null, { cli: "codex" })], { repo: s.repo }));
+  writeTeam(s.home, stateOf("n3", [memberRow("dana-impl-4", "implementer", null, { cli: "codex" })], { repo: s.repo, worktrees: parent, status: "down" }));
+  const other = repoSetup(t);
+  writeTeam(s.home, stateOf("n4", [memberRow("dana-impl-5", "implementer", null, { cli: "codex" })], { repo: other.repo, worktrees: parent }));
+  const lines = [];
+  const add = (member, team = "n1", more = []) => worktreeCommand({ args: ["add", member, "--team", team, "--cli", "codex", "--repo", s.repo, ...more], home: s.home, cwd: s.root, fail: (m) => assert.fail(m), out: (l) => lines.push(l) });
+  const at = (member) => readWorktreeRecord(s.home, member).rec;
+  await add("dana-impl-1");
+  assert.equal(at("dana-impl-1").path, path.join(parent, "one"));
+  assert.deepEqual(at("dana-impl-1").owns, ["lib/**"]);
+  assert.equal(lines[0], `Worktree for dana-impl-1: ${path.join(parent, "one")} (the worktrees folder of team n1)`);
+  // Not a member, a reviewer's name, a team without a worktrees folder, a team that is down, a team of another repository.
+  for (const [member, team] of [["dana-impl-2", "n1"], ["dana-rev-1", "n1"], ["dana-impl-3", "n2"], ["dana-impl-4", "n3"], ["dana-impl-5", "n4"]]) {
+    lines.length = 0;
+    await add(member, team);
+    assert.equal(at(member).path, dflt(member), `${member} of ${team}`);
+    assert.equal(at(member).owns, null);
+    assert.equal(lines[0], `Worktree for ${member}: ${dflt(member)}`);
+  }
+  // What is given wins: --folder and --owns over the team file's, --worktrees over the team's folder.
+  await worktreeCommand({ args: ["remove", "dana-impl-1"], home: s.home, cwd: s.root, fail: (m) => assert.fail(m), out: () => {} });
+  await add("dana-impl-1", "n1", ["--folder", "mine", "--owns", "test/**"]);
+  assert.deepEqual([at("dana-impl-1").path, at("dana-impl-1").owns], [path.join(parent, "mine"), ["test/**"]]);
+  await worktreeCommand({ args: ["remove", "dana-impl-1"], home: s.home, cwd: s.root, fail: (m) => assert.fail(m), out: () => {} });
+  await add("dana-impl-1", "n1", ["--worktrees", path.join(s.root, "given")]);
+  assert.deepEqual([at("dana-impl-1").path, at("dana-impl-1").owns], [path.join(s.root, "given", "dana-impl-1"), null]);
+});
+
+test("team up --dry-run: the worktree add line, run as printed, makes the worktree at the path its comment names (worktrees folder, folder, base)", async (t) => {
+  const s = repoSetup(t);
+  const f = fakeClis(s.root);
+  const base = git(s.repo, "rev-parse", "HEAD");
+  git(s.repo, "commit", "-q", "--allow-empty", "-m", "second");
+  fs.mkdirSync(path.join(s.root, "tasks"));
+  fs.writeFileSync(path.join(s.root, "tasks", "impl.md"), "Implement it.\n");
+  fs.writeFileSync(path.join(s.root, "tasks", "rev.md"), "Review requests.\n");
+  const file = path.join(s.root, "team.json");
+  fs.writeFileSync(file, JSON.stringify(teamDoc({ worktrees: path.join(s.root, "team wt"), base, members: [memberOf({ folder: "impl-one" }), { name: "dana-n1-rev-1", role: "reviewer", cli: "claude", task: "tasks/rev.md" }] })));
+  const out = [];
+  await teamCommand({ args: ["up", file, "--dry-run"], home: s.home, homedir: s.homedir, env: { PATH: f.PATH, LANG: "C" }, out: (l) => out.push(l), warn: () => {}, fail: (m) => assert.fail(m) });
+  const line = out.find((l) => l.includes("hoptell worktree add"));
+  const [, command, where] = /^ {2}(hoptell worktree add .+?) {2}# (.+), branch team\/n1\/dana-n1-impl-1$/.exec(line);
+  assert.equal(where, path.join(s.root, "team wt", "impl-one"));
+  fs.writeFileSync(path.join(s.root, "empty.env"), "");
+  const env = { ...process.env, HOPTELL_HOME: s.home, HOPTELL_ENV: path.join(s.root, "empty.env"), XDG_CONFIG_HOME: path.join(s.root, "config"), HOPTELL_CREDENTIAL_STORE: "file", HOPTELL_CREDENTIAL_PASSPHRASE: "test-pass-040" };
+  const r = spawnSync("sh", ["-c", `"$0" "$1" ${command.slice("hoptell ".length)}`, process.execPath, BIN], { cwd: os.tmpdir(), env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  const rec = readWorktreeRecord(s.home, "dana-n1-impl-1").rec;
+  assert.deepEqual([rec.path, rec.base, rec.owns], [where, base, ["lib/**"]]);
+});
+
 test("supervisor: a lifetime ends any member, idleness only a reviewer; a notice first, the end a minute later, by session id; the lead is told", async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-sup-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -920,14 +1021,14 @@ test("team up stopped while making worktrees: nothing started, status and down c
 const enrolled = (rec) => ({ run: "0".repeat(32), enrolment: { common: rec.common, id: "1".repeat(32), generation: 1 }, actions: [] });
 
 /** A signed repository with one team member whose commit has a candidate on main (not checked out). */
-async function landingSetup(t, team = "n4", { candidate = true } = {}) {
+async function landingSetup(t, team = "n4", { candidate = true, worktrees = null } = {}) {
   const s = repoSetup(t, { signing: true });
   git(s.repo, "commit", "-q", "--allow-empty", "-m", "second"); // T has a parent to rewind to
   const member = `dana-${team}-impl-1`;
-  const rec = await addWorktree(s.home, { repo: s.repo, member, team, cli: "codex" });
+  const rec = await addWorktree(s.home, { repo: s.repo, member, team, cli: "codex", parent: worktrees });
   fs.writeFileSync(path.join(rec.path, "lib", "x.js"), "2\n");
   await commitWorktree(s.home, member, { message: "m" });
-  writeTeam(s.home, stateOf(team, [memberRow(member, "implementer", null, { cli: "codex", template: "implementer", worktree: rec.path, branch: rec.branch, registration: registrationOf(rec), cwd: rec.path })], { repo: s.repo, ...enrolled(rec) }));
+  writeTeam(s.home, stateOf(team, [memberRow(member, "implementer", null, { cli: "codex", template: "implementer", worktree: rec.path, branch: rec.branch, registration: registrationOf(rec), cwd: rec.path })], { repo: s.repo, worktrees, ...enrolled(rec) }));
   git(s.repo, "checkout", "-q", "-b", "dev"); // main is not checked out anywhere
   const c = candidate ? await teamLandCandidate(s.home, member, { target: "main", message: "Land", homedir: s.homedir }) : null;
   return { s, rec, c, member, landRef: `refs/heads/team/${team}/land` };
@@ -1621,6 +1722,31 @@ test("restart runs the same launch checks as up: an agy member is not restarted 
   assert.equal(launchPreflight(s.repo, [{ name: "x", cli: "codex" }]), undefined);
 });
 
+test("an agy member's start text is checked when its command is planned: a template it cannot type is refused before team up or restart starts or stops anything", async (t) => {
+  const s = repoSetup(t);
+  const roles = path.join(s.homedir, ".config", "hoptell", "roles");
+  fs.mkdirSync(roles, { recursive: true });
+  const m = { name: "dana-n8-rev-1", role: "reviewer", cli: "agy", template: "reviewer" };
+  const plan = (text) => {
+    fs.writeFileSync(path.join(roles, "reviewer.md"), text);
+    return memberCommand({ lead: "dana-lead" }, m, { home: s.home, homedir: s.homedir, env: {} });
+  };
+  // Tabs and line breaks become single spaces; a long template still fits with its prompt.
+  assert.match(plan("Review\tcarefully.\n\n  Report   findings.\n").start, /^Review carefully\. Report findings\. .*dana-lead/);
+  assert.ok(plan(`${"Check every change. ".repeat(400)}\n`).start.length > 8000);
+  for (const [text, re] of [["Do you want to proceed? Review.\n", /approval prompt/], ["レビュー\n", /cannot check on screen/]]) assert.throws(() => plan(text), new RegExp(`agy gets the role template and its prompt typed as one line, which hoptell refuses: .*${re.source}`));
+  // Restart: refused while the member still runs; it is not stopped, nothing is launched.
+  fs.writeFileSync(path.join(roles, "reviewer.md"), "Do you want to proceed? Review.\n");
+  const session = sleepers(t);
+  const running = session(Date.now() - 1000);
+  writeTeam(s.home, stateOf("n8", [memberRow(m.name, "reviewer", running, { cli: "agy", cwd: s.repo })], { repo: s.repo }));
+  const launched = [];
+  const ended = [];
+  await assert.rejects(teamRestart(s.home, m.name, { homedir: s.homedir, env: {} }, { launch: async () => launched.push(1), endSession: (pane, pid) => ended.push(pid), warn: () => {} }), /approval prompt/);
+  assert.deepEqual([launched, ended], [[], []]);
+  assert.equal(processInfo(running.pid) !== null, true, "the member still runs");
+});
+
 /** A member restart's stand-ins: launches are sleeping processes (or ones that quit at once), stops end them by pid. */
 function restartWorld(t, team, name, row) {
   const s = repoSetup(t);
@@ -1860,6 +1986,138 @@ test("restart refuses while a process still runs in the member's worktree, unlik
   const session = sleepers(t);
   const r = await teamRestart(s.home, member, { homedir: s.homedir, env: { PATH: f.PATH } }, { ...deps, launch: async (name) => { const x = session(Date.now()); return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid }; } });
   assert.equal(r.member, member);
+});
+
+/**
+ * A member of a team whose file names a worktrees folder, after its work landed: hoptell removed
+ * its worktree, its record and its branch. Launches are sleeping processes.
+ */
+async function landedSetup(t, team) {
+  const worktrees = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-teamwt-")));
+  t.after(() => fs.rmSync(worktrees, { recursive: true, force: true }));
+  const x = await landingSetup(t, team, { worktrees });
+  await teamLandApprove(x.s.home, x.member, { T: x.c.T, C: x.c.C, homedir: x.s.homedir });
+  const f = fakeClis(x.s.root);
+  const session = sleepers(t);
+  const launched = [];
+  const cwds = [];
+  const deps = {
+    launch: async (name, argv, roles, opts) => {
+      launched.push(argv);
+      cwds.push(opts.cwd);
+      const p = session(Date.now());
+      return { session: `hoptell-${name}`, sessionId: p.id, pane: p.pane, pid: p.pid };
+    },
+    endSession: (pane, pid) => (process.kill(pid), true),
+    warn: () => {},
+    sleep: async () => {},
+    resumeWatchMs: 0,
+  };
+  const restart = (mode = "auto") => teamRestart(x.s.home, x.member, { homedir: x.s.homedir, env: { PATH: f.PATH }, mode }, deps);
+  return { ...x, worktrees, where: path.join(worktrees, x.member), branch: `team/${team}/${x.member}`, f, deps, launched, cwds, restart };
+}
+
+test("restart after a landing: the implementer gets a new worktree in the team's folder from the target's tip, registered, and starts fresh", async (t) => {
+  const x = await landedSetup(t, "n4");
+  const { s, member, where, branch } = x;
+  assert.ok(readWorktreeRecord(s.home, member).absent);
+  assert.equal(refOf(s.repo, branch), null);
+  assert.equal(readState(s.home, "n4").members[0].removed.branch, "deleted");
+  assert.equal((await teamStatus(s.home, "n4", {})).members[0].noWorktree, "worktree removed");
+  const out = [];
+  await teamCommand({ args: ["restart", member], home: s.home, homedir: s.homedir, env: { PATH: x.f.PATH }, out: (l) => out.push(l), warn: () => {}, fail: (m) => assert.fail(m), deps: x.deps });
+  const rec = readWorktreeRecord(s.home, member).rec;
+  // From main's tip (C), not the lead's checkout (dev, at T).
+  assert.deepEqual([rec.path, rec.branch, rec.base, rec.head, rec.owns], [where, branch, x.c.C, x.c.C, null]);
+  assert.equal(git(s.repo, "rev-parse", "HEAD"), x.c.T);
+  assert.deepEqual(out, [`made a new worktree for ${member} at ${where}, on ${branch} from main at ${x.c.C.slice(0, 12)} (its earlier one was removed after its work landed)`, `restarted ${member} (tmux session $1), with a fresh conversation: its worktree is new, made from main`]);
+  const st = readState(s.home, "n4");
+  const m = st.members[0];
+  assert.deepEqual([m.worktree, m.cwd, m.branch, m.registration, m.removed], [where, where, branch, registrationOf(rec), undefined]);
+  assert.deepEqual(x.cwds, [where]);
+  assert.match(x.launched[0].at(-1), new RegExp(`restarted in your worktree with a fresh conversation \\(you remember nothing of before\\); your branch is ${branch} at ${x.c.C};`));
+  const events = st.events.map((e) => e.what);
+  assert.ok(events.includes(`worktree recreated for ${member} at ${where} on ${branch} from main ${x.c.C.slice(0, 12)}`), events.join("\n"));
+  assert.equal(events.at(-1), `restarted ${member}: fresh (its worktree is new, made from main)`);
+  const row = (await teamStatus(s.home, "n4", {})).members[0];
+  assert.deepEqual([row.noWorktree, row.head, row.commits], [undefined, x.c.C, 0]);
+  // The next restart keeps that worktree.
+  const again = await x.restart();
+  assert.equal(again.worktree, null);
+  assert.equal(readWorktreeRecord(s.home, member).rec.created, rec.created);
+  assert.equal(x.launched.length, 2);
+});
+
+test("restart after a landing refuses with nothing made or started: a kept branch, a landing pending, an unreadable record, the folder taken, no landing of this run, a team not up, --resume", async (t) => {
+  const x = await landedSetup(t, "n6");
+  const { s, member, where, branch } = x;
+  const saved = readState(s.home, "n6");
+  const edit = (fn) => {
+    const st = structuredClone(saved);
+    fn(st);
+    writeTeam(s.home, st);
+  };
+  const none = () => {
+    assert.deepEqual(x.launched, []);
+    assert.ok(readWorktreeRecord(s.home, member).absent || readWorktreeRecord(s.home, member).problem);
+  };
+  // A branch hoptell kept (work it has no record of landing): named, with what to do.
+  git(s.repo, "branch", branch, x.c.H);
+  edit((st) => void (st.members[0].removed = { ...st.members[0].removed, branch: "kept", why: "its head moved" }));
+  await refusal(() => x.restart(), "no_worktree", new RegExp(`^${member} has no hoptell worktree: hoptell removed it after a landing on main and kept its branch ${branch} \\(its head moved\\); nothing was started\\. hoptell makes no new worktree next to work it has no record of landing: check that branch, land or delete it by hand, then hoptell team down n6 and team up give ${member} a new worktree$`));
+  none();
+  assert.equal(refOf(s.repo, branch), x.c.H);
+  git(s.repo, "branch", "-D", branch);
+  // A landing of the member pending: its id and the command that finishes it.
+  edit((st) => void (st.candidate = { member, target: "main", T: x.c.T, C: x.c.C, H: x.c.H, at: new Date().toISOString() }));
+  await refusal(() => x.restart(), "landing_pending", new RegExp(`^team n6 has a landing of ${member} pending; finish or discard it first: candidate pending: approve or discard it with hoptell team land ${member} --approve ${x.c.T} ${x.c.C}`));
+  none();
+  // A record that cannot be read is not an absent one.
+  writeTeam(s.home, saved);
+  fs.writeFileSync(worktreePaths(s.home).record(member), "{", { mode: 0o600 });
+  await refusal(() => x.restart(), "no_worktree", new RegExp(`^the worktree record of ${member} `));
+  assert.deepEqual(x.launched, []);
+  fs.rmSync(worktreePaths(s.home).record(member));
+  // Something already where the new worktree goes.
+  fs.mkdirSync(where);
+  await refusal(() => x.restart(), "path_exists", new RegExp(`^${where}, where ${member}'s new worktree goes, already exists; nothing was started\\. Move it away, then run hoptell team restart ${member} again$`));
+  none();
+  fs.rmdirSync(where);
+  // Only a landing of an earlier run of the team.
+  edit((st) => void (st.created = new Date(Date.now() + 60_000).toISOString()));
+  await refusal(() => x.restart(), "no_worktree", new RegExp(`^${member} has no hoptell worktree: hoptell has no record of removing it after a landing of this team run, so it makes no new one; nothing was started`));
+  none();
+  // A team that is not up; one that is down has no members to restart.
+  edit((st) => void (st.status = "stopping"));
+  await refusal(() => x.restart(), "no_worktree", new RegExp(`^${member} has no hoptell worktree: team n6 is stopping, not up, so hoptell makes it no new one; nothing was started`));
+  edit((st) => void (st.status = "down"));
+  await refusal(() => x.restart(), "no_member");
+  none();
+  // --resume: the old conversation does not know the new branch.
+  writeTeam(s.home, saved);
+  await refusal(() => x.restart("resume"), "not_resumable", new RegExp(`^${member} cannot be resumed: its worktree is gone, and the new one hoptell makes starts from main`));
+  none();
+  assert.ok(!fs.existsSync(where));
+  assert.equal(refOf(s.repo, branch), null);
+  // With all of that cleared, the restart makes it.
+  assert.equal((await x.restart()).worktree.path, where);
+});
+
+test("restart after a landing next to a stale git folder of the worktree's name: git names another gitdir, and the registration follows it", async (t) => {
+  const x = await landedSetup(t, "n7");
+  const stale = path.join(x.s.repo, ".git", "worktrees", x.member);
+  fs.mkdirSync(stale, { recursive: true });
+  fs.writeFileSync(path.join(stale, "gitdir"), path.join(x.s.root, "gone", ".git\n"));
+  fs.writeFileSync(path.join(stale, "locked"), "");
+  const r = await x.restart();
+  assert.equal(r.worktree.path, x.where);
+  const rec = readWorktreeRecord(x.s.home, x.member).rec;
+  assert.notEqual(rec.gitdir, fs.realpathSync(stale), "git picked another name");
+  assert.deepEqual(readState(x.s.home, "n7").members[0].registration, registrationOf(rec));
+  // The registration matches the record, so the next restart is not refused as another worktree's.
+  const again = await x.restart();
+  assert.equal(again.worktree, null);
+  assert.equal(x.launched.length, 2);
 });
 
 test("restart of a Codex member: the thread its MCP server recorded is resumed with codex resume, twice; a changed rollout starts fresh", async (t) => {
@@ -2963,7 +3221,7 @@ test("the lead prepares, records the tests and asks; the owner decides L<n> in o
   assert.match(git(x.s.repo, "log", "-1", "--format=%G? %s", x.c.C), /^[GU] Land the change$/);
   assert.equal(x.c.stopped, "not started");
   // What --request-approval needs: evidence for exactly C, then a review that every reviewer answered.
-  await refusal(() => x.request(), "no_evidence", /no test evidence is recorded for the candidate \w+; record it with hoptell team evidence dana-n4-impl-1 --candidate \w+ --tests pass\|fail --command <command> --report <file>/);
+  await refusal(() => x.request(), "no_evidence", /no test evidence is recorded for the candidate \w+; record it with hoptell team evidence dana-n4-impl-1 --candidate \w+ --tests pass\|fail --command "<command>" --report <file>/);
   await refusal(() => x.evidence({ C: x.c.T }), "not_candidate", /is not dana-n4-impl-1's current candidate/);
   await refusal(() => x.evidence({ tests: "maybe" }), "bad_tests");
   await refusal(() => x.evidence({ commands: [] }), "bad_command");
@@ -3819,7 +4077,7 @@ test("the launch line after every layer: team up and restart pass memberCommand'
   const launched = [];
   const deps = {
     launch: async (name, argv, roles, o) => {
-      launched.push({ name, argv, cwd: o.cwd, built: o.team.built });
+      launched.push({ name, argv, cwd: o.cwd, built: o.team.built, start: o.start });
       const x = session(Date.now());
       return { session: `hoptell-${name}`, sessionId: x.id, pane: x.pane, pid: x.pid };
     },
@@ -3846,6 +4104,13 @@ test("the launch line after every layer: team up and restart pass memberCommand'
     assert.equal(gate(l, l.built, [...l.argv.slice(0, 1), "--add-dir", "/", ...l.argv.slice(1)]).gate.why, "not the launch hoptell built");
     assert.equal(gate(l, l.built, ["env", "-u", "CODEX_HOME", ...l.argv]).gate.why, "not the launch hoptell built");
   }
+  // agy gets no prompt argument (it acts on -i before its trust dialog is answered): the role
+  // template and the launch prompt, on one line, are typed once its input shows. The others none.
+  const a = launched.find((l) => l.name === names.agy);
+  assert.ok(!a.argv.some((w) => /^(-i|--prompt-interactive)(=|$)/.test(w)), a.argv.join(" "));
+  assert.match(a.start, /^You are a reviewer on a hoptell team\. .* requests from dana-lead are your task\.$/);
+  assert.doesNotMatch(a.start, /\n/);
+  assert.deepEqual(launched.filter((l) => l.name !== names.agy).map((l) => l.start), [null, null]);
   // Claude Code's --session-id: the gate arms only with the id assigned to this launch.
   const c = launched.find((l) => l.name === names.claude);
   assert.equal(gate(c, { ...c.built, session_id: crypto.randomUUID() }).gate.state, "off", "another id than the one assigned");

@@ -455,10 +455,14 @@ test("hoptell agents flags --lead: the role template with the CLI's own per-sess
   assert.match(j.args[5], /^developer_instructions="You are an implementer .*\\n- Never commit, push, tag/);
   assert.equal(JSON.parse(j.args[5].slice("developer_instructions=".length)).split("\n")[0], "You are an implementer on a hoptell team. Your lead is the hoptell peer dana-lead.");
   assert.equal(j.args.at(-1), prompt);
-  // A reviewer with another template; agy gets template and prompt together after -i.
+  // A reviewer with another template; agy gets no prompt argument (it acts on -i before its trust
+  // dialog is answered): template and prompt, on one line, for hoptell tmux --start.
   j = (await run(["flags", "agy", "--role", "reviewer", "--lead", "dana-lead", "--json"])).json();
-  assert.equal(j.args.at(-2), "-i");
-  assert.match(j.args.at(-1), /^You are a reviewer on a hoptell team\.[\s\S]*\n\nYou are the reviewer for dana-lead; read your task/);
+  assert.ok(!j.args.includes("-i"), j.args.join(" "));
+  assert.match(j.start, /^You are a reviewer on a hoptell team\. .* You are the reviewer for dana-lead; read your task/);
+  assert.equal(j.template.placement, "start");
+  const plain = await run(["flags", "agy", "--role", "reviewer", "--lead", "dana-lead"]);
+  assert.match(plain.out.join("\n"), /\n# and give hoptell tmux, before --: --start 'You are a reviewer on a hoptell team\. /);
   j = (await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--template", "tester", "--json"])).json();
   assert.equal(j.template.name, "tester");
   assert.match(j.args.at(-1), /^You are the tester for dana-lead;/);
