@@ -966,6 +966,11 @@ test("tmux: the pane's process replaced, or its identity unreadable: no signal, 
   const a = await makeRun(w, { mode: "tmux", name, plan: { command: process.execPath, args: [], cli: { command: "/bin/sh", args: ["-c", "sleep 600"] } } });
   let rec = await startSupervisor(w.home, a.run, { env: supEnv(w, a.run) });
   assert.equal(rec.state, "running");
+  // The agent's window has taken its settings file: the sweep below removes the run's secrets, and
+  // a window still starting up would then find none and end the session itself.
+  const agentEnvFile = runPaths(w.home, a.run).agentEnv;
+  for (let i = 0; i < 300 && fs.existsSync(agentEnvFile); i++) await sleep(50);
+  assert.ok(!fs.existsSync(agentEnvFile), "the agent's window did not start");
   // The supervisor is gone and the recorded pane identity is not the pane's process any more. The
   // processes the supervisor recorded under the pane (when it got to it before the kill) are
   // stopped by their own identities: that is not what this test is about, so none are recorded.

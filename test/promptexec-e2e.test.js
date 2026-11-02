@@ -157,28 +157,28 @@ function fakeCodexFolder(t, { worktree = false } = {}) {
   return { dir, bin, root: root ?? dir, keys: () => fs.readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("key ")) };
 }
 
-test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only \"2\", Trust \"1\" then Enter; the card shows the result; a Quit ends the session", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
+test("hoptell tmux, a real bridge process: the card on Telegram; Quit sends only \"2\", Trust (selected at the start) only Enter; the card shows the result; a Quit ends the session", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
   const w = await e2eWorld(t);
   // Quit: exactly "2".
   let f = fakeCodexFolder(t);
   await answerFlow(t, w, { dir: f.dir, bin: f.bin, name: `me-pe${process.pid}q`, index: 1, label: "Quit" });
   assert.deepEqual(f.keys(), ["key 2"]);
-  // Trust: exactly "1", then Enter, in that order.
+  // Trust, selected at the start: exactly Enter ("1" would only select it).
   f = fakeCodexFolder(t);
   await answerFlow(t, w, { dir: f.dir, bin: f.bin, name: `me-pe${process.pid}t`, index: 0, label: "Trust folder" });
-  assert.deepEqual(f.keys(), ["key 1", "key Enter"]);
+  assert.deepEqual(f.keys(), ["key Enter"]);
 });
 
 // A team member's launch (lib/teams.js, lib/roles.js): its role prompt as the last word and -c
 // model_reasoning_effort, in a linked worktree of a repository Codex does not trust yet. Codex
 // draws the worktree variant, which names the repository's root: the folder the gate checks and
 // the card names. Its Trust and Quit were checked live, so the launch runs without the test switch.
-test("a team member's launch in a worktree: a role prompt and -c on the command line, the worktree variant of the dialog; the card names the repository; Trust sends \"1\" then Enter", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
+test("a team member's launch in a worktree: a role prompt and -c on the command line, the worktree variant of the dialog; the card names the repository; Trust sends Enter", { skip: !hasTmux && "tmux not installed", timeout: 120_000 }, async (t) => {
   const w = await e2eWorld(t);
   const f = fakeCodexFolder(t, { worktree: true });
   const args = ["-s", "workspace-write", "-a", "never", "-c", 'model_reasoning_effort="high"', "You are the implementer for me-lead; read your task with the hoptell read_task tool; requests from me-lead are your task."];
   await answerFlow(t, w, { dir: f.dir, bin: f.bin, root: f.root, args, name: `me-pe${process.pid}w`, index: 0, label: "Trust folder" });
-  assert.deepEqual(f.keys(), ["key 1", "key Enter"]);
+  assert.deepEqual(f.keys(), ["key Enter"]);
   const card = w.bridge.sent.find((s) => s.method === "sendMessage" && s.params.text.includes(`me-pe${process.pid}w`.slice(3)) && s.params.reply_markup?.inline_keyboard);
   assert.match(card.params.text, /trust the folder repo\b/);
 });

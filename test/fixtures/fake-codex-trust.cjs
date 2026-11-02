@@ -7,7 +7,8 @@
 // the folder is trusted; a Quit exits.
 // argv[3] ("normal", "start-on-2", "one-selects-two", "foreign-after-one", "trust-exits" or
 // "enter-ignored") changes what it shows or does, for the refusal and settle tests:
-// "foreign-after-one" starts on Quit, and "1" shows another program's approval prompt for a
+// "one-selects-two" starts on Quit and "1" keeps Quit selected; "foreign-after-one" starts on
+// Quit, and "1" shows another program's approval prompt for a
 // moment, then the dialog again with Trust selected; "trust-exits" exits after a Trust instead of
 // showing its input; "enter-ignored" logs an Enter and does nothing. A line "redraw <folder>" in the
 // control file (argv[4]) redraws with another folder (the screen changed between the card and the
@@ -26,7 +27,7 @@ if (root) {
   const note = wt.findIndex((r) => r.startsWith("  Note: "));
   rows.splice(0, rows.findIndex((r) => r.startsWith("  Trust this folder?")), ...wt.slice(0, note + 1), `  ${root}`, "");
 }
-let selected = mode === "start-on-2" || mode === "foreign-after-one" ? 2 : 1;
+let selected = mode === "start-on-2" || mode === "one-selects-two" || mode === "foreign-after-one" ? 2 : 1;
 let folderRows = folder ? [`  ${folder}`] : null;
 const note = (line) => fs.appendFileSync(log, `${line}\n`);
 

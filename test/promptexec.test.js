@@ -147,10 +147,12 @@ test("Quit: the signed answer is taken once, recorded before the key, and only \
   assert.equal(w.confirmed(), 3);
 });
 
-test("Trust: \"1\" (it only selects), a fresh read that shows the same dialog with Trust selected, then Enter; every read is one of the gate's reads too", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+test("Trust: \"1\" (it only selects), a fresh read that shows the same dialog with Trust selected, then Enter; Trust selected already: no \"1\"; every read is one of the gate's reads too", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  // Trust selected when the card was made: no "1" (a read right after it could not tell whether it
+  // was taken yet), a fresh read that shows the same dialog with Trust selected, then Enter.
   const w = await world(t);
   await w.answer(w.envelope("1"));
-  assert.deepEqual(w.keys(), ["key 1", "key Enter", "TRUSTED"]);
+  assert.deepEqual(w.keys(), ["key Enter", "TRUSTED"]);
   assert.equal(w.state().state, "done");
   assert.equal(w.reports[0].label, "Trust folder");
   assert.ok(w.gate.observed.length >= 2, "the read before the key and the revalidation");
@@ -163,7 +165,7 @@ test("Trust: \"1\" (it only selects), a fresh read that shows the same dialog wi
 });
 
 test("after \"1\" the revalidation waits only for the same dialog's selection to move: another screen ends it at once as unknown, and Enter is never sent", { skip: !hasTmux && "tmux not installed" }, async (t) => {
-  // "1" selected Quit: the same dialog, the wrong row, for the whole wait.
+  // "1" does not move the selection from Quit: the same dialog, the wrong row, for the whole wait.
   const w = await world(t, { mode: "one-selects-two" });
   await w.answer(w.envelope("1"));
   assert.deepEqual(w.keys(), ["key 1"]);
@@ -183,6 +185,12 @@ test("after \"1\" the revalidation waits only for the same dialog's selection to
   const u = await world(t, { mode: "start-on-2", ops: (o) => ({ ...o, look: () => (++reads > 1 ? null : o.look()) }) });
   await u.answer(u.envelope("1"));
   assert.deepEqual([u.keys(), u.state().state, u.state().why], [["key 1"], "unknown", "busy"]);
+  assert.equal(reads, 2, "not read again");
+  // Trust selected at the start ("1" left out): a revalidation that fails sends no key at all.
+  reads = 0;
+  const s = await world(t, { ops: (o) => ({ ...o, look: () => (++reads > 1 ? null : o.look()) }) });
+  await s.answer(s.envelope("1"));
+  assert.deepEqual([s.keys(), s.state().state, s.state().why], [[], "refused", "busy"]);
   assert.equal(reads, 2, "not read again");
 });
 
@@ -271,7 +279,7 @@ test("the injector's read: stamped before the capture, the last key as the end o
 });
 
 test("Trust and Quit were checked live on 0.165.0: pressed without the launch's test switch; a card that claims the switch for a launch without it is refused", { skip: !hasTmux && "tmux not installed" }, async (t) => {
-  for (const [choice, keys] of [["1", ["key 1", "key Enter", "TRUSTED"]], ["2", ["key 2", "QUIT"]]]) {
+  for (const [choice, keys] of [["1", ["key Enter", "TRUSTED"]], ["2", ["key 2", "QUIT"]]]) {
     const w = await world(t, { untested: false });
     await w.answer(w.envelope(choice));
     assert.deepEqual(outcome(w), [keys, "done", null], choice);
@@ -499,8 +507,8 @@ test("Claude Code and agy without the test switch: Quit is Esc only, Trust its k
   }
 });
 
-test("the normal two-key success with the real gate: Claude Code Down, a fresh read with Yes selected, Enter; Codex \"1\", the read, Enter; agy the read, Enter; the gate ends after the last key and the input box makes it done", { skip: !hasTmux && "tmux not installed" }, async (t) => {
-  for (const [cli, choice, keys] of [["claude", "2", ["key Down", "key Enter", "TRUSTED"]], ["codex", "1", ["key 1", "key Enter", "TRUSTED"]], ["agy", "1", ["key Enter", "TRUSTED"]]]) {
+test("the normal two-key success with the real gate: Claude Code Down, a fresh read with Yes selected, Enter; Codex, Trust selected at the start, the read, Enter; agy the read, Enter; the gate ends after the last key and the input box makes it done", { skip: !hasTmux && "tmux not installed" }, async (t) => {
+  for (const [cli, choice, keys] of [["claude", "2", ["key Down", "key Enter", "TRUSTED"]], ["codex", "1", ["key Enter", "TRUSTED"]], ["agy", "1", ["key Enter", "TRUSTED"]]]) {
     // The gate is asked right before the Enter: still armed, the frame matched with the selection moved.
     let w = null;
     let armedAtEnter = null;
@@ -542,7 +550,7 @@ test("an attempt aborts between the keys, with no further key: another frame, a 
   // A gap between the reads, and the outer cap: a clock that jumps after the first key.
   for (const jump of [GAP_MS + 1, START_MS + CARD_MS]) {
     let clock = Date.now();
-    const v = await world(t, { cli: "codex", realGate: true, now: () => clock, ops: (o) => ({ ...o, press: (k, x) => { const r = o.press(k, x); if (k[0] === "1") clock += jump; return r; } }) });
+    const v = await world(t, { cli: "codex", mode: "start-on-2", realGate: true, now: () => clock, ops: (o) => ({ ...o, press: (k, x) => { const r = o.press(k, x); if (k[0] === "1") clock += jump; return r; } }) });
     await v.answer(v.envelope("1"));
     assert.deepEqual(outcome(v), [["key 1"], "unknown", "changed"], String(jump));
     assert.notEqual(gateWhy(v).why, "answered", "the gate ended by its own rule first");
@@ -556,10 +564,10 @@ test("the settle read: done only on positive evidence; the dialog still there, t
     [{ cli: "claude", mode: "drop-enter" }, "2", [["key Down", "key Enter"], "unknown", "shown"]],
     [{ cli: "claude", mode: "trust-exits" }, "2", [["key Down", "key Enter", "TRUSTED"], "unknown", "ended"]],
     [{ cli: "agy", mode: "trust-other" }, "1", [["key Enter", "TRUSTED"], "unknown", "unseen"]],
-    [{ cli: "codex", mode: "enter-ignored" }, "1", [["key 1", "key Enter"], "unknown", "shown"]],
+    [{ cli: "codex", mode: "enter-ignored" }, "1", [["key Enter"], "unknown", "shown"]],
     [{ cli: "agy", mode: "quit-stays", untested: false }, "2", [["key Escape", "QUIT"], "unknown", "running"]],
     // No capture counts for the whole bound.
-    [{ cli: "codex", ops: (o) => ({ ...o, look: () => (blind ? null : o.look()), press: (k, x) => ((blind = k[0] === "Enter"), o.press(k, x)) }) }, "1", [["key 1", "key Enter", "TRUSTED"], "unknown", "unseen"]],
+    [{ cli: "codex", ops: (o) => ({ ...o, look: () => (blind ? null : o.look()), press: (k, x) => ((blind = k[0] === "Enter"), o.press(k, x)) }) }, "1", [["key Enter", "TRUSTED"], "unknown", "unseen"]],
   ];
   const t0 = Date.now();
   await Promise.all(cases.map(async ([opts, choice, want]) => {
@@ -619,7 +627,7 @@ test("the settle read counts a read only in the manifest's tmux server and sessi
     let after = false;
     const w = await world(t, { ops: (o) => ({ ...o, binding: () => (after ? b(o) : o.binding()), press: (k, x) => ((after = k[0] === "Enter"), o.press(k, x)) }) });
     await w.answer(w.envelope("1"));
-    assert.deepEqual(outcome(w), [["key 1", "key Enter", "TRUSTED"], "unknown", "unseen"]);
+    assert.deepEqual(outcome(w), [["key Enter", "TRUSTED"], "unknown", "unseen"]);
   }
 });
 

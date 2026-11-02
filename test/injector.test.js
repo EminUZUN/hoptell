@@ -72,7 +72,12 @@ async function setup(t, initial = "prompt", { fresh = false } = {}) {
     return false;
   };
   const injectorLog = () => execFileSync("tmux", ["capture-pane", "-p", "-J", "-S", "-", "-t", `=${session}:injector`], { encoding: "utf8" });
-  return { w, name, session, pane, ctl, entries, screen, injectorLog, waiting, until, send: (message) => alice.call("send_message", { to: name, message }) };
+  // Replaced whole (a rename): the fake agent polls the file and reads an empty one as "prompt".
+  const control = (text) => {
+    fs.writeFileSync(`${ctl}.tmp`, text);
+    fs.renameSync(`${ctl}.tmp`, ctl);
+  };
+  return { w, name, session, pane, ctl, control, entries, screen, injectorLog, waiting, until, send: (message) => alice.call("send_message", { to: name, message }) };
 }
 
 test("promptState recognizes empty prompts of Claude Code, Codex and Antigravity, and nothing else", () => {
@@ -687,7 +692,7 @@ test("tmux injector waits while an approval prompt is on screen", { skip: !hasTm
   await s.send("please run the tests");
   await sleep(3000);
   assert.equal(s.entries().length, 0, "typed while an approval prompt was visible");
-  fs.writeFileSync(s.ctl, "prompt");
+  s.control("prompt");
   assert.ok(await s.until(() => s.entries().length === 1));
   assert.equal(s.entries()[0].input, NOTICE);
 });
@@ -721,7 +726,7 @@ test("tmux injector never submits a multi-line draft below an empty prompt row",
     await s.send("m");
     await sleep(4000);
     assert.equal(s.entries().length, 0, `${layout}: submitted a draft on the rows below the prompt`);
-    fs.writeFileSync(s.ctl, "prompt"); // the draft is gone
+    s.control("prompt"); // the draft is gone
     assert.ok(await s.until(() => s.entries().length === 1), layout);
     assert.equal(s.entries()[0].input, NOTICE);
   }
@@ -783,7 +788,7 @@ test("tmux injector submits the notice in a Codex layout, and waits while its tr
   await sleep(3500);
   assert.equal(s.entries().length, 0, "typed while the selection footer was on screen");
   assert.doesNotMatch(s.screen(), /hoptell:/, "nothing was typed");
-  fs.writeFileSync(s.ctl, "codex");
+  s.control("codex");
   assert.ok(await s.until(() => s.entries().length === 1));
   assert.deepEqual([s.entries()[0].mode, s.entries()[0].input], ["codex", NOTICE]);
 });
@@ -912,7 +917,7 @@ test("tmux injector keeps a narrow capped draft pending after a key elsewhere, a
   assert.doesNotMatch(s.injectorLog(), /left to them/, "too little visible is not a change");
   assert.match(s.injectorLog(), /not submitted: (too little of the draft is visible|a key arrived and the draft is not fully visible)/);
   // The pane grows and the composer shows the whole draft.
-  fs.writeFileSync(s.ctl, "codex");
+  s.control("codex");
   execFileSync("tmux", ["kill-pane", "-t", catPane]);
   assert.ok(await s.until(() => s.entries().length === 1, 15000), "not submitted once fully visible");
   assert.deepEqual([s.entries()[0].mode, s.entries()[0].input], ["codex", NOTICE]);
@@ -927,13 +932,13 @@ test("tmux injector does not hand over a pending notice on one passing frame tha
   await sleep(13000); // past the idle time after the key: the notice is pending, checked every tick
   assert.match(s.injectorLog(), /not submitted: (too little of the draft is visible|a key arrived and the draft is not fully visible)/);
   // For 700 ms the pane shows another draft, then the unchanged notice again.
-  fs.writeFileSync(s.ctl, "flash:codex-capped-dialog");
+  s.control("flash:codex-capped-dialog");
   assert.ok(await s.until(() => fs.readFileSync(s.ctl, "utf8") === "codex-capped-dialog", 5000), "the frame was shown");
   await sleep(3000);
   assert.doesNotMatch(s.injectorLog(), /left to them/, "handed over on a passing frame");
   assert.equal(s.entries().length, 0);
   // Still pending: once the whole draft is visible it is submitted, once.
-  fs.writeFileSync(s.ctl, "codex");
+  s.control("codex");
   execFileSync("tmux", ["kill-pane", "-t", catPane]);
   assert.ok(await s.until(() => s.entries().length === 1, 15000), "not submitted once fully visible");
   assert.deepEqual([s.entries()[0].mode, s.entries()[0].input], ["codex", NOTICE]);
@@ -950,11 +955,11 @@ test("tmux injector never presses Enter on a passing frame that shows the notice
   // The draft is edited for good (before the pane grows: the whole unedited notice is never on
   // screen), and the pane grows. Once the injector has seen the edit, the screen shows the
   // unedited notice for 700 ms (a stale frame), then the edit again.
-  fs.writeFileSync(s.ctl, "edit:codex");
+  s.control("edit:codex");
   assert.ok(await s.until(() => fs.readFileSync(s.ctl, "utf8") === "codex", 5000), "the edit was shown");
   execFileSync("tmux", ["kill-pane", "-t", catPane]);
   assert.ok(await s.until(() => /the draft changed after a key; checking that the change lasts/.test(s.injectorLog()), 15000), "the edit was not seen");
-  fs.writeFileSync(s.ctl, "stale");
+  s.control("stale");
   assert.ok(await s.until(() => fs.readFileSync(s.ctl, "utf8") === "codex", 5000), "the stale frame was shown");
   assert.ok(await s.until(() => /left to them/.test(s.injectorLog()), 15000), "the edited draft was not handed over");
   await sleep(2000);

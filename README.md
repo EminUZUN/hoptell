@@ -1293,8 +1293,9 @@ it is in test mode. Your tap
 is signed by the bridge and goes only to that session's injector; it presses only the option you
 chose, and only in that session's own terminal, while the dialog it watched since the start is
 still on the screen, nobody typed or scrolled in that terminal since the card was made, and the
-tap is at most 2 minutes old. Trust is "1" (which only selects it), a fresh look that shows the
-same dialog with Trust selected, then Enter; anything else on that look and Enter is not sent.
+tap is at most 2 minutes old. Trust is "1" (which only selects it; left out when Trust is
+selected already), a fresh look that shows the same dialog with Trust selected, then Enter;
+anything else on that look and Enter is not sent.
 Quit is "2". The first answer wins, and an answer is never tried twice. After the last key
 hoptell looks for up to 5 seconds: the card says it pressed the option only when it saw it take
 (after Trust, the agent's empty input; after Quit, the agent's end). Otherwise it says hoptell
