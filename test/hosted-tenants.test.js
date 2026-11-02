@@ -11,8 +11,10 @@ import { hostedWorld } from "./hosted-world.js";
 import { sleep } from "./helpers.js";
 
 const call = async (client, name, args = {}) => (await client.callTool({ name, arguments: args })).content[0].text;
+// Every poll is a request against the tenant's limit (120 a minute): at 25 ms, one slow wait
+// reached it on CI (429). 100 ms keeps a 3-second wait to 30 requests.
 const until = async (fn, ms = 3000) => {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(25)) if (await fn()) return true;
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await fn()) return true;
   return Boolean(await fn());
 };
 const receiptOf = (t) => /Receipt: (\S+)/.exec(t)?.[1];
