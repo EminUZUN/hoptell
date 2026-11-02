@@ -33,7 +33,8 @@ export async function killSupervisor(home, rec, first = "partial answer") {
 /** A temporary hoptell home and a separate folder for roots; removed after the test. */
 export function agentsWorld(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-agents-")));
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  // A process the test stopped can still be writing its last lines here: retry the removal briefly.
+  t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const home = path.join(base, "home");
   const work = path.join(base, "work");
   fs.mkdirSync(home, { mode: 0o700 });
