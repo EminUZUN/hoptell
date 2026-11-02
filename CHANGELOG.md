@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.1 (2026-11-02)
+
+Upgrade note: if you set up Claude Code's hooks by hand from `hoptell hooks`, add the `Stop`
+hook it now prints (the plugin already installs it), then restart those sessions. The folder
+trust card fallback below needs an upgraded Telegram bridge; restart the bridge after upgrading.
+
+- `hoptell team restart <member>` now accepts `--fresh` and `--resume`; both were refused as
+  unknown options. `hoptell agents trust-cli --revoke` without a value is refused up front.
+- `hoptell team` commands refuse options they do not use before acting. Previously,
+  `team down --dry-run` ignored the option and took the team down.
+- `hoptell team up` warns before starting a team with implementers when the repository's own
+  config lacks the SSH signing settings needed for landing (`gpg.format=ssh`,
+  `user.signingkey`, `gpg.ssh.allowedSignersFile`), and prints the commands to set them.
+  A worktree keeps the settings it was made with, so adding them later does not enable landing
+  for that worktree; the signing errors now explain how to recover.
+- `hoptell hooks` prints the `Stop` hook too, so Claude Code sessions set up without the plugin
+  can notify a sender when a request was read but left unanswered.
+- A new install whose first command is `hoptell doctor` now gets the default contacts policy.
+  Previously, it was treated as an install from before contacts and let every sender through.
+- The waiting note sent to the owner now names the session's `--cwd` folder instead of the
+  folder where `hoptell tmux` was run.
+- A folder trust card that exceeds the bridge's limits falls back to a plain waiting note,
+  subject to the waiting notes' own limits; previously, the card was silently dropped.
+  The README documents the shared limits for questions, landing requests and folder trust
+  cards: 3 open requests per sender and 20 new requests per hour across the bridge.
+  `team land --request-approval` now explains that the bridge may still refuse a request
+  after it is sent.
+- The `read_task` launch warning no longer fires just because a tool list such as
+  `--allowedTools` contains a prefixed name like `mcp__hoptell__read_task`, as in the README's
+  Claude Code reviewer command.
+- `hoptell doctor` warns about invalid `HOPTELL_LEASE_MINUTES` or `HOPTELL_RECEIPTS` values
+  and reports the receipt and lease settings sessions use. It also accepts a relays file
+  without `HOPTELL_RELAY` or `HOPTELL_TOKEN`, checks each entry's profile, and checks its
+  sign-in when the entry uses `auth: "login"`.
+- When a name supplied through `HOPTELL_NAME` is kept for another conversation, the refusal
+  now says so. Previously, it said the name was in use by another session and suggested
+  waiting for that session to end.
+
 ## 0.4.0 (2026-10-30)
 
 Upgrade note: this release changes the relay protocol (capability `status`). Upgrade the relay
