@@ -214,6 +214,7 @@ test("doctor reports refused switches as failures and the others as warnings", (
     HOPTELL_AGENTS_MAX: "0",
     HOPTELL_NOTIFY: "of",
     HOPTELL_ELICITATION: "on",
+    HOPTELL_LEASE_MINUTES: "0",
   });
   assert.notEqual(r.status, 0);
   for (const re of [
@@ -225,11 +226,38 @@ test("doctor reports refused switches as failures and the others as warnings", (
     /FAIL.*settings.*HOPTELL_AGENTS_MAX must be a whole number from 1 to 16, not "0" \(spawning agents is refused\)/,
     /warn.*settings.*HOPTELL_NOTIFY must be on or off, not "of"; using on/,
     /warn.*settings.*HOPTELL_ELICITATION must be off or read_inbox, not "on"; using off/,
+    /warn.*settings.*HOPTELL_LEASE_MINUTES must be a whole number from 1 to 1440; using receipts on with a 30-minute lease/,
   ]) assert.match(r.stdout, re);
   // With an invalid HOPTELL_AUTH, the token is not used for a relay login (no token fallback).
   assert.match(r.stdout, /relay login.*not checked: fix the settings above first/);
   assert.doesNotMatch(r.stdout, /token.*set \(not shown\)/);
   assert.doesNotMatch(r.stdout, /relay login.*(accepted|refused|failed)/i);
+});
+
+test("doctor with only a relays file: no HOPTELL_RELAY or HOPTELL_TOKEN failure, as sessions need neither", (t) => {
+  const s = sandbox(t);
+  const dir = path.join(s.env.XDG_CONFIG_HOME, "hoptell");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "relays.json"), JSON.stringify({ version: 1, default: "a", relays: [{ alias: "a", url: "ws://127.0.0.1:9", tokenEnv: "X_TOK" }] }), { mode: 0o600 });
+  const r = s.run(["doctor"], { X_TOK: "t".repeat(32) });
+  assert.match(r.stdout, /info {2}relay URL: HOPTELL_RELAY is not set; sessions use the relays file/);
+  assert.match(r.stdout, /info {2}token: HOPTELL_TOKEN is not set; each relay in the relays file has its own token or sign-in \(see relays below\)/);
+  assert.match(r.stdout, /ok {4}relays: a; bare names go to a/);
+  assert.doesNotMatch(r.stdout, /FAIL/);
+  // What a session would refuse at its start: a profile name it cannot use, a login entry not signed in.
+  fs.writeFileSync(path.join(dir, "relays.json"), JSON.stringify({ version: 1, default: "a", relays: [{ alias: "a", url: "ws://127.0.0.1:9", tokenEnv: "X_TOK", profile: "bad/profile" }, { alias: "b", url: "ws://127.0.0.1:8", auth: "login" }, { alias: "c", url: "ws://127.0.0.1:7", auth: "login", join: false }] }), { mode: 0o600 });
+  const bad = s.run(["doctor"], { X_TOK: "t".repeat(32), HOPTELL_PROFILE: "other" });
+  assert.match(bad.stdout, /FAIL {2}relays: a: its profile must be 1 to 64 letters/);
+  assert.doesNotMatch(bad.stdout, /protocol 2/);
+  const v1 = s.run(["doctor"], { X_TOK: "t".repeat(32), HOPTELL_PROTOCOL: "1" });
+  assert.match(v1.stdout, /FAIL {2}relays: b: auth login needs relay protocol 2, but HOPTELL_PROTOCOL=1 is set/);
+  assert.doesNotMatch(v1.stdout, /relays: c: auth login needs/, "a send-only connection uses protocol 2 anyway");
+  assert.match(bad.stdout, /FAIL {2}relays: b: auth login, but this relay is not signed in: run hoptell login with HOPTELL_RELAY set to its url and HOPTELL_PROFILE=relay-[0-9a-f]{16}\n/);
+  // Without the file, both still fail.
+  fs.rmSync(path.join(dir, "relays.json"));
+  const none = s.run(["doctor"]);
+  assert.match(none.stdout, /FAIL {2}relay URL: HOPTELL_RELAY is not set/);
+  assert.match(none.stdout, /FAIL {2}token: HOPTELL_TOKEN is not set/);
 });
 
 test("test barriers are read only in a source checkout; the package ships no test/ folder", () => {

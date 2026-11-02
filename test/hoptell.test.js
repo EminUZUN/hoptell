@@ -764,6 +764,10 @@ test("hoptell tmux hands the caller's settings to the agent, over stale tmux ser
   const noTask = await w.cli(["tmux", `${name}y`, "--", "codex", "Call read_task first."], { HOPTELL_PUSH: "listener" });
   assert.match(noTask.stderr, /warning: the agent's prompt mentions read_task, but without --task this session has no task to read/);
   assert.match(noTask.stderr, /hoptell tmux uses tmux delivery/);
+  // The README's reviewer line names read_task only in its tool list: no warning.
+  const tools = await w.cli(["tmux", `${name}z`, "--", "claude", "--allowedTools", "mcp__plugin_hoptell_hoptell__read_task,mcp__hoptell__read_task", "You are a read-only reviewer."], { HOPTELL_PUSH: "listener" });
+  assert.match(tools.stderr, /hoptell tmux uses tmux delivery/);
+  assert.doesNotMatch(tools.stderr, /mentions read_task/);
   assert.equal(fs.readFileSync(rootsOut, "utf8"), roots);
   // The protocol and profile choices reach the agent and the injector too.
   assert.match(env, /^HOPTELL_PROFILE=$/m);

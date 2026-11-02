@@ -332,6 +332,19 @@ test("prompt requests the bridge refuses: malformed, not from the control name i
   assert.equal(s.tg.calls("sendMessage").filter((c) => /Always trust/.test(c.params.text)).length, 0);
 });
 
+test("a card over the bridge's limits: no card, the owner gets the waiting note instead (it was dropped silently)", async (t) => {
+  const s = await setup(t);
+  const drops = (k) => s.bridge.state().drops[k] ?? 0;
+  for (const who of ["me-a1", "me-a2", "me-a3"]) await s.ask(manifestFor({ session: who }));
+  await until(() => promptCards(s.tg).length === 3, 4000, "three open cards");
+  await s.ask(manifestFor({ session: "me-alice" }));
+  await until(() => drops("prompt_rate") === 1, 4000, "over the limit");
+  const notes = () => s.tg.calls("sendMessage").filter((c) => /^⏳ /.test(c.params.text));
+  await until(() => notes().length === 1, 4000, "the note");
+  assert.match(notes()[0].params.text, / alice is waiting for you: Codex folder trust \(team n4\), in app\./);
+  assert.equal(promptCards(s.tg).length, 3, "no fourth card");
+});
+
 test("the control connection: a receiving peer under its kept name that never replaces a holder; it draws again; what arrives for it reaches onMessage; the bridge does not list it", async (t) => {
   const r = await ownerRelay(t);
   const home = tmpHome(t);

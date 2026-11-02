@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { RelayClient } from "../lib/client.js";
 import { commitWelcome, profileKey } from "../lib/profiles.js";
-import { SignInError, login, logout, signInStatus, tokenSource } from "../lib/login.js";
+import { SignInError, login, logout, signInProblem, signInStatus, tokenSource } from "../lib/login.js";
 import { createVerifier, discoveryDocument } from "../lib/oidc.js";
 import { doctor } from "../lib/doctor.js";
 import { startRelay } from "../lib/relay.js";
@@ -75,9 +75,14 @@ test("browser sign-in uses the relay's client registration; the token source sig
   t.after(() => c.close());
   await c.start().ready();
   assert.equal(c.member.id, ALICE);
+  // What hoptell doctor checks without the secret: usable here; not for the same profile at another URL.
+  assert.equal(signInProblem(home, profile, relayUrl), null);
+  assert.match(signInProblem(home, profile, "ws://127.0.0.1:9"), /^this sign-in was made for .* in another setup/);
+  await assert.rejects(tokenSource({ relayUrl: "ws://127.0.0.1:9", home, profile, keychainBackend })(), /in another setup/);
   const out = await logout({ home, profile, keychainBackend });
   assert.deepEqual(out, { removed: true, revoked: true, kind: "user" });
   await assert.rejects(tokenSource({ relayUrl, home, profile, keychainBackend })(), SignInError);
+  assert.equal(signInProblem(home, profile, relayUrl), "not signed in for this relay: run hoptell login");
 });
 
 test("refused client credentials: the advice names every option a new client-credentials sign-in needs", async (t) => {

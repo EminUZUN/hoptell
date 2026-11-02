@@ -8,6 +8,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { startRelay } from "../lib/relay.js";
+import { RelayClient } from "../lib/client.js";
 import { ClaimTable, GRACE_MS, TICKET_TTL_MS } from "../lib/claims.js";
 import { ROOT } from "../lib/config.js";
 import { fakeToken, sleep } from "./helpers.js";
@@ -257,7 +258,7 @@ test("relay: continue refusals: unknown alike, in use without displacing, a disa
 });
 
 test("relay: another acquire of a protected name waits with bound:true; claim_status answers the ticket", async (t) => {
-  const { tokens, hello } = await setup(t);
+  const { url, tokens, hello } = await setup(t);
   const a = hello({ name: "alice-y", token: tokens.alice, claim: { action: "acquire", ticket: true } });
   const { ticket } = (await a.next((f) => f.type === "welcome")).claim;
   a.send({ type: "release" });
@@ -271,6 +272,12 @@ test("relay: another acquire of a protected name waits with bound:true; claim_st
   await probe.next((f) => f.type === "welcome");
   assert.equal((await probe.rpc({ type: "claim_status", name: "alice-y" })).state, "taken");
   assert.equal((await probe.rpc({ type: "claim_status", name: "alice-y", ticket })).state, "free");
+  // A command with the kept name as HOPTELL_NAME: told that waiting for a session does not help.
+  const cli = new RelayClient({ url, token: tokens.alice, name: "alice-y", reconnect: false });
+  const fatal = new Promise((resolve) => cli.on("fatal", resolve));
+  cli.start();
+  t.after(() => cli.close());
+  assert.equal(await fatal, "the name is kept for another conversation (a kept name lasts up to 7 days after its last use): choose another HOPTELL_NAME");
 });
 
 test("relay: the ticket limit gives an ordinary welcome with ticket_limit", async (t) => {

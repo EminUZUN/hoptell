@@ -1198,8 +1198,8 @@ try {
       // session settings file and the injector's reads create state that would otherwise make a
       // new home look like an old one.
       // A launch prompt (hoptell agents flags --lead) sends the agent to read_task, which only a
-      // session started with --task has.
-      if (!opts["--task"] && [opts["--start"] ?? "", ...args.slice(sep + 1)].some((w) => w.includes("read_task"))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
+      // session started with --task has. The word alone: a tool list's mcp__hoptell__read_task is no prompt.
+      if (!opts["--task"] && [opts["--start"] ?? "", ...args.slice(sep + 1)].some((w) => /(^|\W)read_task(?!\w)/.test(w))) console.error("warning: the agent's prompt mentions read_task, but without --task this session has no task to read; give the task with --task <file>");
       // agy 1.4.12 acts on -i, tools included, while its folder trust dialog still waits.
       const agent = args.slice(sep + 1);
       if (path.basename(agent[0] ?? "") === "agy" && agent.some((w) => /^(-i|--prompt-interactive)(=|$)/.test(w))) console.error("warning: agy acts on its -i prompt before its folder trust dialog is answered; give the prompt with --start <text> instead, which hoptell types once agy's input box shows");
@@ -1350,12 +1350,14 @@ try {
         // Codex's startup folder trust on the owner's Telegram (design 9, C): only while the
         // launch's gate is armed (lib/startgate.js), as a card from the control connection.
         const { cardPublisher } = await import("../lib/promptflow.js");
+        const { launchFolder } = await import("../lib/startgate.js");
         const { promptAnswers, resultReport } = await import("../lib/promptexec.js");
         const log = (l) => console.log(new Date().toISOString(), l);
         surface = (gate, { ops, hold }) => {
           answers = promptAnswers(home(), args[0], { gate, ops, hold, report: resultReport(args[0], { control, team }), log });
           const cards = cardPublisher(home(), args[0], { control, gate, team: team?.team ?? null, profile: st.relay.profile ?? null, log });
-          waits = waitSurface(home(), args[0], { control, team, folder: path.basename(process.cwd()), cards });
+          // The agent's folder (--cwd), not the injector's: tmux starts this window where `hoptell tmux` ran.
+          waits = waitSurface(home(), args[0], { control, team, folder: path.basename(launchFolder(home(), args[0], args[1]) ?? process.cwd()), cards });
           return { ...waits, tick: () => Promise.all([waits.tick(), answers.flush()]), drain: () => answers.flush({ force: true }) };
         };
       }

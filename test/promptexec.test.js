@@ -17,7 +17,7 @@ import { promptFileOf, readPromptRecord, writePromptRecord } from "../lib/prompt
 import { classifyPrompt } from "../lib/prompts.js";
 import { processIdentity } from "../lib/host.js";
 import { injector } from "../lib/tmux.js";
-import { GAP_MS, readLaunch, startGate, writeExit, writeLaunch } from "../lib/startgate.js";
+import { GAP_MS, launchFolder, readLaunch, startGate, writeExit, writeLaunch } from "../lib/startgate.js";
 import { sleep } from "./helpers.js";
 
 const TMUX_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-pex-"));
@@ -620,5 +620,18 @@ test("the settle read counts a read only in the manifest's tmux server and sessi
     const w = await world(t, { ops: (o) => ({ ...o, binding: () => (after ? b(o) : o.binding()), press: (k, x) => ((after = k[0] === "Enter"), o.press(k, x)) }) });
     await w.answer(w.envelope("1"));
     assert.deepEqual(outcome(w), [["key 1", "key Enter", "TRUSTED"], "unknown", "unseen"]);
+  }
+});
+
+test("the waiting note's folder is the agent's (--cwd) from its launch record for that pane, not where hoptell tmux ran", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-lf-"));
+  try {
+    assert.equal(launchFolder(home, "me-alice", "%7"), null, "no record");
+    const tmux = { socket: "/private/tmp/tmux-501/default", session: "$3", pane: "%7" };
+    writeLaunch(home, "me-alice", { cli: { name: "codex", path: "/opt/homebrew/bin/codex", version: "0.165.0" }, root: null, gate: { state: "off", why: "test", at: Date.now() }, folder: "/Users/x/app", tmux, host: null });
+    assert.equal(launchFolder(home, "me-alice", "%7"), "/Users/x/app");
+    assert.equal(launchFolder(home, "me-alice", "%8"), null, "another pane's record");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });

@@ -3509,7 +3509,8 @@ test("a request sent to the owner's Telegram: the lead's session is its recipien
   const asked = await x.cli(["land", x.member, "--request-approval"], { deps: { landingChannel: fakeBridge(sent) } });
   assert.match(asked[0], /^Landing L1: /);
   assert.match(asked[1], /^Sent to the owner's Telegram\. The owner decides it there, or in a terminal \(hoptell team approve L1\), before .*\.$/);
-  assert.equal(asked[2], "When the owner's decision arrives in your inbox, run: hoptell team apply L1");
+  assert.equal(asked[2], "If the bridge refuses it (for example, over its hourly limit), its reason arrives in your inbox instead, and the owner decides in a terminal.");
+  assert.equal(asked[3], "When the owner's decision arrives in your inbox, run: hoptell team apply L1");
   // One message: the manifest as made, with this realm, the own member and the lead's session.
   assert.equal(sent.length, 1);
   const req = parseLandingRequest(sent[0]);

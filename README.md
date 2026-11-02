@@ -1301,7 +1301,7 @@ hoptell looks for up to 5 seconds: the card says it pressed the option only when
 pressed nothing, or may have pressed it, with what it saw (look at the terminal then). If no result comes back from the Mac within 3 minutes of your tap, the card says "No
 result came back from the Mac. Look at its terminal on the Mac."; a result that arrives later
 still replaces that. A card delayed by a relay outage is made only if every rule above still
-holds then, and it still closes at the latest 12 minutes after the launch; otherwise you get the note instead. A team member's lead is told too, when it can be reached. Anything else (an
+holds then, and it still closes at the latest 12 minutes after the launch; otherwise you get the note instead. You also get the note when the bridge's limits for new questions are reached (see Questions under the owner channel). A team member's lead is told too, when it can be reached. Anything else (an
 approval, a sign-in) stays a note.
 
 **Claude Code's and agy's folder trust from Telegram.** Claude Code 2.1.314 and agy 1.4.11 get the
@@ -1737,6 +1737,7 @@ asks you to have the lead request it again.
 
 ```sh
 Sent to the owner's Telegram. The owner decides it there, or in a terminal (hoptell team approve L7), before 2026-10-29T10:15:00.000Z.
+If the bridge refuses it (for example, over its hourly limit), its reason arrives in your inbox instead, and the owner decides in a terminal.
 When the owner's decision arrives in your inbox, run: hoptell team apply L7
 ```
 
@@ -2113,7 +2114,10 @@ replying to the card, or tap a choice. The first answer is used, and the card is
 answered. Once your answer has been sent to the agent, the bot adds a 👍 to your reply or shows
 "✅ Sent." after a button tap. The agent receives your answer as a message with the
 Sender line "your owner, through the owner channel …". An unanswered question expires, and the
-agent is told.
+agent is told. The bridge takes at most 3 open questions per agent and 20 new ones per hour,
+landing requests and folder trust cards included. Over that, a question or landing request is
+refused and its sender gets "refused: rate"; a folder trust card becomes the plain waiting note,
+under the waiting notes' own limits.
 
 **Instructions and targeting.** Any of these sends a signed instruction to one of your own
 agents:
@@ -2408,7 +2412,7 @@ used instead. `hoptell doctor` lists these problems.
 | `HOPTELL_CONTACTS_SELF` | peers | `allow` (default): eligible own-member messages bypass the default hold; blocks and encryption requirements still apply. `hold`: apply the usual contacts policy to these messages |
 | `HOPTELL_ELICITATION` | peers | `read_inbox`: `read_inbox` may ask you about held messages in the client's dialog (allow-once or later); off otherwise |
 | `HOPTELL_OWNER_CHANNEL` | peers | `off` hides `ask_owner` and turns off owner-channel verification; default `on` |
-| `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440) |
+| `HOPTELL_LEASE_MINUTES` | peers | how long a batch waits for its acknowledgement before it is shown again (default 30, 1–1440; any other value: 30, and `hoptell doctor` warns) |
 | `HOPTELL_STALL_MINUTES` | peers | how long a `hoptell tmux` session's screen stays the same while it works before it is reported as waiting (default 10, 1–1440) |
 | `HOPTELL_HOST`, `HOPTELL_PORT` | relay | listen address (required) and port (default 7777) |
 | `HOPTELL_MEMBERS` | relay | members file with per-member tokens |
