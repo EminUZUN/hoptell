@@ -462,6 +462,13 @@ test("hoptell agents flags --lead: the role template with the CLI's own per-sess
   assert.ok(!j.args.includes("-i"), j.args.join(" "));
   assert.match(j.start, /^You are a reviewer on a hoptell team\. .* You are the reviewer for dana-lead; read your task/);
   assert.equal(j.template.placement, "start");
+  // Its preset starts it in plan mode, which took the text as a task to plan and waited for
+  // "Proceed": the start text says it is the standing role.
+  assert.ok(j.args.includes("plan"), j.args.join(" "));
+  assert.match(j.start, /your task\. Plan mode only keeps you from editing files: this text is your standing role, not a task to plan, so write no plan and do not ask to proceed\. Call read_task once and do any task it returns, then wait; answer each request directly with send_message\.$/);
+  const { templateArgs } = await import("../lib/roles.js");
+  assert.equal(templateArgs("agy", { text: "Role.", prompt: "Prompt.", flags: ["--mode", "accept-edits"] }).start, "Role. Prompt.", "no note outside plan mode");
+  assert.match(templateArgs("agy", { text: "Role.", prompt: "Prompt.", flags: ["--mode=plan"] }).start, /^Role\. Prompt\. Plan mode only/);
   const plain = await run(["flags", "agy", "--role", "reviewer", "--lead", "dana-lead"]);
   assert.match(plain.out.join("\n"), /\n# and give hoptell tmux, before --: --start 'You are a reviewer on a hoptell team\. /);
   j = (await run(["flags", "codex", "--role", "implementer", "--lead", "dana-lead", "--template", "tester", "--json"])).json();

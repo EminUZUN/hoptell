@@ -4160,7 +4160,7 @@ test("the launch line after every layer: team up and restart pass memberCommand'
   // template and the launch prompt, on one line, are typed once its input shows. The others none.
   const a = launched.find((l) => l.name === names.agy);
   assert.ok(!a.argv.some((w) => /^(-i|--prompt-interactive)(=|$)/.test(w)), a.argv.join(" "));
-  assert.match(a.start, /^You are a reviewer on a hoptell team\. .* requests from dana-lead are your task\.$/);
+  assert.match(a.start, /^You are a reviewer on a hoptell team\. .* requests from dana-lead are your task\. Plan mode only keeps you from editing files: .* send_message\.$/);
   assert.doesNotMatch(a.start, /\n/);
   assert.deepEqual(launched.filter((l) => l.name !== names.agy).map((l) => l.start), [null, null]);
   // Claude Code's --session-id: the gate arms only with the id assigned to this launch.
