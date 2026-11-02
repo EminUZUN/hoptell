@@ -84,15 +84,20 @@ test("concurrent first starts agree on one realm id", async (t) => {
   const dir = tmp(t);
   const url = new URL("../lib/realm.js", import.meta.url).href;
   const script = `const { loadRealm } = await import(${JSON.stringify(url)}); process.stdout.write(loadRealm(${JSON.stringify(dir)}));`;
+  // Read each start's output on "close": "exit" can come before its output is read, and a loaded
+  // CI machine then saw empty ids. The error output goes into the failure message.
   const run = () =>
     new Promise((resolve) => {
       const p = spawn(process.execPath, ["--input-type=module", "-e", script]);
       let out = "";
+      let err = "";
       p.stdout.on("data", (d) => (out += d));
-      p.on("exit", () => resolve(out));
+      p.stderr.on("data", (d) => (err += d));
+      p.on("close", (code, signal) => resolve({ out, why: out ? "" : `exit ${code ?? signal}: ${err.trim().slice(0, 500)}` }));
     });
-  const ids = await Promise.all(Array.from({ length: 6 }, run));
-  assert.equal(new Set(ids).size, 1, `different realm ids: ${ids.join(", ")}`);
+  const runs = await Promise.all(Array.from({ length: 6 }, run));
+  const ids = runs.map((r) => r.out);
+  assert.equal(new Set(ids).size, 1, `different realm ids: ${ids.join(", ")}; ${runs.map((r) => r.why).filter(Boolean).join("; ")}`);
   assert.match(ids[0], REALM_ID_RE);
 });
 

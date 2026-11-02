@@ -1000,12 +1000,14 @@ test("hoptell tmux passes a reviewer's initial prompt to the agent intact, after
   t.after(() => w.close());
   const name = `tc3p${process.pid}`;
   w.onClose(() => endSession(`hoptell-${name}`));
-  // A stand-in "codex" that records its arguments and stays running like an interactive agent.
+  // A stand-in "codex" that records its arguments and stays running like an interactive agent. The
+  // launch's version check (lib/startgate.js) runs it with --version first: that run records
+  // nothing, or a slow agent start would let the test read the check's arguments instead.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hoptell-fake-codex-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const out = path.join(dir, "argv.json");
   const codex = path.join(dir, "codex");
-  fs.writeFileSync(codex, `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)));\nsetTimeout(() => {}, 30000);\n`, { mode: 0o755 });
+  fs.writeFileSync(codex, `#!${process.execPath}\nif (process.argv[2] === "--version") process.exit(0);\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)));\nsetTimeout(() => {}, 30000);\n`, { mode: 0o755 });
   const prompt = `You are a read-only reviewer for alice-lead. Review requests from alice-lead are your task: review them and reply with send_message. Do not edit files. ('quotes', "double", $HOME, \`x\`; <lead name> & more)`;
   const r = await w.cli(["tmux", name, "--roles", "reviewer", "--", codex, "-s", "read-only", "-a", "never", prompt], { HOPTELL_PUSH: "tmux" });
   assert.equal(r.code, 0, r.stderr);

@@ -111,7 +111,7 @@ test("refreshes from several processes are serialized and never reuse a rotated 
       let err = "";
       c.stdout.on("data", (d) => (out += d));
       c.stderr.on("data", (d) => (err += d));
-      c.on("exit", (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err))));
+      c.on("close", (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err))));
     });
   const results = await Promise.all([run(), run(), run()]);
   for (const [, cached] of results) assert.ok(cached, "a valid access token is reused from memory");

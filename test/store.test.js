@@ -269,7 +269,7 @@ test("several processes appending and taking at once lose and duplicate nothing"
       const c = spawn(process.execPath, ["--input-type=module", "-e", code(role, n)], { stdio: ["ignore", "pipe", "inherit"] });
       let out = "";
       c.stdout.on("data", (d) => (out += d));
-      c.on("exit", (code) => (code === 0 ? resolve(JSON.parse(out || "[]")) : reject(new Error(`exit ${code}`))));
+      c.on("close", (code) => (code === 0 ? resolve(JSON.parse(out || "[]")) : reject(new Error(`exit ${code}`))));
     });
   const results = await Promise.all([run("writer", 30), run("writer", 30), run("reader"), run("reader")]);
   const read = [...results[2], ...results[3]];

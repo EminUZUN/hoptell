@@ -22,7 +22,7 @@ function commitIn(dir, key, realm) {
     const c = spawn(process.execPath, ["--input-type=module", "-e", script]);
     let out = "";
     c.stdout.on("data", (d) => (out += d));
-    c.on("exit", () => resolve(out));
+    c.on("close", () => resolve(out)); // "close": after the output was read ("exit" can come first)
   });
 }
 

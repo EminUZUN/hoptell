@@ -49,7 +49,7 @@ const child = (w, env = {}) =>
     const c = spawn(process.execPath, [CHILD, w.home, w.profile, w.relayUrl], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     c.stdout.on("data", (d) => (out += d));
-    c.on("exit", (code, signal) => resolve({ code, signal, result: out.trim() ? JSON.parse(out.trim().split("\n").at(-1)) : null }));
+    c.on("close", (code, signal) => resolve({ code, signal, result: out.trim() ? JSON.parse(out.trim().split("\n").at(-1)) : null }));
   });
 const theFamily = (w) => Object.values(familiesOf(w))[0];
 
