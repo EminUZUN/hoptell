@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 (2026-11-02)
+
+- agy reviewers in plan mode: agy 1.4.12 treated the typed role instructions as a task, wrote a
+  plan and waited for "Proceed". When the launch flags select plan mode, the start text now
+  explains that it defines a standing role and tells agy not to write a plan or ask for
+  confirmation. It says to call `read_task` once and do any task it returns, then wait and
+  answer each request with `send_message`. Restart agy reviewers to apply the new instructions.
+- Tests: fixed four causes of intermittent CI failures: checking child output before it was
+  fully read, a fake Codex agent recording version-check arguments, process cleanup ending the
+  test's session, and polling that exceeded the hosted tenant's request limit.
+
 ## 0.4.1 (2026-11-02)
 
 Upgrade note: if you set up Claude Code's hooks by hand from `hoptell hooks`, add the `Stop`
