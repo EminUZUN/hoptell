@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3 (2026-11-02)
+
+- Prompt answers: when Codex's Trust option is already selected, tapping Trust now skips "1",
+  which only selects the option, and checks that the same dialog is still visible with Trust
+  selected before pressing Enter. Previously, a screen read immediately after "1" could not tell
+  whether Codex had processed the key. When Trust is not selected, hoptell still sends "1" and
+  waits for Trust to be selected before pressing Enter. Claude Code and agy answers are unchanged.
+- Tests: fixed two more causes of intermittent CI failures: cleanup removing a run's settings
+  file before the agent's window had read it, and a fake agent reading an empty control file
+  while it was being rewritten.
+
 ## 0.4.2 (2026-11-02)
 
 - agy reviewers in plan mode: agy 1.4.12 treated the typed role instructions as a task, wrote a
